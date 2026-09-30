@@ -586,12 +586,12 @@ $('#searchClose').onclick = closeSearch;
 $('#q').addEventListener('keydown', (e) => { if (e.key === 'Escape') closeSearch(); });
 function listMenuSheet() {
   const notifState = h('small', {}, 'Approvals, questions, finished turns');
-  refreshPushState().then((st) => { notifState.textContent = pushStateLabel(st); });
+  refreshPushState().then((st) => { notifState.textContent = pushStateLabel(st); }).catch(() => {});
   openSheet(h('h3', {}, 'Menu'),
     h('button', { class: 'menuitem', onclick: () => notificationsSheet() }, 'Notifications', notifState),
     h('button', { class: 'menuitem', onclick: pluginsSheet }, 'Plugins & connectors', h('small', {}, 'What this dsh has loaded')),
     S.tunnelUrl ? h('button', { class: 'menuitem', onclick: () => { tunnelSheet().catch((e) => toast('Tunnel address unavailable: ' + e.message)); } }, 'Open on your phone', h('small', {}, 'Show the tunnel address as a QR code')) : null,
-    h('a', { class: 'menuitem', href: '/', style: 'color:inherit;text-decoration:none' }, 'Open full dsh web UI'));
+    location.pathname.replace(/\/+$/, '') ? h('a', { class: 'menuitem', href: '/', style: 'color:inherit;text-decoration:none' }, 'Open full dsh web UI') : null);
 }
 function filterSheet() {
   const count = (want) => S.sessions.filter((s) => sessState(s.sessionId) === want).length;
@@ -2141,7 +2141,7 @@ $('#menuBtn').onclick = () => {
   const cur = S.cur; if (!cur) return;
   const notifState = h('small', {}, 'Approvals, questions, finished turns');
   const notifRow = h('button', { class: 'menuitem', onclick: () => notificationsSheet() }, 'Notifications', notifState);
-  refreshPushState().then((st) => { notifState.textContent = pushStateLabel(st); });
+  refreshPushState().then((st) => { notifState.textContent = pushStateLabel(st); }).catch(() => {});
   openSheet(h('h3', {}, $('#title').textContent),
     h('button', { class: 'menuitem', onclick: modelSheet }, 'Model', h('small', {}, 'Switch the model for this session')),
     h('button', { class: 'menuitem', onclick: pricesSheet }, 'Prices', h('small', {}, 'Override the price table behind "est. cost"')),
@@ -2153,7 +2153,7 @@ $('#menuBtn').onclick = () => {
     h('button', { class: 'menuitem', onclick: archiveSheet }, 'Archive', h('small', {}, 'Hide it from the session list')),
     h('button', { class: 'menuitem', onclick: pluginsSheet }, 'Plugins & connectors', h('small', {}, 'What this dsh has loaded')),
     h('button', { class: 'menuitem', onclick: () => { closeSheet(); loadHistory(); } }, 'Refresh'),
-    h('a', { class: 'menuitem', href: '/', style: 'color:inherit;text-decoration:none' }, 'Open full dsh web UI'));
+    location.pathname.replace(/\/+$/, '') ? h('a', { class: 'menuitem', href: '/', style: 'color:inherit;text-decoration:none' }, 'Open full dsh web UI') : null);
 };
 // ---------- Plugins (read-only) ----------
 // dsh exposes only a read-only inventory; adding or toggling plugins is a laptop-side change.
