@@ -220,6 +220,15 @@ function readBody(req, limit = BODY_LIMIT) {
   });
 }
 
+/** Push services a browser subscription can point at. Anything else is refused,
+ *  so the server never POSTs to an arbitrary URL. */
+export const PUSH_SERVICE_HOSTS = [
+  /^web\.push\.apple\.com$/,
+  /^fcm\.googleapis\.com$/,
+  /^updates\.push\.services\.mozilla\.com$/,
+  /(^|\.)notify\.windows\.com$/,
+];
+
 /** Return an error string for an unusable PushSubscription, or null. */
 export function validateSubscription(sub) {
   if (!sub || typeof sub !== 'object' || Array.isArray(sub)) return 'expected a PushSubscription object';
@@ -231,6 +240,7 @@ export function validateSubscription(sub) {
     return 'endpoint is not a URL';
   }
   if (url.protocol !== 'https:') return 'endpoint must be https';
+  if (!PUSH_SERVICE_HOSTS.some((re) => re.test(url.hostname))) return 'endpoint is not a known push service';
   if (!sub.keys || typeof sub.keys !== 'object') return 'keys are required';
   if (typeof sub.keys.p256dh !== 'string' || typeof sub.keys.auth !== 'string') return 'keys.p256dh and keys.auth are required';
   return null;
@@ -385,6 +395,11 @@ export async function startServer(options = {}) {
       return sendJson(res, 200, { key: vapid.publicKey });
     }
     if (req.method !== 'POST') return sendJson(res, 405, { error: 'method not allowed' });
+    // Requiring JSON forces a CORS preflight, which this server never answers,
+    // so other websites cannot drive these endpoints from a visitor's browser.
+    if (!/^application\/json\b/i.test(req.headers['content-type'] || '')) {
+      return sendJson(res, 415, { error: 'Content-Type must be application/json' });
+    }
 
     let raw;
     try {
@@ -429,6 +444,8 @@ export async function startServer(options = {}) {
       if (req.method !== 'GET' && req.method !== 'HEAD') return sendText(res, 405, 'Method not allowed');
       return serveStatic(req, res, publicDir, pathname);
     })().catch((err) => {
+      // A client that hangs up mid-download (common on phones) is not a server error.
+      if (err && err.code === 'ERR_STREAM_PREMATURE_CLOSE') return;
       logger.error(`[dsh-rc] request failed: ${(err && err.message) || err}`);
       if (!res.headersSent) sendText(res, 500, 'Internal error');
       else res.destroy();

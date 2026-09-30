@@ -127,20 +127,20 @@ test('GET /push/key returns the VAPID public key', async (t) => {
 });
 
 test('validateSubscription: https only, keys required', () => {
-  assert.equal(validateSubscription(httpsSub('https://push.example.com/a')), null);
+  assert.equal(validateSubscription(httpsSub('https://fcm.googleapis.com/fcm/send/a')), null);
   assert.match(validateSubscription(httpsSub('http://push.example.com/a')), /https/);
   assert.match(validateSubscription({ endpoint: 'not a url', keys: { p256dh: 'a', auth: 'b' } }), /not a URL/);
-  assert.match(validateSubscription({ endpoint: 'https://push.example.com/a' }), /keys/);
-  assert.match(validateSubscription({ endpoint: 'https://push.example.com/a', keys: { p256dh: 'a' } }), /p256dh/);
+  assert.match(validateSubscription({ endpoint: 'https://fcm.googleapis.com/fcm/send/a' }), /keys/);
+  assert.match(validateSubscription({ endpoint: 'https://fcm.googleapis.com/fcm/send/a', keys: { p256dh: 'a' } }), /p256dh/);
   assert.match(validateSubscription(null), /PushSubscription/);
 });
 
 test('POST /push/subscribe validates and replaces by endpoint', async (t) => {
   const { base, app } = await tempServer(t);
   assert.equal((await postJson(base, '/push/subscribe', httpsSub('http://push.example.com/a'))).status, 400);
-  assert.equal((await postJson(base, '/push/subscribe', { endpoint: 'https://push.example.com/a' })).status, 400);
-  assert.equal((await postJson(base, '/push/subscribe', httpsSub('https://push.example.com/a'))).status, 200);
-  const again = await postJson(base, '/push/subscribe', httpsSub('https://push.example.com/a'));
+  assert.equal((await postJson(base, '/push/subscribe', { endpoint: 'https://fcm.googleapis.com/fcm/send/a' })).status, 400);
+  assert.equal((await postJson(base, '/push/subscribe', httpsSub('https://fcm.googleapis.com/fcm/send/a'))).status, 200);
+  const again = await postJson(base, '/push/subscribe', httpsSub('https://fcm.googleapis.com/fcm/send/a'));
   assert.equal(again.status, 200);
   assert.equal((await again.json()).count, 1);
   assert.equal(app.store.size(), 1);
@@ -149,7 +149,7 @@ test('POST /push/subscribe validates and replaces by endpoint', async (t) => {
 
 test('POST /push/subscribe rejects bodies over 16 KB', async (t) => {
   const { base } = await tempServer(t);
-  const huge = httpsSub('https://push.example.com/' + 'x'.repeat(17 * 1024));
+  const huge = httpsSub('https://fcm.googleapis.com/fcm/send/' + 'x'.repeat(17 * 1024));
   const res = await postJson(base, '/push/subscribe', huge);
   assert.equal(res.status, 413);
 });
@@ -157,18 +157,18 @@ test('POST /push/subscribe rejects bodies over 16 KB', async (t) => {
 test('POST /push/subscribe caps the subscription count', async (t) => {
   const { base } = await tempServer(t);
   for (let i = 0; i < MAX_SUBSCRIPTIONS; i++) {
-    const res = await postJson(base, '/push/subscribe', httpsSub(`https://push.example.com/${i}`));
+    const res = await postJson(base, '/push/subscribe', httpsSub(`https://fcm.googleapis.com/fcm/send/${i}`));
     assert.equal(res.status, 200, String(i));
   }
-  assert.equal((await postJson(base, '/push/subscribe', httpsSub('https://push.example.com/over'))).status, 400);
+  assert.equal((await postJson(base, '/push/subscribe', httpsSub('https://fcm.googleapis.com/fcm/send/over'))).status, 400);
   // Re-saving an endpoint that is already stored is still allowed.
-  assert.equal((await postJson(base, '/push/subscribe', httpsSub('https://push.example.com/0'))).status, 200);
+  assert.equal((await postJson(base, '/push/subscribe', httpsSub('https://fcm.googleapis.com/fcm/send/0'))).status, 200);
 });
 
 test('POST /push/unsubscribe removes an endpoint', async (t) => {
   const { base, app } = await tempServer(t);
-  await postJson(base, '/push/subscribe', httpsSub('https://push.example.com/a'));
-  const res = await postJson(base, '/push/unsubscribe', { endpoint: 'https://push.example.com/a' });
+  await postJson(base, '/push/subscribe', httpsSub('https://fcm.googleapis.com/fcm/send/a'));
+  const res = await postJson(base, '/push/unsubscribe', { endpoint: 'https://fcm.googleapis.com/fcm/send/a' });
   assert.equal(res.status, 200);
   assert.equal((await res.json()).removed, 1);
   assert.equal(app.store.size(), 0);
@@ -182,8 +182,8 @@ test('POST /push/test uses the injected sender and prunes 404/410', async (t) =>
     if (subscription.endpoint.includes('gone')) throw Object.assign(new Error('Gone'), { statusCode: 410 });
   });
   const { base, app } = await tempServer(t, { sender });
-  await postJson(base, '/push/subscribe', httpsSub('https://push.example.com/live'));
-  await postJson(base, '/push/subscribe', httpsSub('https://push.example.com/gone'));
+  await postJson(base, '/push/subscribe', httpsSub('https://fcm.googleapis.com/fcm/send/live'));
+  await postJson(base, '/push/subscribe', httpsSub('https://fcm.googleapis.com/fcm/send/gone'));
 
   const res = await fetch(base + '/push/test', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
   assert.equal(res.status, 200);
@@ -191,7 +191,7 @@ test('POST /push/test uses the injected sender and prunes 404/410', async (t) =>
   assert.equal(body.sent, 1);
   assert.equal(body.removed, 1);
   assert.equal(app.store.size(), 1);
-  assert.equal(app.store.list()[0].endpoint, 'https://push.example.com/live');
+  assert.equal(app.store.list()[0].endpoint, 'https://fcm.googleapis.com/fcm/send/live');
 
   const payload = JSON.parse(sent[0].payload);
   assert.equal(payload.title, 'dsh-rc');
@@ -202,7 +202,7 @@ test('state lives in 0600 files inside a 0700 directory', async (t) => {
   const { base, stateDir } = await tempServer(t);
   assert.equal((await fsp.stat(stateDir)).mode & 0o777, 0o700);
   assert.equal((await fsp.stat(path.join(stateDir, 'vapid.json'))).mode & 0o777, 0o600);
-  await postJson(base, '/push/subscribe', httpsSub('https://push.example.com/a'));
+  await postJson(base, '/push/subscribe', httpsSub('https://fcm.googleapis.com/fcm/send/a'));
   assert.equal((await fsp.stat(path.join(stateDir, 'subscriptions.json'))).mode & 0o777, 0o600);
 });
 
@@ -214,5 +214,23 @@ test('non-GET/HEAD on static paths is refused', async (t) => {
 
 test('unknown /push routes are 404', async (t) => {
   const { base } = await tempServer(t);
-  assert.equal((await fetch(base + '/push/nope', { method: 'POST', body: '{}' })).status, 404);
+  assert.equal((await fetch(base + '/push/nope', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })).status, 404);
+});
+
+test('POST /push/* without a JSON content type is refused (no cross-site simple requests)', async (t) => {
+  const { base } = await tempServer(t);
+  for (const route of ['/push/test', '/push/subscribe', '/push/unsubscribe']) {
+    const res = await fetch(base + route, { method: 'POST', headers: { 'Content-Type': 'text/plain' }, body: '{}' });
+    assert.equal(res.status, 415, route);
+  }
+});
+
+test('validateSubscription: only known push services', () => {
+  const keys = { p256dh: 'a', auth: 'b' };
+  for (const ok of ['https://web.push.apple.com/x', 'https://fcm.googleapis.com/fcm/send/x', 'https://updates.push.services.mozilla.com/wpush/v2/x', 'https://wns2-by3p.notify.windows.com/w/?token=x']) {
+    assert.equal(validateSubscription({ endpoint: ok, keys }), null, ok);
+  }
+  for (const bad of ['https://example.com/x', 'https://127.0.0.1/x', 'https://fcm.googleapis.com.evil.test/x', 'https://evilnotify.windows.com/x']) {
+    assert.match(validateSubscription({ endpoint: bad, keys }), /known push service/, bad);
+  }
 });
