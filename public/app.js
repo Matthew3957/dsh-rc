@@ -549,7 +549,7 @@ $('#q').addEventListener('input', (e) => {
 });
 $('#plugBtn').onclick = () => pluginsSheet();
 $('#bellBtn').onclick = () => notificationsSheet();
-$('#qrBtn').onclick = () => tunnelSheet();
+$('#qrBtn').onclick = () => { tunnelSheet().catch((e) => toast('Tunnel address unavailable: ' + e.message)); };
 $('#moreBtn').onclick = () => { S.shown += 40; renderList(); fillTitles(); };
 
 // ---------- Renderer ----------
@@ -2392,11 +2392,24 @@ async function loadTunnelUrl() {
 async function tunnelSheet() {
   const url = await loadTunnelUrl();
   if (!url) { $('#qrBtn').hidden = true; toast('No tunnel is running'); return; }
-  const canvas = h('canvas', { role: 'img', 'aria-label': 'QR code for ' + url });
-  dshQr.drawToCanvas(canvas, dshQr.encode(url), { scale: 8, quiet: 4 });
+  // qr.js is optional like the other helper scripts: without it, still show the address.
+  let tile = null;
+  if (window.dshQr) {
+    try {
+      const code = window.dshQr.encode(url);
+      // Whole device pixels per module, so the browser never resamples the code (a
+      // stretched canvas can drop or double module columns and stop it scanning).
+      const quiet = 4, modules = code.size + quiet * 2, dpr = Math.max(1, Math.round(window.devicePixelRatio || 1));
+      const scale = Math.max(dpr, Math.floor((260 * dpr) / modules));
+      const canvas = h('canvas', { role: 'img', 'aria-label': 'QR code for ' + url });
+      window.dshQr.drawToCanvas(canvas, code, { scale, quiet });
+      canvas.style.width = canvas.width / dpr + 'px';
+      tile = h('div', { class: 'qr-tile' }, canvas);
+    } catch (e) { tile = h('div', { class: 'note err' }, 'Could not draw the QR code: ' + e.message); }
+  }
   openSheet(h('h3', {}, 'Open on your phone'),
-    h('div', { class: 'note' }, 'Scan with the phone camera. You still log in with the passphrase.'),
-    h('div', { class: 'qr-tile' }, canvas),
+    h('div', { class: 'note' }, tile ? 'Scan with the phone camera. You still log in with the passphrase.' : 'Open this address on your phone. You still log in with the passphrase.'),
+    tile,
     h('div', { class: 'note url' }, url),
     h('div', { class: 'note' }, 'The address changes every time dsh-rc starts with --tunnel.'));
 }

@@ -96,11 +96,10 @@ test('terminal glyphs agree with the matrix', () => {
   const rows = withQuietZone(code, 2);
   rows.push(new Array(rows.length).fill(false));
   const lines = toTerminalLines(code, { quiet: 2, ansi: true }).map((l) => [...l.replace(/\u001b\[[0-9;]*m/g, '')]);
-  const full = rows.length % 2 ? rows : rows;
   for (let y = 0; y < lines.length; y++) {
     for (let x = 0; x < lines[y].length; x++) {
-      const top = full[y * 2][x];
-      const bottom = full[y * 2 + 1] ? full[y * 2 + 1][x] : false;
+      const top = rows[y * 2][x];
+      const bottom = rows[y * 2 + 1] ? rows[y * 2 + 1][x] : false;
       assert.equal(lines[y][x], [' ', '▄', '▀', '█'][(top ? 2 : 0) + (bottom ? 1 : 0)]);
     }
   }
