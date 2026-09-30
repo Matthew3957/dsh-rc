@@ -1,12 +1,17 @@
-# User unit for the dsh-rc static server. Install:
-#   cp examples/dsh-rc.service ~/.config/systemd/user/ && edit the path below
+# User unit for the dsh-rc page and push notification server. Install:
+#   cp examples/dsh-rc.service ~/.config/systemd/user/ && edit the paths below
 #   systemctl --user daemon-reload && systemctl --user enable --now dsh-rc
 [Unit]
-Description=dsh-rc phone UI static server
+Description=dsh-rc phone UI and push notification server
+After=network-online.target
 
 [Service]
-ExecStart=/usr/bin/python3 %h/dsh-rc/serve.py
+WorkingDirectory=%h/dsh-rc
+# Replace the node path below with your own (`which node`); for nvm that is
+# usually %h/.nvm/versions/node/<version>/bin/node.
+ExecStart=/usr/bin/node %h/dsh-rc/server/index.mjs
 Restart=on-failure
+RestartSec=5
 
 [Install]
 WantedBy=default.target
