@@ -677,12 +677,65 @@ function renderRunning() {
     stick();
   }
 }
+// Queued messages, each with edit and remove. dsh's session.updateQueue acts on one
+// item by id; an edit replaces the message's content blocks, so images are kept and
+// only the text is swapped. The list is never changed locally: the next
+// session/queue event re-renders it.
+let queueEditing = null; // id of the item being edited, so a queue event mid-edit keeps the editor
+let queueDraft = '';      // its unsaved text, which survives those re-renders
 function renderQueue() {
   const cur = S.cur; if (!cur) return;
   const items = (S.queues.get(cur.id) || []).filter((i) => i.placement !== 'context');
   const el = $('#queueLine');
   el.hidden = !items.length;
-  el.textContent = items.length ? `${items.length} message${items.length > 1 ? 's' : ''} queued` : '';
+  if (!items.length) { el.replaceChildren(); if (queueEditing) toast('That message was already sent'); queueEditing = null; return; }
+  if (queueEditing && !items.some((it) => it.id === queueEditing)) { queueEditing = null; toast('That message was already sent'); }
+  el.replaceChildren(h('div', { class: 'qcount' }, `${items.length} message${items.length > 1 ? 's' : ''} queued`),
+    ...items.map((it) => (it.id === queueEditing ? queueEditor(cur.id, it) : queueRow(cur.id, it))));
+}
+function queueText(it) { return textOf((it.message && it.message.content) || []); }
+function queueRow(sessionId, it) {
+  const imgs = ((it.message && it.message.content) || []).filter((b) => b.type === 'image').length;
+  const row = h('div', { class: 'qitem' },
+    h('div', { class: 'qtext' }, queueText(it) || (imgs ? '' : '(empty)'), imgs ? ` 🖼 ${imgs}` : null));
+  const edit = h('button', { type: 'button', class: 'qact', 'aria-label': 'Edit queued message' }, '✎');
+  const rm = h('button', { type: 'button', class: 'qact', 'aria-label': 'Remove queued message' }, '✕');
+  edit.onclick = () => { queueEditing = it.id; queueDraft = queueText(it); renderQueue(); };
+  rm.onclick = () => updateQueued(sessionId, it.id, { kind: 'remove' }, row);
+  row.append(edit, rm);
+  return row;
+}
+function queueEditor(sessionId, it) {
+  const box = h('textarea', { rows: '3', class: 'qedit' });
+  box.value = queueDraft;
+  box.oninput = () => { queueDraft = box.value; };
+  const save = h('button', { type: 'button', class: 'qact wide accent' }, 'Save');
+  const cancel = h('button', { type: 'button', class: 'qact wide' }, 'Cancel');
+  const row = h('div', { class: 'qitem editing' }, box, h('div', { class: 'row' }, cancel, save));
+  cancel.onclick = () => { queueEditing = null; renderQueue(); };
+  save.onclick = async () => {
+    const text = box.value;
+    const others = ((it.message && it.message.content) || []).filter((b) => b.type !== 'text');
+    const content = text.trim() ? [{ type: 'text', text }, ...others] : others;
+    if (!content.length) { toast('Nothing left to send: use ✕ to remove it'); return; }
+    if (await updateQueued(sessionId, it.id, { kind: 'edit', content }, row)) queueEditing = null;
+  };
+  if (document.activeElement === document.body || !document.activeElement || document.activeElement.classList.contains('qact')) setTimeout(() => box.focus(), 0);
+  return row;
+}
+async function updateQueued(sessionId, itemId, action, row) {
+  const btns = row.querySelectorAll('button');
+  btns.forEach((b) => { b.disabled = true; });
+  try {
+    await rpc('session.updateQueue', { sessionId, itemId, action });
+    return true;
+  } catch (e) {
+    // Most often the item was already sent: the turn started before the tap landed.
+    toast((action.kind === 'remove' ? 'Remove' : 'Edit') + ' failed: ' + e.message, 4000);
+    return false;
+  } finally {
+    btns.forEach((b) => { b.disabled = false; });
+  }
 }
 $('#stopBtn').onclick = async () => {
   if (!S.cur) return;

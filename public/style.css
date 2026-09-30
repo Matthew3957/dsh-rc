@@ -153,7 +153,17 @@ input, textarea, select { font: inherit; color: inherit; }
 #input { flex: 1; resize: none; border: 1px solid var(--line); background: var(--card); border-radius: 20px; padding: 9px 14px; font-size: 16px; line-height: 1.35; max-height: 40vh; min-height: 40px; outline: none; }
 #input:focus { border-color: var(--accent); }
 .stop { background: var(--fg); color: var(--bg); font-size: 13px; }
-#queueLine { font-size: 12px; color: var(--muted); padding: 0 4px; }
+#queueLine { font-size: 12px; color: var(--muted); padding: 0 4px; max-height: 30vh; overflow-y: auto; }
+.qcount { margin-bottom: 2px; }
+.qitem { display: flex; align-items: center; gap: 6px; padding: 4px 2px; border-top: 1px solid var(--line); }
+.qitem .qtext { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.qitem .qact { flex: 0 0 32px; height: 32px; border-radius: 8px; font-size: 13px; background: var(--bg2); border: 0; color: inherit; }
+.qitem .qact.wide { flex: 0 0 auto; padding: 0 14px; }
+.qitem .qact.accent { background: var(--accent); color: var(--accent-fg); }
+.qitem .qact:disabled { opacity: .5; }
+.qitem.editing { flex-direction: column; align-items: stretch; }
+.qitem.editing .row { display: flex; justify-content: flex-end; gap: 6px; }
+.qedit { width: 100%; font-size: 16px; border: 1px solid var(--line); border-radius: 10px; padding: 8px; background: var(--card); resize: vertical; }
 #attachments { display: flex; gap: 8px; overflow-x: auto; }
 .thumb { position: relative; flex-shrink: 0; }
 .thumb img { width: 56px; height: 56px; object-fit: cover; border-radius: 8px; border: 1px solid var(--line); display: block; }
