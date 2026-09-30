@@ -49,10 +49,11 @@ function copyText(text, btn) {
   if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(done, fallback);
   else fallback();
 }
-function showApi403() {
+// trusted: the name dsh-rc's proxy says dsh must trust; absent when the page sits beside dsh.
+function showApi403(trusted) {
   if (api403Shown) return;
   api403Shown = true;
-  const host = location.hostname;
+  const host = trusted || location.hostname;
   const cmd = 'dsh --profile <profile> --no-open --trusted-host ' + host;
   const close = h('button', { type: 'button', class: 'close', 'aria-label': 'Dismiss' }, '✕');
   close.onclick = () => $('#api403').replaceChildren();
@@ -62,8 +63,10 @@ function showApi403() {
     close,
     h('h4', {}, '403 — dsh does not trust this host'),
     h('div', { class: 'why' },
-      'This page reached dsh from a host it does not trust. Start dsh with --trusted-host ' + host + ' (the current hostname, filled in below) ' +
-      'and make sure this page is served from the same origin as dsh web.'),
+      trusted
+        ? 'dsh does not trust the name dsh-rc\'s proxy presents. Start dsh with --trusted-host ' + host + '.'
+        : 'This page reached dsh from a host it does not trust. Start dsh with --trusted-host ' + host + ' (the current hostname, filled in below) ' +
+          'and make sure this page is served from the same origin as dsh web.'),
     h('pre', {}, cmd),
     h('div', { class: 'row' }, copy));
   $('#api403').replaceChildren(card);
@@ -85,7 +88,7 @@ async function rpc(method, payload = {}, rpcId = rid()) {
   });
   checkLogin(r);
   if (!r.ok) {
-    if (r.status === 403) showApi403();
+    if (r.status === 403) showApi403(r.headers.get('x-dsh-rc-trusted-host'));
     throw Object.assign(new Error(`${method}: HTTP ${r.status}`), { code: 'http-' + r.status });
   }
   const j = await r.json();

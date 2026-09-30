@@ -198,7 +198,11 @@ export function createProxy({ dshUrl, upstreamHost = DEFAULT_UPSTREAM_HOST, logg
   function proxyHttp(req, res) {
     const upstreamReq = mod.request(upstreamOptions(req), (upstreamRes) => {
       note403(upstreamRes.statusCode);
-      res.writeHead(upstreamRes.statusCode, filterHeaders(upstreamRes.headers));
+      const out = filterHeaders(upstreamRes.headers);
+      // Tell the page which name dsh must trust: behind the proxy it is the presented Host,
+      // not the hostname in the address bar, so the 403 help card can say so.
+      if (upstreamRes.statusCode === 403) out['x-dsh-rc-trusted-host'] = hostnameOf(presentedHost);
+      res.writeHead(upstreamRes.statusCode, out);
       upstreamRes.pipe(res);
     });
     upstreamReq.on('error', (err) => {
