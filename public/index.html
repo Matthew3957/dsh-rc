@@ -14,6 +14,7 @@
 <link rel="icon" href="icon.svg" type="image/svg+xml">
 <link rel="apple-touch-icon" href="icon-180.png">
 <link rel="stylesheet" href="style.css">
+<script type="module" src="prices.js"></script>
 <script src="vendor/marked.min.js" defer></script>
 <script src="vendor/purify.min.js" defer></script>
 <script src="app.js" defer></script>
@@ -49,6 +50,16 @@
       <span class="conn dot" title="connection"></span>
       <button id="menuBtn" class="icon" aria-label="Menu">⋯</button>
     </header>
+    <!-- Status line: model and route, context fill, session tokens, estimated cost.
+         Hidden until dsh reports something real to show. Tapping expands the
+         per-turn breakdown. -->
+    <div id="statusBar" class="status-bar" hidden>
+      <button id="statusLine" class="status-line" type="button" aria-expanded="false" aria-controls="statusBreakdown">
+        <span id="statusSummary" class="status-summary"></span>
+        <span id="statusCaret" class="status-caret" aria-hidden="true">▾</span>
+      </button>
+      <div id="statusBreakdown" class="status-breakdown" hidden></div>
+    </div>
     <div id="feed">
       <button id="olderBtn" class="ghost wide" hidden>Load earlier</button>
       <div id="msgs"></div>

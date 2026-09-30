@@ -276,3 +276,35 @@ input, textarea, select { font: inherit; color: inherit; }
   background: none; border: 0; padding: 0;
 }
 .tmplx.armed { color: var(--err); font-size: 12px; font-weight: 600; min-width: 64px; }
+/* Status line */
+.status-bar { flex-shrink: 0; border-bottom: 1px solid var(--line); background: var(--bg2); }
+.status-line { display: flex; align-items: baseline; gap: 6px; width: 100%; text-align: left; padding: 5px 12px; font-family: var(--mono); font-size: 11px; line-height: 1.4; color: var(--muted); }
+.status-line:active { background: var(--bg); }
+.status-summary { flex: 1; min-width: 0; display: flex; flex-wrap: wrap; align-items: baseline; gap: 3px 9px; }
+.status-part { white-space: nowrap; }
+/* Four labeled buckets do not fit across a phone, so this one part wraps
+   between buckets instead of running off the edge. */
+.status-part.tokens { white-space: normal; }
+.status-part.tokens .bucket { white-space: nowrap; }
+.status-part.model { color: var(--fg); }
+.status-track { display: inline-block; width: 42px; height: 4px; border-radius: 2px; background: var(--line); overflow: hidden; vertical-align: middle; }
+.status-fill { display: block; height: 100%; width: var(--fill, 0%); background: var(--accent); }
+.status-fill.warn { background: var(--warn); }
+.status-fill.err { background: var(--err); }
+.status-pct { margin-left: 4px; }
+.status-caret { flex-shrink: 0; display: inline-block; }
+.status-line[aria-expanded="true"] .status-caret { transform: rotate(180deg); }
+.status-breakdown { padding: 2px 12px 9px; font-family: var(--mono); font-size: 11px; color: var(--muted); }
+/* Shared columns keep the per-turn figures aligned and, unlike a single line,
+   never truncate one. */
+.status-table { display: grid; grid-template-columns: auto repeat(4, minmax(2.2em, 1fr)) auto; column-gap: 6px; row-gap: 2px; align-items: baseline; }
+.status-table .num { text-align: right; }
+.status-table .th { opacity: .7; }
+.status-table .turn { color: var(--fg); }
+.status-table .cost { text-align: right; white-space: nowrap; }
+/* Breathing room so the write column's figures do not read as part of "est.". */
+.status-table > :nth-child(6n) { padding-left: 8px; }
+.status-note { padding-top: 4px; font-family: var(--sans); }
+
+/* Prices sheet */
+#sheetBody textarea { width: 100%; padding: 10px 12px; border-radius: 10px; border: 1px solid var(--line); background: var(--card); font-family: var(--mono); font-size: 13px; line-height: 1.45; resize: vertical; }
