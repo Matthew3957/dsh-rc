@@ -1,4 +1,5 @@
 # User unit for dsh web. Replace <profile> and <machine>.<tailnet>.ts.net, and the node path.
+# When dsh-rc's proxy is the front door, also pass --trusted-host dsh-rc.internal.
 [Unit]
 Description=dsh web
 After=network-online.target

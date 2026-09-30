@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# Stand-in for a cloudflared that exits before ever printing a URL (e.g. it
+# could not reach the Cloudflare edge).
+set -eu
+echo "some connector error" >&2
+exit 1

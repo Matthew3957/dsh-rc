@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+# Stand-in for cloudflared used by test/tunnel.test.mjs: prints a fake
+# trycloudflare URL the way the real binary does (to stderr, amid other
+# connector log lines) and then idles until killed.
+set -eu
+echo "2026-09-30T00:00:00Z INF Thank you for trying Cloudflare Tunnel." >&2
+echo "2026-09-30T00:00:00Z INF Requesting new quick Tunnel on trycloudflare.com..." >&2
+echo "2026-09-30T00:00:00Z INF +--------------------------------------------------------------------------------------------+" >&2
+echo "2026-09-30T00:00:00Z INF |  https://fake-test-tunnel.trycloudflare.com                                                    |" >&2
+echo "2026-09-30T00:00:00Z INF +--------------------------------------------------------------------------------------------+" >&2
+trap 'exit 0' TERM INT
+while true; do sleep 1; done
