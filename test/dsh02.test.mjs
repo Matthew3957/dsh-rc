@@ -124,7 +124,7 @@ test('connect opens the three feeds and reports up on the ready item', () => {
   ws.open();
   assert.deepEqual(ws.sent.map((m) => [m.streamId, m.endpoint]), [['ev', '$events'], ['ctl', 'session/control'], ['ws', 'workspace/follow']]);
   assert.deepEqual(ws.sent[0].payload, { args: {} });
-  ws.push({ type: 'item', streamId: 'ev', value: { type: 'ready', clientId: 'cid', host: { home: '/home/x' } } });
+  ws.push({ type: 'item', streamId: 'ev', value: { type: 'ready', clientId: 'cid', host: { home: '/srv/example' } } });
   assert.equal(state.up, 1);
   assert.equal(client.clientId(), 'cid');
   client.close();
