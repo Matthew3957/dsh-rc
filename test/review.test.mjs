@@ -342,3 +342,23 @@ test('an ordinary question still renders as a question card', async () => {
   assert.equal(byClass(t.el('#pending'), 'plan').length, 0);
   assert.match(textOf(t.el('#pending')), /dsh is asking/);
 });
+
+test('a huge diff keeps bounded ops and exact counts', () => {
+  const big = Array.from({ length: 200000 }, (_, i) => 'line ' + i).join('\n');
+  const edited = big.replace('line 100000\n', 'changed\n');
+  const t0 = Date.now();
+  const ops = review.diffLines(big, edited);
+  assert.ok(Date.now() - t0 < 2000, 'fast enough for a phone');
+  assert.ok(ops.length < 300, `bounded, got ${ops.length}`);
+  assert.deepEqual(review.diffStats(ops), { adds: 1, dels: 1 });
+  const created = review.diffLines(null, big);
+  assert.ok(created.length <= 1001);
+  assert.deepEqual(review.diffStats(created), { adds: 200000, dels: 0 });
+  assert.equal(created[created.length - 1].op, 'cut');
+});
+
+test('an interrupted edit is not counted as a file change', () => {
+  const view = { card: 'diff', title: 'edit', diffs: [{ path: '/w/a.txt', oldText: 'a\n', newText: 'b\n' }] };
+  const s = review.summarizeTurn([{ id: 'c1', name: 'edit', view, done: true, orphan: true }], { kind: 'interrupted' });
+  assert.equal(s.files.length, 0);
+});
