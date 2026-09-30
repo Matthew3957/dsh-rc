@@ -10,7 +10,8 @@
   },
   "scripts": {
     "start": "node server/index.mjs",
-    "test": "node --test"
+    "test": "node --test",
+    "smoke": "node scripts/smoke.mjs"
   },
   "dependencies": {
     "web-push": "^3.6.7"

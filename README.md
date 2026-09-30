@@ -235,7 +235,27 @@ applies to it; the tailnet is the boundary there.
 - Typing `@` in the composer lists files and folders of the session's working directory
   (`fileReferences/list`, payload `args: {agentId, query}`) and inserts the path, `@"..."` when it
   has spaces. Tapping a folder keeps the list open one level down.
-- Tested against dsh 0.1.1-rc.2. Not yet tested against 0.2.x.
+- Tested against dsh 0.1.1-rc.2. dsh 0.2.x is not supported yet: it gates the API behind a
+  token printed in its startup URL, which this page does not send (see "Smoke test").
+
+## Smoke test
+
+`scripts/smoke.mjs` guards the RPC surface the page depends on. It extracts every
+`rpc(...)` or `remote(...)` method name from `public/app.js`, calls `host.describe` against
+the running dsh, then calls one harmless read method per namespace. A method that no longer
+exists answers HTTP 404 and the script exits non-zero:
+
+```
+DSH_URL=http://127.0.0.1:3080 node scripts/smoke.mjs   # or: npm run smoke
+```
+
+The only requests it can send are the read methods on its allowlist; it never starts,
+prompts, steers or changes a session. The session-changing methods the page calls are
+listed in the output as not called, so a rename there still takes a live phone to notice.
+
+Against dsh 0.2.x the handshake answers 401, because that release gates the API behind the
+token in its startup URL and this page does not send it yet. The smoke reports that rather
+than working around it.
 
 ## Reviewing the work
 
@@ -306,8 +326,8 @@ Next, in priority order:
 
 Later:
 
-- A smoke test that every RPC method the page calls still exists in dsh.
-- Test on dsh 0.2.x, and screenshots from a clean demo instance.
+- Support dsh 0.2.x, whose web API is gated behind a token in its startup URL.
+- Screenshots from a clean demo instance.
 - A dictation button.
 - A QR code for the tunnel URL in the terminal and the page, if a no-dependency way to draw one
   turns up.
