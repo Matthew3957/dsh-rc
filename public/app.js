@@ -824,6 +824,7 @@ $('#jumpBtn').onclick = () => { pinned = true; stick(true); };
 function sessionMeta(id) { return S.sessions.find((s) => s.sessionId === id) || {}; }
 async function openSession(id, { push = true } = {}) {
   if (push && location.hash !== '#s/' + id) history.pushState(null, '', '#s/' + id);
+  if (dictation.listening) dictateStop(); // the mic button is only in the chat view
   S.cur = { id, events: [], lastSeq: -1, loading: false, buffer: [], hasMore: false, gen: 0 };
   S.images = []; renderAttachments(); S.steer = false; queueEditing = null;
   $('#listView').hidden = true; $('#chatView').hidden = false;
@@ -845,6 +846,7 @@ async function openSession(id, { push = true } = {}) {
 }
 function showList({ push = true } = {}) {
   if (push && location.hash) history.pushState(null, '', location.pathname);
+  if (dictation.listening) dictateStop();
   S.cur = null;
   $('#chatView').hidden = true; $('#listView').hidden = false;
   loadSessions();
@@ -1707,6 +1709,9 @@ function renderCmdPop() {
 
 async function send() {
   const cur = S.cur; if (!cur) return;
+  // Sending ends dictation first, so the last spoken words land in the message
+  // rather than being written back into a composer that has moved on.
+  if (dictation.listening) dictateStop();
   const text = input.value.trim();
   const images = S.images.slice();
   if (!text && !images.length) return;
@@ -1771,6 +1776,119 @@ function renderAttachments() {
   box.replaceChildren(...S.images.map((im, i) => h('div', { class: 'thumb' }, h('img', { src: im.url, alt: '' }),
     h('button', { type: 'button', onclick: () => { S.images.splice(i, 1); renderAttachments(); } }, '×'))));
 }
+
+// ---------- Dictation (Web Speech API) ----------
+// Chrome and Safari transcribe speech in the browser, so a tap fills the composer
+// with no server round trip and nothing extra shipped. A browser without the API
+// gets no button at all rather than one that cannot do anything.
+const SpeechCtor = window.SpeechRecognition || window.webkitSpeechRecognition;
+const dictationSupported = typeof SpeechCtor === 'function';
+const micBtn = $('#micBtn');
+micBtn.hidden = !dictationSupported;
+
+// The live session. `base` is the composer text as it was when dictation started,
+// so speech is added to what is already typed instead of replacing it. `final`
+// accumulates across the short runs Chrome and Safari end at each pause, and
+// `interim` is the tail the recognizer is still revising.
+const dictation = { rec: null, listening: false, base: '', final: '', interim: '', heard: false, startedAt: 0, dry: 0 };
+
+// The composer text for the words recognized so far, with one separating space.
+function dictateValue() {
+  const spoken = dictation.final + dictation.interim;
+  if (!dictation.base) return spoken;
+  if (!spoken) return dictation.base;
+  return /\s$/.test(dictation.base) ? dictation.base + spoken : dictation.base + ' ' + spoken;
+}
+function dictatePaint() {
+  micBtn.classList.toggle('live', dictation.listening);
+  micBtn.setAttribute('aria-pressed', dictation.listening ? 'true' : 'false');
+  micBtn.setAttribute('aria-label', dictation.listening ? 'Stop dictation' : 'Dictate');
+  micBtn.title = dictation.listening ? 'Stop dictation' : 'Dictate';
+}
+function dictateApply() {
+  input.value = dictateValue();
+  grow();
+  renderCmdPop();
+}
+// End the session, keeping what was recognized and dropping the live state.
+function dictateFinish() {
+  const rec = dictation.rec;
+  dictation.rec = null;
+  dictation.listening = false;
+  dictation.heard = false;
+  dictation.dry = 0;
+  if (rec) { try { rec.abort(); } catch {} }
+  dictateApply();
+  dictation.base = ''; dictation.final = ''; dictation.interim = '';
+  dictatePaint();
+}
+function dictateFail(code) {
+  dictateFinish();
+  const denied = code === 'not-allowed' || code === 'service-not-allowed';
+  toast(denied ? 'Dictation needs microphone access' : 'Dictation stopped: ' + (code || 'unknown error'));
+}
+function dictateResults(e) {
+  const results = e.results || [];
+  const from = typeof e.resultIndex === 'number' ? e.resultIndex : 0;
+  let interim = '';
+  for (let i = 0; i < results.length; i++) {
+    const r = results[i];
+    const text = (r && r[0] && r[0].transcript) || '';
+    if (!text) continue;
+    dictation.heard = true;
+    if (r.isFinal) { if (i >= from) dictation.final += text; }
+    else interim += text;
+  }
+  dictation.interim = interim;
+  dictateApply();
+}
+// One recognition run. Both browsers end a run at every pause even with
+// `continuous` set, so onend opens a fresh one until the button is tapped off.
+function dictateRun() {
+  const rec = new SpeechCtor();
+  rec.continuous = true;
+  rec.interimResults = true;
+  rec.lang = navigator.language || 'en-US';
+  rec.onresult = (e) => { if (dictation.rec === rec) dictateResults(e); };
+  rec.onerror = (e) => {
+    const code = e && e.error;
+    if (dictation.rec !== rec || code === 'no-speech' || code === 'aborted') return;
+    dictateFail(code);
+  };
+  rec.onend = () => {
+    if (dictation.rec !== rec) return;
+    dictation.rec = null;
+    if (!dictation.listening) { dictateFinish(); return; }
+    // Three runs in a row that die with nothing heard and no time to listen mean
+    // the service is not coming back; an ordinary silent pause is left to restart.
+    if (!dictation.heard && Date.now() - dictation.startedAt < 600) {
+      if (++dictation.dry >= 3) { dictateFail('unavailable'); return; }
+    } else dictation.dry = 0;
+    dictateRun();
+  };
+  dictation.rec = rec;
+  dictation.heard = false;
+  dictation.startedAt = Date.now();
+  try { rec.start(); } catch { dictateFail('start'); }
+}
+function dictateStart() {
+  if (!dictationSupported || dictation.listening) return;
+  dictation.base = input.value;
+  dictation.final = '';
+  dictation.interim = '';
+  dictation.listening = true;
+  dictatePaint();
+  dictateRun();
+}
+function dictateStop() {
+  if (!dictation.listening) return;
+  // Fold the unconfirmed tail in: the stop tap should not drop the last phrase.
+  dictation.final += dictation.interim;
+  dictation.interim = '';
+  dictateFinish();
+}
+micBtn.addEventListener('click', () => { dictation.listening ? dictateStop() : dictateStart(); });
+dictatePaint();
 
 // ---------- Sheets ----------
 function openSheet(...kids) {
