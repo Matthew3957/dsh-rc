@@ -7,7 +7,8 @@ Session list, chat with streaming replies, compact tool rows you tap to expand (
 as line diffs), a summary card at the end of each turn (files changed, commands run, passed or
 failed), approval and question cards above the composer, plan-mode plans as approve / keep
 planning cards, stop / steer / queue, slash commands, model switching,
-fork, export and archive from the session menu, image attachments, a read-only plugins and connectors screen, a per-session status line
+fork, export and archive from the session menu, image attachments, dictation through the browser's
+Web Speech API where it exists, a read-only plugins and connectors screen, a per-session status line
 (model and route, context fill, session tokens, estimated cost), a Running now dashboard for
 every active session, and Web Push notifications for approvals, questions, finished turns and
 errors.
@@ -363,7 +364,6 @@ Next, in priority order:
 Later:
 
 - Screenshots from a clean demo instance.
-- A dictation button.
 - A QR code for the tunnel URL in the terminal and the page, if a no-dependency way to draw one
   turns up.
 
