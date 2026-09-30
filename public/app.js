@@ -993,6 +993,7 @@ fitViewport();
 
 // ---------- Boot ----------
 (async function boot() {
+  linkTargets();
   window.addEventListener('load', linkTargets);
   try { S.describe = await rpc('host.describe', {}); } catch (e) { toast('dsh not reachable: ' + e.message, 6000); }
   connect();
