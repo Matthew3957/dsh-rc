@@ -29,10 +29,16 @@ export function parseSetCookies(setCookies, now = Date.now()) {
     const parts = String(line).split(';').map((p) => p.trim());
     if (!parts[0] || !parts[0].includes('=')) continue;
     pairs.push(parts[0]);
+    // Max-Age wins over Expires (RFC 6265 5.3), but either one bounds the cookie's life.
+    let maxAge = null, at = null;
     for (const attr of parts.slice(1)) {
-      const m = /^max-age=(\d+)$/i.exec(attr);
-      if (m) expires = Math.min(expires ?? Infinity, now + Number(m[1]) * 1000);
+      const m = /^max-age=(-?\d+)$/i.exec(attr);
+      if (m) maxAge = now + Number(m[1]) * 1000;
+      const e = /^expires=(.+)$/i.exec(attr);
+      if (e) { const t = Date.parse(e[1]); if (Number.isFinite(t)) at = t; }
     }
+    const until = maxAge ?? at;
+    if (until != null) expires = Math.min(expires ?? Infinity, until);
   }
   return { cookie: pairs.join('; '), expires };
 }
