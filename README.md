@@ -113,8 +113,8 @@ never downloads it, and `--no-autoupdate` stops cloudflared updating itself. Ins
 A quick tunnel has no access control of its own, so the passphrase is the only thing between
 anyone who learns the URL and a shell as you. Pick a long one. The URL changes on every start,
 so it is not something to bookmark or add to a home screen. The URL is also printed as a QR code
-in the terminal, and the session list shows a ▦ button that opens the same code, so a phone can
-scan it instead of typing the address. The code holds only the URL; the phone still has to log in.
+in the terminal, and the session list menu has an "Open on your phone" item that shows the same
+code, so a phone can scan it instead of typing the address. The code holds only the URL; the phone still has to log in.
 The encoder is a small one in `public/qr.js`, with no dependency.
 
 ### Named Cloudflare tunnel with Access (the durable setup)
