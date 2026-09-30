@@ -149,7 +149,7 @@ const S = {
   subagents: new Map(),   // parentId -> {entries, parentAvailable, at}
   agentsLoading: new Set(), // parentIds whose subagent.list call is in flight
   dashOpen: new Set(),    // sessionIds whose dashboard card is expanded
-  dashCollapsed: false,   // the Running now section is open until folded
+  dashCollapsed: true,    // Running now is one quiet line until tapped open
   model: new Map(),       // sessionId -> {provider, model} in use
   prices: null,           // price overrides, read from localStorage once
   cur: null,
@@ -159,6 +159,8 @@ const S = {
   images: [],
   commands: [],
   searchMode: false,
+  filter: 'all',          // session list filter: all | running | waiting
+  tunnelUrl: null,        // set when dsh-rc runs with --tunnel
 };
 try { for (const [k, v] of Object.entries(JSON.parse(localStorage.getItem('dshm.titles') || '{}'))) S.titles.set(k, v); } catch {}
 function saveTitles() {
@@ -504,32 +506,53 @@ function pendingCount(sessionId) {
   for (const q of S.questions.values()) if (rootOf(q.sessionId) === sessionId) n++;
   return n;
 }
+function sessState(id) {
+  if (pendingCount(id)) return 'wait';
+  return sessionIsWorking(id) ? 'run' : 'idle';
+}
+// One row: a status glyph, the title, and one muted line (state, age, folder).
 function sessRow(s, snippet) {
   const id = s.sessionId;
   const t = S.titles.get(id);
-  const running = S.running.get(id);
+  const state = sessState(id);
   const pend = pendingCount(id);
-  const meta = [tildify(s.cwd) || '', s.agentPreset || ''].filter(Boolean).join(' · ');
-  return h('li', { class: 'sess', onclick: () => openSession(id) },
+  const folder = basename(s.cwd);
+  const when = ago(s.updatedAt);
+  const sub = state === 'wait' ? [pend > 1 ? `${pend} waiting for you` : 'Waiting for you', when, folder]
+    : state === 'run' ? ['Working', folder] : [when, folder];
+  return h('li', { class: 'sess ' + state, onclick: () => openSession(id) },
+    h('span', { class: 'glyph ' + state, 'aria-hidden': 'true' }),
     h('div', { class: 'main' },
-      h('div', { class: 't' + (t ? '' : ' untitled') }, running ? h('span', { class: 'run' }, '● ') : null, t || basename(s.cwd) || 'Untitled', pend ? h('span', { class: 'badge' }, String(pend)) : null),
-      snippet ? h('div', { class: 'snip' }, snippet) : h('div', { class: 'm' }, meta)),
-    h('div', { class: 'when' }, ago(s.updatedAt)));
+      h('div', { class: 't' + (t ? '' : ' untitled') }, t || folder || 'Untitled'),
+      snippet ? h('div', { class: 'snip' }, snippet) : h('div', { class: 'm' }, sub.filter(Boolean).join(' · '))));
+}
+const FILTERS = { all: 'All sessions', running: 'Running', waiting: 'Waiting for you' };
+function filteredSessions() {
+  if (S.filter === 'all') return S.sessions;
+  const want = S.filter === 'running' ? 'run' : 'wait';
+  return S.sessions.filter((s) => sessState(s.sessionId) === want);
 }
 function renderList() {
   const ul = $('#sessions');
-  const rows = S.sessions.slice(0, S.shown).map((s) => sessRow(s));
-  ul.replaceChildren(...(rows.length ? rows : [h('li', { class: 'empty' }, 'No sessions yet')]));
-  $('#moreBtn').hidden = S.sessions.length <= S.shown;
-  badge();
+  const all = filteredSessions();
+  const rows = all.slice(0, S.shown).map((s) => sessRow(s));
+  const none = S.filter === 'all' ? 'No sessions yet' : (S.filter === 'running' ? 'Nothing is running' : 'Nothing is waiting for you');
+  ul.replaceChildren(...(rows.length ? rows : [h('li', { class: 'empty' }, none)]));
+  $('#moreBtn').hidden = all.length <= S.shown;
+  $('#filterBtn').classList.toggle('active', S.filter !== 'all');
+  paintBanner();
 }
+// Approvals and questions change a row's glyph as well as the banner.
 function badge() {
+  if (!$('#listView').hidden && !S.searchMode) renderList(); else paintBanner();
+}
+function paintBanner() {
   const box = $('#pendingGlobal');
   const n = S.approvals.size + S.questions.size;
   if (!n) { box.replaceChildren(); return; }
   const first = [...S.approvals.values(), ...S.questions.values()][0];
-  box.replaceChildren(h('div', { class: 'banner', onclick: () => openSession(rootOf(first.sessionId)) },
-    `⚠ ${n} waiting for your answer. Tap to open.`));
+  box.replaceChildren(h('button', { class: 'banner', type: 'button', onclick: () => openSession(rootOf(first.sessionId)) },
+    h('span', { class: 'glyph wait', 'aria-hidden': 'true' }), `${n} waiting for your answer`));
 }
 let searchT = null;
 $('#q').addEventListener('input', (e) => {
@@ -547,9 +570,40 @@ $('#q').addEventListener('input', (e) => {
     } catch (err) { toast('Search failed: ' + err.message); }
   }, 300);
 });
-$('#plugBtn').onclick = () => pluginsSheet();
-$('#bellBtn').onclick = () => notificationsSheet();
-$('#qrBtn').onclick = () => { tunnelSheet().catch((e) => toast('Tunnel address unavailable: ' + e.message)); };
+// Search lives in the floating strip: the round button opens it, the close button puts it away.
+function openSearch() {
+  $('#dockActions').hidden = true; $('#searchRow').hidden = false;
+  $('#q').focus();
+}
+function closeSearch() {
+  clearTimeout(searchT);
+  $('#q').value = '';
+  $('#searchRow').hidden = true; $('#dockActions').hidden = false;
+  if (S.searchMode) { S.searchMode = false; renderList(); }
+}
+$('#searchBtn').onclick = openSearch;
+$('#searchClose').onclick = closeSearch;
+$('#q').addEventListener('keydown', (e) => { if (e.key === 'Escape') closeSearch(); });
+function listMenuSheet() {
+  const notifState = h('small', {}, 'Approvals, questions, finished turns');
+  refreshPushState().then((st) => { notifState.textContent = pushStateLabel(st); });
+  openSheet(h('h3', {}, 'Menu'),
+    h('button', { class: 'menuitem', onclick: () => notificationsSheet() }, 'Notifications', notifState),
+    h('button', { class: 'menuitem', onclick: pluginsSheet }, 'Plugins & connectors', h('small', {}, 'What this dsh has loaded')),
+    S.tunnelUrl ? h('button', { class: 'menuitem', onclick: () => { tunnelSheet().catch((e) => toast('Tunnel address unavailable: ' + e.message)); } }, 'Open on your phone', h('small', {}, 'Show the tunnel address as a QR code')) : null,
+    h('a', { class: 'menuitem', href: '/', style: 'color:inherit;text-decoration:none' }, 'Open full dsh web UI'));
+}
+function filterSheet() {
+  const count = (want) => S.sessions.filter((s) => sessState(s.sessionId) === want).length;
+  const n = { all: S.sessions.length, running: count('run'), waiting: count('wait') };
+  openSheet(h('h3', {}, 'Show'),
+    ...Object.entries(FILTERS).map(([key, label]) => h('button', {
+      class: 'menuitem' + (S.filter === key ? ' cur' : ''), 'aria-pressed': String(S.filter === key),
+      onclick: () => { S.filter = key; closeSheet(); renderList(); },
+    }, label, h('small', {}, String(n[key])))));
+}
+$('#menuListBtn').onclick = listMenuSheet;
+$('#filterBtn').onclick = filterSheet;
 $('#moreBtn').onclick = () => { S.shown += 40; renderList(); fillTitles(); };
 
 // ---------- Renderer ----------
@@ -2391,7 +2445,7 @@ async function loadTunnelUrl() {
 }
 async function tunnelSheet() {
   const url = await loadTunnelUrl();
-  if (!url) { $('#qrBtn').hidden = true; toast('No tunnel is running'); return; }
+  if (!url) { S.tunnelUrl = null; toast('No tunnel is running'); return; }
   // qr.js is optional like the other helper scripts: without it, still show the address.
   let tile = null;
   if (window.dshQr) {
@@ -2442,7 +2496,7 @@ fitViewport();
     if (e.code === 'http-404' || e.code === 'http-401') return showUnsupportedDsh(e.code);
     toast('dsh not reachable: ' + e.message, 6000);
   }
-  loadTunnelUrl().then((url) => { $('#qrBtn').hidden = !url; });
+  loadTunnelUrl().then((url) => { S.tunnelUrl = url; });
   connect();
   await loadSessions();
   if (location.hash) route();
