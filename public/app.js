@@ -787,7 +787,10 @@ const R = {
       }
       case 'tool/result': {
         const m = d.message || {};
-        const block = (m.content || []).find((b) => b.type === 'tool-result') || {};
+        // dsh 0.1 nests the result in a tool-result block; dsh 0.2 puts its text blocks, isError and
+        // toolCallId on the tool message itself (seen on the wire, 0.2.0-rc.2).
+        const block = (m.content || []).find((b) => b.type === 'tool-result')
+          || { toolCallId: m.toolCallId, isError: m.isError, content: m.content || [] };
         const callId = (m.source && m.source.callId) || block.toolCallId;
         const t = this.tool(callId);
         t.done = true;
