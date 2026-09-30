@@ -337,11 +337,20 @@ model-id prefix, each mapping `input`, `output`, `cacheRead` and `cacheWrite`; b
 The longest prefix wins and an override beats the shipped table. It is saved in this browser's
 `localStorage`, so it is per device.
 
+## Session list
+
+The main screen is kept quiet. The header has a menu button (notifications, plugins and
+connectors, the tunnel QR code while `--tunnel` runs, the full dsh web UI) and a view button that
+filters the list to running sessions or sessions waiting for you. Each session is one row: a
+status glyph (spinner while working, amber while it waits for an approval or answer, a hollow
+ring when idle), the title, and one muted line with the state, age and folder. Search and
+**New session** float at the bottom; the round button opens a search field in place.
+
 ## Running now
 
-The session list opens with a **Running now** section listing every active session, meaning a
-session with a turn in flight, a live background job, or a running subagent. Tapping its header
-folds it to a one-line count. Each card carries:
+Under the header, **Running now** lists every active session, meaning a session with a turn in
+flight, a live background job, or a running subagent. It is one line with a count until tapped
+open. Each card carries:
 
 - **elapsed time** for the current turn. A live `turn/start` event supplies the exact origin;
   when the page opens mid-turn it falls back to that session's last human prompt in the
