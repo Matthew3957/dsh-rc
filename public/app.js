@@ -29,7 +29,8 @@ function toast(msg, ms = 2600) {
 /* ---------- API errors ---------- */
 let api403Shown = false;
 function copyText(text, btn) {
-  const restore = btn.textContent;
+  // Keep the original label once: a quick double tap would otherwise capture "Copied" and restore to it.
+  const restore = btn.dataset.label || (btn.dataset.label = btn.textContent);
   const done = () => {
     btn.textContent = 'Copied';
     setTimeout(() => { btn.textContent = restore; }, 1400);
@@ -66,6 +67,8 @@ function showApi403() {
     h('pre', {}, cmd),
     h('div', { class: 'row' }, copy));
   $('#api403').replaceChildren(card);
+  // The card lives in the session list; if a session is open, point there instead of failing silently.
+  if (S.cur) toast('dsh answered 403: it does not trust this host. Go back to the session list for the fix.', 8000);
 }
 
 // ---------- RPC ----------
