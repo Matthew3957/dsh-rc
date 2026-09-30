@@ -403,11 +403,16 @@ export function buildDemo(now = Date.now()) {
     [ID.offByOne]: { pressureTokens: 38_400, projectedTokens: 39_100, contextWindow: 200_000 },
   };
 
+  const lastTime = (events, fallback) => {
+    const last = events && events.length ? events[events.length - 1].event : null;
+    return last && typeof last.time === 'number' ? last.time : fallback;
+  };
   // [id, title, cwd, updatedAt, running]
   const rows = [
     [ID.toml, 'Migrate the config loader to TOML', '/work/demo/config-lib', tomlTurnAt, true],
     [ID.pagination, 'Add cursor pagination to GET /notes', NOTES, paginationTurnAt, true],
-    [ID.offByOne, 'Fix the off-by-one in paginate()', NOTES, now - 26 * MIN, false],
+    // updatedAt is when the log last moved, not when it began, so the row's age matches the chat.
+    [ID.offByOne, 'Fix the off-by-one in paginate()', NOTES, lastTime(histories.get(ID.offByOne), now - 26 * MIN), false],
     [ID.router, 'Plan the router split', NOTES, now - 75 * MIN, false],
     [ID.lint, 'Bump the lint config to the flat format', '/work/demo/web-shell', now - 3 * HOUR, false],
     [ID.backoff, 'Explain the retry backoff in the queue worker', '/work/demo/queue-worker', now - 1 * DAY - 2 * HOUR, false],
