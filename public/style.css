@@ -237,3 +237,30 @@ input, textarea, select { font: inherit; color: inherit; }
   background: var(--accent); color: var(--accent-fg);
   border-color: var(--accent); font-family: var(--mono); font-size: 13px;
 }
+
+/* Prompt templates sheet */
+#sheetBody .tmpl-list {
+  margin-top: 12px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  overflow-y: auto;
+  max-height: 45vh;
+}
+#sheetBody .tmpl-list .note { padding: 10px 12px; }
+.tmplrow {
+  display: flex; align-items: flex-start; gap: 10px; width: 100%;
+  padding: 11px 12px; border-bottom: 1px solid var(--line);
+  text-align: left; background: var(--card);
+}
+.tmplrow:last-child { border-bottom: 0; }
+.tmplrow:active { background: var(--bg2); }
+.tmplrow > span:first-child { flex: 1; min-width: 0; display: block; }
+.tmplrow b { display: block; font-weight: 550; font-size: 14px; }
+.tmplrow small {
+  display: block; color: var(--muted); font-size: 12px; margin-top: 2px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.tmplx {
+  flex-shrink: 0; font-size: 14px; color: var(--muted);
+  padding: 0 0 0 4px;
+}

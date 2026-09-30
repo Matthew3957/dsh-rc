@@ -877,6 +877,74 @@ document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !$('#she
   });
 })();
 
+// ---------- Prompt templates ----------
+// Saved prompt templates live in localStorage under "dsh-rc.templates" as
+// [{name, text}]; every read and write is wrapped so it still works
+// without storage.
+const TEMPLATES_KEY = 'dsh-rc.templates';
+let templates = [];
+function loadTemplates() {
+  try {
+    const raw = localStorage.getItem(TEMPLATES_KEY);
+    const v = raw ? JSON.parse(raw) : null;
+    if (!Array.isArray(v)) return [];
+    return v.filter((t) => t && typeof t.name === 'string' && typeof t.text === 'string');
+  } catch { return []; }
+}
+templates = loadTemplates();
+function saveTemplates() {
+  try { localStorage.setItem(TEMPLATES_KEY, JSON.stringify(templates)); } catch {}
+}
+function templateRow(i, t, use, del) {
+  return h('button', { type: 'button', class: 'tmplrow', onclick: () => use(i) },
+    h('span', {}, h('b', {}, t.name), h('small', {}, t.text.slice(0, 100) || '(empty)')),
+    h('span', { class: 'tmplx', onclick: (e) => { e.stopPropagation(); del(i); } }, '✕'));
+}
+function templatesSheet() {
+  // Remember the cursor up front: opening the sheet blurs the composer and
+  // some browsers drop the selection on blur.
+  const [a, b] = [input.selectionStart, input.selectionEnd];
+  const list = h('div', { class: 'tmpl-list' });
+  const render = () => {
+    if (!templates.length) {
+      list.replaceChildren(h('div', { class: 'note' }, 'No templates saved yet. Use "Save current text as template" to add one.'));
+    } else {
+      list.replaceChildren(...templates.map((t, i) => templateRow(i, t, insertTemplate, deleteTemplate)));
+    }
+  };
+  function insertTemplate(i) {
+    const t = templates[i];
+    input.value = input.value.slice(0, a) + t.text + input.value.slice(b);
+    input.selectionStart = input.selectionEnd = a + t.text.length;
+    grow();
+    closeSheet();
+    input.focus();
+  }
+  function deleteTemplate(i) {
+    const t = templates[i];
+    if (!confirm('Delete "' + t.name + '"?')) return;
+    templates.splice(i, 1);
+    saveTemplates();
+    render();
+    toast('Template deleted');
+  }
+  render();
+  openSheet(h('h3', {}, 'Prompt templates'), list,
+    h('button', { type: 'button', class: 'go', onclick: () => {
+      const n = prompt('Short name for this template:');
+      if (n == null) return;
+      const name = n.trim();
+      const text = input.value;
+      if (!name) { toast('Name is required'); return; }
+      if (!text.trim()) { toast('Nothing to save: the composer is empty'); return; }
+      templates.push({ name, text });
+      saveTemplates();
+      render();
+      toast('Template saved');
+    } }, 'Save current text as template'));
+}
+$('#tmplBtn').onclick = templatesSheet;
+
 // Folder choices: saved workspaces plus project roots from recent sessions.
 // Sessions in deep work dirs (agent-queue/work/…) collapse to their top folder under home;
 // temp and scratchpad folders are skipped.
