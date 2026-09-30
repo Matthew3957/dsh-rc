@@ -482,7 +482,7 @@ async function loadSessions() {
     if (!readState.seeded) {
       // First run on this device: everything so far counts as read.
       for (const x of S.sessions) readState.seen[x.sessionId] = x.updatedAt || Date.now();
-      readState.seeded = true; saveReadState();
+      readState.seeded = true; readState.seededAt = Date.now(); saveReadState();
     }
     if (!S.searchMode) renderList();
     renderDashboard();
@@ -498,6 +498,7 @@ async function fillTitles() {
   try {
     const missing = S.sessions.slice(0, Math.min(S.shown, 25)).filter((s) => !S.titles.has(s.sessionId));
     for (const s of missing) {
+      tailChecked.set(s.sessionId, s.updatedAt || 0);
       try {
         const v = await rpc('session.history', { sessionId: s.sessionId, maxMessages: 1 });
         const t = v.projections && v.projections.values && titleFromProjection(v.projections.values.title);
@@ -524,7 +525,8 @@ function pendingCount(sessionId) {
 const readState = (() => {
   const load = (k) => { try { const v = JSON.parse(localStorage.getItem(k) || 'null'); return v && typeof v === 'object' ? v : null; } catch { return null; } };
   const seen = load('dshm.seen'), failed = load('dshm.failed') || {};
-  return { seen: seen || {}, seeded: !!seen, failed };
+  let seededAt = 0; try { seededAt = Number(localStorage.getItem('dshm.seededAt')) || 0; } catch {}
+  return { seen: seen || {}, seeded: !!seen, seededAt, failed };
 })();
 function saveReadState() {
   try {
@@ -532,6 +534,7 @@ function saveReadState() {
     const trim = (o) => Object.fromEntries(Object.entries(o).sort((a, b) => b[1] - a[1]).slice(0, 500));
     localStorage.setItem('dshm.seen', JSON.stringify(trim(readState.seen)));
     localStorage.setItem('dshm.failed', JSON.stringify(trim(readState.failed)));
+    if (readState.seededAt) localStorage.setItem('dshm.seededAt', String(readState.seededAt));
   } catch {}
 }
 function sessionUpdatedAt(id) { const s = S.sessions.find((x) => x.sessionId === id); return (s && s.updatedAt) || 0; }
@@ -544,7 +547,10 @@ function markSeen(id) {
 function isUnread(id) {
   if (S.cur && S.cur.id === id) return false;
   const seen = readState.seen[id];
-  return seen == null ? readState.seeded : sessionUpdatedAt(id) > seen + 1000;
+  // No entry: new since this device first looked (or trimmed from storage). Only count
+  // it as unread if it changed after the first-run seed, so trimmed old rows stay read.
+  if (seen == null) return readState.seeded && sessionUpdatedAt(id) > readState.seededAt;
+  return sessionUpdatedAt(id) > seen + 1000;
 }
 function noteTurnEnd(sessionId, reason, time) {
   const id = rootOf(sessionId);
@@ -558,10 +564,12 @@ function noteTurnEnd(sessionId, reason, time) {
 // Sessions that changed while the page was closed: read the tail of a few to learn
 // whether their last turn failed. Capped, and only for unread rows, so the list stays cheap.
 let checkingTails = false;
+const tailChecked = new Map(); // sessionId -> updatedAt already checked, so a list reload does not re-fetch
 async function checkUnreadTails() {
   if (checkingTails) return; checkingTails = true;
   try {
-    const todo = S.sessions.filter((s) => isUnread(s.sessionId) && !S.running.get(s.sessionId) && readState.failed[s.sessionId] == null).slice(0, 10);
+    const todo = S.sessions.filter((s) => isUnread(s.sessionId) && !S.running.get(s.sessionId) && readState.failed[s.sessionId] == null
+      && (tailChecked.get(s.sessionId) || 0) < (s.updatedAt || 0)).slice(0, 10);
     let changed = false;
     for (const s of todo) {
       try {
@@ -583,8 +591,9 @@ function pendingKind(id) {
 function sessState(id) {
   const pend = pendingKind(id);
   if (pend) return pend === 'approve' ? 'wait approve' : 'wait ask';
-  if (readState.failed[id] != null && !(S.cur && S.cur.id === id)) return 'error';
+  // Working outranks failed: a new turn is under way, and its end decides the state.
   if (sessionIsWorking(id)) return 'run';
+  if (readState.failed[id] != null && !(S.cur && S.cur.id === id)) return 'error';
   return isUnread(id) ? 'unread' : 'idle';
 }
 const kindOf = (state) => state.split(' ')[0];
