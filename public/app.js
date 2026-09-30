@@ -438,6 +438,7 @@ function onHost(p) {
       scheduleDashboard();
       break;
     case 'host/archived-sessions-changed':
+      if (!window.dshActions) break; // session-actions.js failed to load: keep the list as it is
       S.archived = window.dshActions.archiveSet(p.archivedSessionIds);
       S.sessions = window.dshActions.visibleSessions(S.sessions, S.archived);
       if (!$('#listView').hidden && !S.searchMode) renderList();
@@ -454,7 +455,8 @@ async function loadSessions() {
   try {
     // workspace.list carries the archive set; session.list keeps returning archived rows.
     const [v, ws] = await Promise.all([rpc('session.list', {}), rpc('workspace.list', {}).catch(() => null)]);
-    if (ws && ws.archivedSessionIds) S.archived = window.dshActions.archiveSet(ws.archivedSessionIds);
+    const acts = window.dshActions; // guarded like dshPrices and dshReview: a missing module must not blank the list
+    if (acts && ws && ws.archivedSessionIds) S.archived = acts.archiveSet(ws.archivedSessionIds);
     const items = v.items || [];
     for (const s of items) {
       if (s.parentSessionId && s.origin === 'subagent') S.parent.set(s.sessionId, s.parentSessionId);
@@ -465,7 +467,8 @@ async function loadSessions() {
       const t = values && titleFromProjection(values.title);
       if (t) S.titles.set(s.sessionId, t);
     }
-    S.sessions = window.dshActions.visibleSessions(items.filter((s) => !s.blank && s.origin !== 'subagent'), S.archived);
+    const listed = items.filter((s) => !s.blank && s.origin !== 'subagent');
+    S.sessions = acts ? acts.visibleSessions(listed, S.archived) : listed;
     saveTitles();
     if (!S.searchMode) renderList();
     renderDashboard();
@@ -2110,18 +2113,13 @@ function exportSheet() {
   const cur = S.cur;
   const withSub = h('input', { type: 'checkbox', id: 'expSub' });
   const go = h('button', { type: 'button', class: 'go' }, 'Download ZIP');
-  go.onclick = async () => {
+  go.onclick = () => {
+    // Click the link inside the tap: iOS Safari blocks a programmatic download once an
+    // await has spent the user gesture, so there is no preflight here.
     const url = window.dshActions.exportUrl(cur.id, { includeDescendants: withSub.checked });
-    go.disabled = true; go.textContent = 'Preparing…';
-    try {
-      // HEAD first, so a failure is a message here rather than a dead download page.
-      const r = await fetch(url, { method: 'HEAD' });
-      checkLogin(r);
-      if (!r.ok) throw new Error(r.status === 404 ? 'session not found' : 'HTTP ' + r.status);
-      const a = h('a', { href: url, download: window.dshActions.exportFilename(r.headers.get('content-disposition'), cur.id) });
-      document.body.append(a); a.click(); a.remove();
-      closeSheet();
-    } catch (e) { toast('Export failed: ' + e.message, 4000); go.disabled = false; go.textContent = 'Download ZIP'; }
+    const a = h('a', { href: url, download: window.dshActions.exportFilename(null, cur.id) });
+    document.body.append(a); a.click(); a.remove();
+    closeSheet(); toast('Downloading the log…');
   };
   openSheet(h('h3', {}, 'Export log'),
     h('div', { class: 'note' }, 'The stored log of this session as a ZIP.'),
@@ -2131,6 +2129,15 @@ function exportSheet() {
 }
 function archiveSheet() {
   const cur = S.cur;
+  // dsh has no unarchive, and an archived session leaves the list and Running now: never
+  // archive one that is still working.
+  const live = S.running.get(cur.id) || (S.jobs.get(cur.id) || []).some((j) => j && (j.status === 'running' || j.status === 'stopping'));
+  if (live) {
+    openSheet(h('h3', {}, 'Archive this session?'),
+      h('div', { class: 'note' }, 'It is still working (a turn or a background job is running). Stop it first: an archived session cannot be reopened from here.'),
+      h('button', { type: 'button', class: 'menuitem', onclick: closeSheet }, 'OK'));
+    return;
+  }
   const go = h('button', { type: 'button', class: 'go' }, 'Archive session');
   go.onclick = async () => {
     go.disabled = true; go.textContent = 'Archiving…';
