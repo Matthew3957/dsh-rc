@@ -1,6 +1,8 @@
 name: leak-check
 on:
   pull_request:
+  push:
+    branches: [main]
 permissions:
   contents: read
 jobs:
@@ -11,4 +13,4 @@ jobs:
         with:
           fetch-depth: 0
       - name: Scan PR for private data
-        run: scripts/leak-check.sh "origin/${{ github.base_ref }}"
+        run: scripts/leak-check.sh "${{ github.event_name == 'push' && github.event.before || format('origin/{0}', github.base_ref) }}"
