@@ -326,6 +326,7 @@ $('#q').addEventListener('input', (e) => {
   }, 300);
 });
 $('#plugBtn').onclick = () => pluginsSheet();
+$('#bellBtn').onclick = () => notificationsSheet();
 $('#moreBtn').onclick = () => { S.shown += 40; renderList(); fillTitles(); };
 
 // ---------- Renderer ----------
