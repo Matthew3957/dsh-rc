@@ -2307,45 +2307,72 @@ $('#menuBtn').onclick = () => {
     location.pathname.replace(/\/+$/, '') ? h('a', { class: 'menuitem', href: '/', style: 'color:inherit;text-decoration:none' }, 'Open full dsh web UI') : null);
 };
 // ---------- Plugins (read-only) ----------
-// dsh exposes only a read-only inventory; adding or toggling plugins is a laptop-side change.
+// Both APIs answer `pluginInventory/list` (the pluginInventory Typert namespace). The 0.2
+// snapshot also carries display metadata and agent-preset compositions; dsh02.js resolves
+// those into the rows below, and a 0.1 snapshot simply has neither. dsh-plugin-manager does
+// offer per-entry enable/disable (`pluginManager/setPluginEnabled`), but dsh-rc's proxy
+// refuses the whole `pluginManager` namespace, so the phone cannot change the profile and
+// this screen stays read-only.
 async function pluginsSheet() {
   openSheet(h('h3', {}, 'Plugins & connectors'), h('div', { class: 'note' }, 'Loading…'));
-  let entries;
+  let snap;
   try {
     const v = await remote('pluginInventory/list', {});
-    entries = (v && (v.entries || v.items)) || (Array.isArray(v) ? v : []);
+    snap = window.dsh02 && window.dsh02.fromPluginInventory
+      ? window.dsh02.fromPluginInventory(v, { locale: navigator.language })
+      : { entries: (v && (v.entries || v.items)) || (Array.isArray(v) ? v : []), presets: [], managementAvailable: false };
   } catch (e) { openSheet(h('h3', {}, 'Plugins & connectors'), h('div', { class: 'note err' }, 'Could not read the plugin list: ' + e.message)); return; }
+  const entries = snap.entries;
   const phase = (e) => e.fiberPhase ?? e.phase ?? null;
   const shortId = (e) => String(e.entryId || '').split(':').pop();
+  // The Loader entry id is the scannable identity; prefer a display title only when the
+  // package published one that says more than the module specifier.
+  const name = (e) => (e.title && e.title !== e.moduleName ? e.title : shortId(e));
   const state = (e) => !e.enabled ? 'off' : (phase(e) === 'failed' ? 'failed' : (phase(e) && phase(e) !== 'active' ? phase(e) : 'on'));
   const row = (e, label) => {
     const st = state(e);
     return h('div', { class: 'plug' },
       h('span', { class: 'pdot ' + st }),
-      h('div', { class: 'pmain' }, h('b', {}, label || shortId(e)), h('small', {}, e.moduleName || '')),
+      h('div', { class: 'pmain' }, h('b', {}, label || name(e)),
+        e.description ? h('small', { class: 'pdesc' }, e.description) : (e.moduleName ? h('small', {}, e.moduleName) : null)),
       h('span', { class: 'pstate ' + st }, st));
   };
   const mcp = entries.filter((e) => /dsh-mcp-client/.test(e.moduleName || ''));
   const subs = entries.filter((e) => /dsh-subagent-(claude-code|codex|acp|dsh-sdk)/.test(e.moduleName || '') && !/tool-/.test(e.entryId));
-  const bad = entries.filter((e) => e.enabled && (phase(e) === 'failed'));
+  const bad = entries.filter((e) => e.enabled && phase(e) === 'failed');
   const all = entries.filter((e) => e.moduleName && !/^cordis:/.test(e.moduleName));
   const list = h('div', { class: 'plist' });
   const search = h('input', { type: 'search', placeholder: `Search ${all.length} plugins`, autocomplete: 'off' });
   const renderAll = () => {
     const q = search.value.trim().toLowerCase();
-    const hits = all.filter((e) => !q || (e.entryId + ' ' + e.moduleName).toLowerCase().includes(q));
+    const hits = all.filter((e) => !q || [e.entryId, e.moduleName, e.title, e.description].filter(Boolean).join(' ').toLowerCase().includes(q));
     list.replaceChildren(...hits.slice(0, 200).map((e) => row(e)));
   };
   search.oninput = renderAll;
   const section = (title, items, label) => items.length ? [h('div', { class: 'grp' }, title), ...items.map((e) => row(e, label && label(e)))] : [];
+  // A preset's composition is the 0.2 snapshot's other half: a broken or failing one cannot
+  // mount a session, so it sorts before the healthy presets and the default one.
+  const badness = (p) => (p.broken ? 2 : p.failed ? 1 : 0);
+  const presets = (snap.presets || []).slice().sort((a, b) => (badness(b) - badness(a)) || (Number(b.isDefault) - Number(a.isDefault)));
+  const presetRow = (p) => {
+    const st = p.broken || p.failed ? 'failed' : 'on';
+    const detail = p.broken || `${p.rows.length} plugin${p.rows.length === 1 ? '' : 's'}${p.failed ? `, ${p.failed} failed` : ''}`;
+    return h('div', { class: 'plug' },
+      h('span', { class: 'pdot ' + st }),
+      h('div', { class: 'pmain' }, h('b', {}, p.name + (p.isDefault ? ' · default' : '')), h('small', { class: 'pdesc' }, detail)),
+      h('span', { class: 'pstate ' + st }, p.broken ? 'broken' : (p.failed ? `${p.failed} failed` : '')));
+  };
   openSheet(
     h('h3', {}, 'Plugins & connectors'),
     bad.length ? h('div', { class: 'note err' }, `${bad.length} plugin${bad.length > 1 ? 's' : ''} failed to load.`) : null,
     ...section('Failed', bad),
     ...section('Connectors (MCP)', mcp, (e) => shortId(e).replace(/^mcp-/, '')),
     ...section('Subagent providers', subs, (e) => shortId(e).replace(/^subagent-/, '')),
+    ...(presets.length ? [h('div', { class: 'grp' }, 'Presets'), ...presets.map(presetRow)] : []),
     h('div', { class: 'grp' }, 'All plugins'), search, list,
-    h('div', { class: 'note' }, 'Read-only. Plugins and connectors are added on the laptop in the dsh profile, then dsh restarts.'));
+    h('div', { class: 'note' }, snap.managementAvailable
+      ? 'Read-only. This profile supports plugin changes; dsh-rc leaves them to the laptop.'
+      : 'Read-only. Plugins and connectors are added on the laptop in the dsh profile, then dsh restarts.'));
   renderAll();
 }
 

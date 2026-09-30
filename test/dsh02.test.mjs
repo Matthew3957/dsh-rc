@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { bareCode, createClient, fromControl, fromEvents, fromFollow, fromWorkspace, inboxToQueue, liveChunksOf } from '../public/dsh02.js';
+import { bareCode, createClient, fromControl, fromEvents, fromFollow, fromPluginInventory, fromWorkspace, inboxToQueue, liveChunksOf, localizedText } from '../public/dsh02.js';
 import { createNotifier } from '../server/notify.mjs';
 
 test('api-session emits become the host frames the page reads', () => {
@@ -51,6 +51,50 @@ test('inbox messages become the page queue; only typed ones are not context', ()
   assert.deepEqual(items.map((i) => [i.id, i.placement]), [['a', 'queued'], ['b', 'context'], ['c', 'steering']]);
   assert.equal(items[0].message.id, 'a');
   assert.deepEqual(inboxToQueue(null), []);
+});
+
+test('localizedText picks the asked language, then English, and never invents text', () => {
+  assert.equal(localizedText('plain', 'en-US'), 'plain');
+  assert.equal(localizedText({ en: 'fallback', zh: '中文' }, 'zh-Hans'), '中文');
+  assert.equal(localizedText({ en: 'fallback', zh: '中文' }, 'fr'), 'fallback');
+  assert.equal(localizedText({ fr: 'seul' }, 'de'), 'seul');
+  assert.equal(localizedText('', 'en'), undefined);
+  assert.equal(localizedText(undefined, 'en'), undefined);
+  assert.equal(localizedText(null), undefined);
+});
+
+test('fromPluginInventory resolves 0.2 metadata and presets, and leaves 0.1 entries alone', () => {
+  const snapshot = {
+    managementAvailable: true,
+    entries: [
+      { entryId: 'include:plugin-manager', moduleName: '@deepseek-ai/dsh-plugin-manager', enabled: true, fiberPhase: 'active', meta: { title: { en: 'Plugin manager', zh: '插件管理' }, description: 'Manage the profile' } },
+      { entryId: 'include:broken', moduleName: '@deepseek-ai/dsh-broken', enabled: true, fiberPhase: 'failed', meta: { title: 'Broken thing', description: { en: 'It failed', zh: '它失败了' } } },
+    ],
+    agentPresets: [
+      { id: 'standard', name: 'Standard', isDefault: true, rows: [{ entryId: 'persona', moduleName: '@deepseek-ai/dsh-persona', enabled: true, fiberPhase: 'active' }] },
+      { id: 'minimal', broken: 'composition unreadable', rows: [] },
+      { id: 'failing', name: 'Failing', rows: [{ entryId: 'x', moduleName: 'x', enabled: true, fiberPhase: 'failed' }, { entryId: 'y', moduleName: 'y', enabled: false, fiberPhase: null }] },
+    ],
+  };
+  const out = fromPluginInventory(snapshot, { locale: 'zh-Hans' });
+  assert.equal(out.managementAvailable, true);
+  assert.equal(out.entries[0].title, '插件管理');
+  assert.equal(out.entries[0].description, 'Manage the profile');
+  assert.equal(out.entries[1].description, '它失败了');
+  assert.equal(out.entries[1].fiberPhase, 'failed');
+  const broken = out.presets.find((p) => p.id === 'minimal');
+  assert.equal(broken.broken, 'composition unreadable');
+  assert.equal(broken.failed, 0);
+  assert.equal(out.presets.find((p) => p.id === 'standard').isDefault, true);
+  assert.equal(out.presets.find((p) => p.id === 'failing').failed, 1);
+
+  const old = fromPluginInventory({ entries: [{ entryId: 'e', moduleName: 'm', enabled: true, fiberPhase: 'active' }] });
+  assert.equal(old.entries[0].title, undefined);
+  assert.equal(old.entries[0].description, undefined);
+  assert.deepEqual(old.presets, []);
+  assert.equal(old.managementAvailable, false);
+  assert.deepEqual(fromPluginInventory({ items: [{ entryId: 'i', moduleName: 'm' }] }).entries.map((e) => e.entryId), ['i']);
+  assert.deepEqual(fromPluginInventory(null), { entries: [], presets: [], managementAvailable: false });
 });
 
 test('control baseline and increments become projection frames, with the queue from the inbox', () => {
@@ -158,6 +202,12 @@ test('the 0.1 method names the page calls land on 0.2 endpoints with named args'
     ['commands/list', { agentId: 's' }],
   ]);
   assert.equal(calls[1].rpcId, 'req1');
+});
+
+test('the plugin inventory passes through as the same endpoint on both APIs', async () => {
+  const { client, calls } = harness();
+  await client.remote('pluginInventory/list', {});
+  assert.deepEqual(calls.at(-1), { endpoint: 'pluginInventory/list', payload: { args: {} }, rpcId: undefined });
 });
 
 test('a method with no 0.2 equivalent rejects as unsupported', async () => {
