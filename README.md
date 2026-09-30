@@ -299,6 +299,8 @@ events in `dsh-user-approval` and `dsh-user-questions`, checked against a runnin
 `dsh-agent-preset-registry`, `dsh-commands` and `dsh-user-questions`, the framing in
 `dsh-api-gateway`'s stream protocol, and
 the `approval/request` and `user-questions/request` events in `dsh-user-approval` and
+`dsh-commands`, `dsh-user-questions` and `dsh-subagent`, the framing in `dsh-api-gateway`'s stream
+protocol, and the `approval/request` and `user-questions/request` events in `dsh-user-approval` and
 `dsh-user-questions`, checked against a running 0.2.0-rc.2.
 
 - **Calls.** `POST /api/<namespace>/<method>`, `payload: {args}`, every parameter under its declared
@@ -339,23 +341,26 @@ keeps the streams across reconnects; a stream failure clears only that session. 
 opens a `job/follow` stream for its retained output, and a running job carries a two-tap stop that
 calls `job/kill`. There is no `job/kill` in the older API, so the stop control is absent there.
 
+**Subagent trees and expired questions.** `subagent.list` answers from a session's
+`subagentCatalog` projection and probes a child whose own catalog the control feed omits, so the
+page's recursion reaches grandchildren. The `userQuestions` projection is mirrored as question
+frames: a `continued` row (the timed wait ran out and the agent moved on) shows as an expired
+card and is still answered through `userQuestions/answer`.
+
 ### Not ported yet (dsh 0.2)
 
 - **Other tool cards** (read, grep and glob, web search and fetch, todos) stay generic rows: name,
   arguments and result text. A `str_replace_editor` edit shows its diff while it runs and a plain
   row once settled, as in dsh's web client, so it is not counted in the turn summary. A command
   whose output was spilled to a file has no exit code to show.
-- **Subagent tree** is built from the `subagentCatalog` projection: no grandchildren, and a child's
-  activity is only as fresh as the last status event.
-- **A question dsh already moved on from** (its timed wait ran out and the agent continued) is not
-  shown; only open requests are. `userQuestions/answer` is not used.
 - **Session search** answers as dsh does: on a deployment with the session-query index off it fails.
-- **File uploads**, terminals, schedules and settings are not touched (the last three are
-  refused by the proxy, as before).
-- Checked in headless Chromium with real DeepSeek turns against 0.1.1-rc.2, 0.1.7-rc.2 and
-  0.2.0-rc.2: streaming, reasoning blocks, tool calls and results, the status line, and an approval
-  card answered from the page. Images in the live stream are still read from the contracts only.
-- The adapter is also covered in Node (`test/dsh02.test.mjs`).
+- **File uploads**, terminals and settings are not touched (refused by the proxy, as before).
+
+Checked in headless Chromium with real DeepSeek turns against 0.1.1-rc.2, 0.1.7-rc.2 and
+0.2.0-rc.2: streaming, reasoning blocks, tool calls and results, diffs and the turn summary,
+background jobs (shown and stopped), the status line, goals, and an approval card answered from
+the page. Images in the live stream are still read from the contracts only. The adapter is also
+covered in Node (`test/dsh02.test.mjs`).
 
 ## Smoke test
 

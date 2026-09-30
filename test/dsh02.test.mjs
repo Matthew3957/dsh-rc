@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { bareCode, createClient, fromControl, fromEvents, fromFollow, fromPluginInventory, fromWorkspace, goalOf, goalStatus, inboxToQueue, liveChunksOf, localizedText, toolCallView, toolResultView, fromJobFollow, fromJobs } from '../public/dsh02.js';
+import { bareCode, createClient, fromControl, fromEvents, fromFollow, fromPluginInventory, fromWorkspace, goalOf, goalStatus, inboxToQueue, liveChunksOf, localizedText, toolCallView, toolResultView, fromJobFollow, fromJobs, questionKey } from '../public/dsh02.js';
 import { createNotifier } from '../server/notify.mjs';
 
 test('api-session emits become the host frames the page reads', () => {
@@ -245,6 +245,107 @@ test('a method with no 0.2 equivalent rejects as unsupported', async () => {
 test('errors lose their 0.2 namespace on the way out', async () => {
   const client = createClient({ transport: async () => { throw Object.assign(new Error('nope'), { code: 'session/fork-unavailable' }); }, wsUrl: 'ws://x', WebSocketImpl: FakeSocket, onFrame() {} });
   await assert.rejects(client.rpc('session.fork', { sessionId: 's' }), (e) => e.code === 'fork-unavailable');
+});
+
+test('subagent.list follows the catalog down and probes a child the control feed skipped', async () => {
+  const proj = (catalog, timing) => ({ values: { subagentCatalog: catalog, ...(timing ? { subagentTiming: timing } : {}) } });
+  const bySession = {
+    root: proj([{ id: 'c1', mode: 'one-shot', label: 'child' }]),
+    c1: proj([{ id: 'g1', mode: 'continuable', label: 'grandchild' }], { settledMs: 0, active: { since: 5, through: 9 } }),
+    g1: proj([]),
+  };
+  const calls = [];
+  const client = createClient({
+    transport: async (endpoint, payload) => { calls.push([endpoint, payload.args.request.sessionId]); return bySession[payload.args.request.sessionId]; },
+    wsUrl: 'ws://x', WebSocketImpl: FakeSocket, onFrame() {},
+  });
+  const root = await client.rpc('subagent.list', { parentSessionId: 'root' });
+  assert.deepEqual(root.entries, [{ kind: 'child', id: 'c1', mode: 'one-shot', label: 'child', activity: 'running', hasChildren: true }]);
+  // The grandchild's catalog was cached by the probe, so the child's own listing
+  // reads no child session twice; it only probes the grandchild.
+  const before = calls.length;
+  const child = await client.rpc('subagent.list', { parentSessionId: 'c1' });
+  assert.deepEqual(child.entries, [{ kind: 'child', id: 'g1', mode: 'continuable', label: 'grandchild', activity: 'inactive', hasChildren: false }]);
+  assert.ok(calls.slice(before).every(([, sessionId]) => sessionId === 'g1'), 'only the grandchild is read again');
+  assert.equal(calls.slice(0, before).filter(([, sessionId]) => sessionId === 'c1').length, 1);
+});
+
+test('a status frame fills in a child activity the timing probe did not know', async () => {
+  const { client, frames } = harness();
+  client.connect();
+  const ws = FakeSocket.last;
+  ws.open();
+  ws.push({ type: 'item', streamId: 'ctl', value: { type: 'projection', sessionId: 's1', key: 'subagentCatalog', value: [{ id: 'c1', mode: 'one-shot', label: 'child' }], seq: 4 } });
+  ws.push({ type: 'item', streamId: 'ev', value: { type: 'emit', event: 'api-session/status', args: ['c1', true] } });
+  const v = await client.rpc('subagent.list', { parentSessionId: 's1' });
+  assert.equal(v.entries[0].activity, 'running');
+  assert.equal(v.entries[0].hasChildren, false);
+  assert.ok(frames.length >= 0);
+});
+
+test('a continued question from the projection becomes an expired card that leaves with the row', () => {
+  const { client, frames } = harness();
+  client.connect();
+  const ws = FakeSocket.last;
+  ws.open();
+  ws.push({ type: 'item', streamId: 'ev', value: { type: 'ready', clientId: 'cid', host: {} } });
+  ws.push({ type: 'item', streamId: 'ctl', value: { type: 'projection', sessionId: 's1', key: 'userQuestions', value: { active: [{ callId: 'c1', questions: [{ id: 'q', question: 'Which?' }], state: 'continued' }], settled: [] }, seq: 3 } });
+  const q = frames.find((f) => f.payload.type === 'question/requested');
+  assert.equal(q.payload.expired, true);
+  assert.equal(q.payload.callId, 'c1');
+  assert.equal(q.env.rpcId, questionKey('s1', 'c1'));
+  // The projection dropping the row retires the card.
+  ws.push({ type: 'item', streamId: 'ctl', value: { type: 'projection', sessionId: 's1', key: 'userQuestions', value: { active: [], settled: [] }, seq: 9 } });
+  assert.deepEqual(frames.at(-1).payload, { type: 'question/resolved', questionRpcId: questionKey('s1', 'c1') });
+});
+
+test('an expired question is answered through userQuestions/answer, not the waterfall', async () => {
+  const { client, calls, frames } = harness();
+  client.connect();
+  const ws = FakeSocket.last;
+  ws.open();
+  ws.push({ type: 'item', streamId: 'ev', value: { type: 'ready', clientId: 'cid', host: {} } });
+  ws.push({ type: 'item', streamId: 'ctl', value: { type: 'projection', sessionId: 's1', key: 'userQuestions', value: { active: [{ callId: 'c1', questions: [{ id: 'q', question: 'Which?' }], state: 'continued' }], settled: [] }, seq: 3 } });
+  await client.respond(questionKey('s1', 'c1'), { ok: true, value: { sessionId: 's1', answer: { answers: [{ id: 'q', selected: ['A'] }] } } });
+  assert.deepEqual(calls.at(-1), { endpoint: 'userQuestions/answer', payload: { args: { agentId: 's1', callId: 'c1', answer: { answers: [{ id: 'q', selected: ['A'] }] } } }, rpcId: undefined });
+  assert.deepEqual(frames.at(-1).payload, { type: 'question/resolved', questionRpcId: questionKey('s1', 'c1') });
+});
+
+test('answering an expired question dsh no longer accepts rejects', async () => {
+  const client = createClient({ transport: async () => false, wsUrl: 'ws://x', WebSocketImpl: FakeSocket, onFrame() {} });
+  client.connect();
+  const ws = FakeSocket.last;
+  ws.open();
+  ws.push({ type: 'item', streamId: 'ctl', value: { type: 'projection', sessionId: 's1', key: 'userQuestions', value: { active: [{ callId: 'c1', questions: [{ id: 'q', question: 'Which?' }], state: 'continued' }] }, seq: 3 } });
+  await assert.rejects(client.respond(questionKey('s1', 'c1'), { ok: true, value: { sessionId: 's1', answer: { answers: [] } } }), (e) => e.code === 'question-closed');
+});
+
+test('a live waterfall is retired when the projection reports the same call continued', () => {
+  const { client, frames } = harness();
+  client.connect();
+  const ws = FakeSocket.last;
+  ws.open();
+  ws.push({ type: 'item', streamId: 'ev', value: { type: 'ready', clientId: 'cid', host: {} } });
+  ws.push({ type: 'item', streamId: 'ev', value: { type: 'waterfall', event: 'user-questions/request', eventId: 'e1', agentId: 's1', request: { questions: [{ id: 'q', question: 'Which?' }], wait: { callId: 'c1', timed: true } } } });
+  assert.equal(frames.at(-1).env.rpcId, 'e1');
+  ws.push({ type: 'item', streamId: 'ctl', value: { type: 'projection', sessionId: 's1', key: 'userQuestions', value: { active: [{ callId: 'c1', questions: [{ id: 'q', question: 'Which?' }], state: 'continued' }] }, seq: 4 } });
+  const resolved = frames.filter((f) => f.payload.type === 'question/resolved').map((f) => f.payload.questionRpcId);
+  assert.deepEqual(resolved, ['e1']);
+  const expired = frames.filter((f) => f.payload.type === 'question/requested' && f.payload.expired);
+  assert.equal(expired.length, 1);
+  assert.equal(expired[0].env.rpcId, questionKey('s1', 'c1'));
+});
+
+test('an expired question whose reply is already queued in the inbox stays hidden', () => {
+  const { client, frames } = harness();
+  client.connect();
+  const ws = FakeSocket.last;
+  ws.open();
+  ws.push({ type: 'item', streamId: 'ev', value: { type: 'ready', clientId: 'cid', host: {} } });
+  ws.push({ type: 'item', streamId: 'ctl', value: { type: 'projection', sessionId: 's1', key: 'userQuestions', value: { active: [{ callId: 'c1', questions: [{ id: 'q', question: 'Which?' }], state: 'continued' }] }, seq: 4 } });
+  assert.equal(frames.at(-1).payload.expired, true);
+  ws.push({ type: 'item', streamId: 'ctl', value: { type: 'projection', sessionId: 's1', key: 'inbox', value: { 'next-turn': [{ id: 'm1', source: { kind: 'user-question-reply', callId: 'c1' } }] }, seq: 5 } });
+  assert.deepEqual(frames.at(-1).payload, { type: 'question/resolved', questionRpcId: questionKey('s1', 'c1') });
 });
 
 test('opening a session follows it and resolves with the snapshot as a 0.1 history reply', async () => {
