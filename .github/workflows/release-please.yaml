@@ -12,7 +12,7 @@ jobs:
       # GITHUB_TOKEN is enough here: nothing in this repo builds on a tag. If an image or
       # package build ever triggers on tags, switch to a GitHub App token, because events
       # made with GITHUB_TOKEN never start other workflows.
-      - uses: googleapis/release-please-action@v4
+      - uses: googleapis/release-please-action@5c625bfb5d1ff62eadeeb3772007f7f66fdcf071 # v4
         with:
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
