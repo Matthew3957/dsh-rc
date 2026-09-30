@@ -2,6 +2,10 @@ name: release-please
 on:
   push:
     branches: [main]
+# One run at a time: overlapping runs can open duplicate release PRs or race on the manifest.
+concurrency:
+  group: release-please-${{ github.ref }}
+  cancel-in-progress: false
 permissions:
   contents: write
   pull-requests: write
@@ -9,9 +13,9 @@ jobs:
   release-please:
     runs-on: ubuntu-latest
     steps:
-      # GITHUB_TOKEN is enough here: nothing in this repo builds on a tag. If an image or
-      # package build ever triggers on tags, switch to a GitHub App token, because events
-      # made with GITHUB_TOKEN never start other workflows.
+      # GITHUB_TOKEN: events it makes never start other workflows, so release PRs get no
+      # leak-check or commit-check run and the merge gate holds them for a human. A GitHub
+      # App token (the GlueOps setup) would run CI on them and trigger builds on tags.
       - uses: googleapis/release-please-action@5c625bfb5d1ff62eadeeb3772007f7f66fdcf071 # v4
         with:
           config-file: release-please-config.json
