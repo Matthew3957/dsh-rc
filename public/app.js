@@ -371,7 +371,11 @@ function onMux(p, env) {
           S.running.set(p.sessionId, true);
           if (typeof ev.time === 'number') S.turnStart.set(p.sessionId, ev.time);
           if (!sessionKnown(p.sessionId)) scheduleSessionsReload();
-        } else if (ev.type === 'turn/end') { S.running.set(p.sessionId, false); S.turnStart.delete(p.sessionId); }
+        } else if (ev.type === 'turn/end') {
+          S.running.set(p.sessionId, false); S.turnStart.delete(p.sessionId);
+          noteTurnEnd(p.sessionId, ev.data && ev.data.reason, ev.time);
+          if (!$('#listView').hidden && !S.searchMode) renderList();
+        }
       }
       if (S.cur && p.sessionId === S.cur.id) ingest(p);
       if (ev && ev.type === 'session/title') setTitle(p.sessionId, ev.data && ev.data.title);
@@ -448,6 +452,7 @@ function onHost(p) {
       break;
     case 'host/agent-error':
       if (S.cur && belongsToCur(p.sessionId)) R.note(p.message || 'Agent error', 'err');
+      else if (p.sessionId) { readState.failed[rootOf(p.sessionId)] = Date.now(); saveReadState(); if (!$('#listView').hidden && !S.searchMode) renderList(); }
       break;
   }
 }
@@ -474,9 +479,15 @@ async function loadSessions() {
     const listed = items.filter((s) => !s.blank && s.origin !== 'subagent');
     S.sessions = acts ? acts.visibleSessions(listed, S.archived) : listed;
     saveTitles();
+    if (!readState.seeded) {
+      // First run on this device: everything so far counts as read.
+      for (const x of S.sessions) readState.seen[x.sessionId] = x.updatedAt || Date.now();
+      readState.seeded = true; saveReadState();
+    }
     if (!S.searchMode) renderList();
     renderDashboard();
     fillTitles();
+    checkUnreadTails();
   } catch (e) {
     $('#sessions').replaceChildren(h('li', { class: 'empty' }, 'Could not load sessions: ' + e.message));
   }
@@ -506,9 +517,94 @@ function pendingCount(sessionId) {
   for (const q of S.questions.values()) if (rootOf(q.sessionId) === sessionId) n++;
   return n;
 }
+// ----- read state and failed turns (per device) -----
+// dsh keeps neither, so the page does: `seen` is when each session was last looked at,
+// `failed` when its latest turn ended in an error the user has not opened yet. The
+// first run seeds `seen` with everything, so an old history does not arrive unread.
+const readState = (() => {
+  const load = (k) => { try { const v = JSON.parse(localStorage.getItem(k) || 'null'); return v && typeof v === 'object' ? v : null; } catch { return null; } };
+  const seen = load('dshm.seen'), failed = load('dshm.failed') || {};
+  return { seen: seen || {}, seeded: !!seen, failed };
+})();
+function saveReadState() {
+  try {
+    // Keep the newest 500 of each so storage stays small.
+    const trim = (o) => Object.fromEntries(Object.entries(o).sort((a, b) => b[1] - a[1]).slice(0, 500));
+    localStorage.setItem('dshm.seen', JSON.stringify(trim(readState.seen)));
+    localStorage.setItem('dshm.failed', JSON.stringify(trim(readState.failed)));
+  } catch {}
+}
+function sessionUpdatedAt(id) { const s = S.sessions.find((x) => x.sessionId === id); return (s && s.updatedAt) || 0; }
+function markSeen(id) {
+  if (!id) return;
+  readState.seen[id] = Math.max(Date.now(), sessionUpdatedAt(id));
+  delete readState.failed[id];
+  saveReadState();
+}
+function isUnread(id) {
+  if (S.cur && S.cur.id === id) return false;
+  const seen = readState.seen[id];
+  return seen == null ? readState.seeded : sessionUpdatedAt(id) > seen + 1000;
+}
+function noteTurnEnd(sessionId, reason, time) {
+  const id = rootOf(sessionId);
+  const row = S.sessions.find((x) => x.sessionId === id);
+  if (row) row.updatedAt = Math.max(row.updatedAt || 0, typeof time === 'number' ? time : Date.now());
+  if (S.cur && S.cur.id === id && document.visibilityState === 'visible') { markSeen(id); return; }
+  if (reason && reason.kind === 'error') readState.failed[id] = Date.now();
+  else if (id === sessionId) delete readState.failed[id]; // a later good turn of the session itself clears it
+  saveReadState();
+}
+// Sessions that changed while the page was closed: read the tail of a few to learn
+// whether their last turn failed. Capped, and only for unread rows, so the list stays cheap.
+let checkingTails = false;
+async function checkUnreadTails() {
+  if (checkingTails) return; checkingTails = true;
+  try {
+    const todo = S.sessions.filter((s) => isUnread(s.sessionId) && !S.running.get(s.sessionId) && readState.failed[s.sessionId] == null).slice(0, 10);
+    let changed = false;
+    for (const s of todo) {
+      try {
+        const v = await rpc('session.history', { sessionId: s.sessionId, maxMessages: 1 });
+        const ends = (v.events || []).map((f) => f.event).filter((e) => e && e.type === 'turn/end');
+        const last = ends[ends.length - 1];
+        if (last && last.data && last.data.reason && last.data.reason.kind === 'error') { readState.failed[s.sessionId] = last.time || Date.now(); changed = true; }
+      } catch {}
+    }
+    if (changed) { saveReadState(); if (!$('#listView').hidden && !S.searchMode) renderList(); }
+  } finally { checkingTails = false; }
+}
+// A row's one state, most urgent first.
+function pendingKind(id) {
+  for (const a of S.approvals.values()) if (rootOf(a.sessionId) === id) return 'approve';
+  for (const q of S.questions.values()) if (rootOf(q.sessionId) === id) return 'ask';
+  return null;
+}
 function sessState(id) {
-  if (pendingCount(id)) return 'wait';
-  return sessionIsWorking(id) ? 'run' : 'idle';
+  const pend = pendingKind(id);
+  if (pend) return pend === 'approve' ? 'wait approve' : 'wait ask';
+  if (readState.failed[id] != null && !(S.cur && S.cur.id === id)) return 'error';
+  if (sessionIsWorking(id)) return 'run';
+  return isUnread(id) ? 'unread' : 'idle';
+}
+const kindOf = (state) => state.split(' ')[0];
+// Small original line glyphs; currentColor, so each state colours them.
+const GLYPHS = {
+  approve: '<path d="M5.5 8.5V3.8a1 1 0 0 1 2 0V7.5M7.5 7V2.8a1 1 0 0 1 2 0V7.5M9.5 7.5V3.8a1 1 0 0 1 2 0v4.2M11.5 8V6a1 1 0 0 1 2 0v3.6a5 5 0 0 1-5 5 4.6 4.6 0 0 1-3.8-2L2.6 10a1 1 0 0 1 1.6-1.2l1.3 1.3V8.5"/>',
+  ask: '<path d="M3 3.5h10a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1H8l-3 2.5v-2.5H3a1 1 0 0 1-1-1v-6a1 1 0 0 1 1-1z"/><path d="M6.6 6.2a1.5 1.5 0 1 1 2.1 1.4c-.4.2-.7.5-.7.9v.2"/><circle cx="8" cy="10" r=".2"/>',
+  error: '<circle cx="8" cy="8" r="6.2"/><path d="M8 4.8v3.8"/><circle cx="8" cy="11" r=".2"/>',
+};
+function glyphEl(state) {
+  const k = state === 'wait approve' ? 'approve' : state === 'wait ask' ? 'ask' : kindOf(state);
+  const span = h('span', { class: 'glyph ' + state, 'aria-hidden': 'true' });
+  if (GLYPHS[k] && typeof document.createElementNS === 'function') {
+    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    svg.setAttribute('viewBox', '0 0 16 16');
+    // Static, trusted markup defined above: no data reaches innerHTML here.
+    svg.innerHTML = GLYPHS[k];
+    span.append(svg);
+  }
+  return span;
 }
 // One row: a status glyph, the title, and one muted line (state, age, folder).
 function sessRow(s, snippet) {
@@ -518,25 +614,28 @@ function sessRow(s, snippet) {
   const pend = pendingCount(id);
   const folder = basename(s.cwd);
   const when = ago(s.updatedAt);
-  const sub = state === 'wait' ? [pend > 1 ? `${pend} waiting for you` : 'Waiting for you', when, folder]
-    : state === 'run' ? ['Working', folder] : [when, folder];
-  return h('li', { class: 'sess ' + state, onclick: () => openSession(id) },
-    h('span', { class: 'glyph ' + state, 'aria-hidden': 'true' }),
+  const lead = state === 'wait approve' ? (pend > 1 ? `${pend} waiting for you` : 'Needs approval')
+    : state === 'wait ask' ? (pend > 1 ? `${pend} waiting for you` : 'Question for you')
+    : state === 'error' ? 'Failed' : state === 'run' ? 'Working' : null;
+  const sub = state === 'run' ? [lead, folder] : [lead, when, folder];
+  return h('li', { class: 'sess ' + state, onclick: () => openSession(id), 'aria-label': [t || folder || 'Untitled', lead || (state === 'unread' ? 'unread' : '')].filter(Boolean).join(', ') },
+    glyphEl(state),
     h('div', { class: 'main' },
       h('div', { class: 't' + (t ? '' : ' untitled') }, t || folder || 'Untitled'),
       snippet ? h('div', { class: 'snip' }, snippet) : h('div', { class: 'm' }, sub.filter(Boolean).join(' · '))));
 }
-const FILTERS = { all: 'All sessions', running: 'Running', waiting: 'Waiting for you' };
+const FILTERS = { all: 'All sessions', running: 'Running', waiting: 'Waiting for you', unread: 'Unread' };
+const FILTER_KIND = { running: 'run', waiting: 'wait', unread: 'unread' };
 function filteredSessions() {
   if (S.filter === 'all') return S.sessions;
-  const want = S.filter === 'running' ? 'run' : 'wait';
-  return S.sessions.filter((s) => sessState(s.sessionId) === want);
+  const want = FILTER_KIND[S.filter];
+  return S.sessions.filter((s) => kindOf(sessState(s.sessionId)) === want);
 }
 function renderList() {
   const ul = $('#sessions');
   const all = filteredSessions();
   const rows = all.slice(0, S.shown).map((s) => sessRow(s));
-  const none = S.filter === 'all' ? 'No sessions yet' : (S.filter === 'running' ? 'Nothing is running' : 'Nothing is waiting for you');
+  const none = { all: 'No sessions yet', running: 'Nothing is running', waiting: 'Nothing is waiting for you', unread: 'Nothing unread' }[S.filter] || 'No sessions yet';
   ul.replaceChildren(...(rows.length ? rows : [h('li', { class: 'empty' }, none)]));
   $('#moreBtn').hidden = all.length <= S.shown;
   $('#filterBtn').classList.toggle('active', S.filter !== 'all');
@@ -552,7 +651,7 @@ function paintBanner() {
   if (!n) { box.replaceChildren(); return; }
   const first = [...S.approvals.values(), ...S.questions.values()][0];
   box.replaceChildren(h('button', { class: 'banner', type: 'button', onclick: () => openSession(rootOf(first.sessionId)) },
-    h('span', { class: 'glyph wait', 'aria-hidden': 'true' }), `${n} waiting for your answer`));
+    glyphEl('wait approve'), `${n} waiting for your answer`));
 }
 let searchT = null;
 $('#q').addEventListener('input', (e) => {
@@ -594,8 +693,8 @@ function listMenuSheet() {
     location.pathname.replace(/\/+$/, '') ? h('a', { class: 'menuitem', href: '/', style: 'color:inherit;text-decoration:none' }, 'Open full dsh web UI') : null);
 }
 function filterSheet() {
-  const count = (want) => S.sessions.filter((s) => sessState(s.sessionId) === want).length;
-  const n = { all: S.sessions.length, running: count('run'), waiting: count('wait') };
+  const count = (want) => S.sessions.filter((s) => kindOf(sessState(s.sessionId)) === want).length;
+  const n = { all: S.sessions.length, running: count('run'), waiting: count('wait'), unread: count('unread') };
   openSheet(h('h3', {}, 'Show'),
     ...Object.entries(FILTERS).map(([key, label]) => h('button', {
       class: 'menuitem' + (S.filter === key ? ' cur' : ''), 'aria-pressed': String(S.filter === key),
@@ -880,6 +979,8 @@ function sessionMeta(id) { return S.sessions.find((s) => s.sessionId === id) || 
 async function openSession(id, { push = true } = {}) {
   if (push && location.hash !== '#s/' + id) history.pushState(null, '', '#s/' + id);
   if (dictation.listening) dictateStop(); // the mic button is only in the chat view
+  if (S.cur && S.cur.id !== id) markSeen(S.cur.id);
+  markSeen(id);
   S.cur = { id, events: [], lastSeq: -1, loading: false, buffer: [], hasMore: false, gen: 0 };
   S.images = []; renderAttachments(); S.steer = false; queueEditing = null;
   $('#listView').hidden = true; $('#chatView').hidden = false;
@@ -902,6 +1003,7 @@ async function openSession(id, { push = true } = {}) {
 function showList({ push = true } = {}) {
   if (push && location.hash) history.pushState(null, '', location.pathname);
   if (dictation.listening) dictateStop();
+  if (S.cur) markSeen(S.cur.id); // everything it did while open has been seen
   S.cur = null;
   $('#chatView').hidden = true; $('#listView').hidden = false;
   loadSessions();
