@@ -536,6 +536,7 @@ async function loadHistory() {
     if (t) setTitle(cur.id, t);
     cur.lastSeq = cur.events.length ? cur.events[cur.events.length - 1].event.seq : -1;
     rerender(true);
+    renderRunning(); // the turn's start time is only known once history is in
   } catch (e) {
     R.note('Could not load history: ' + e.message, 'err');
   } finally {
@@ -587,6 +588,20 @@ function applyLive(frame) {
 
 // ---------- Running / queue ----------
 let workTimer = null;
+// When the running turn began, from dsh's own event times, so reopening a session
+// mid-turn shows the real elapsed time rather than restarting at 0.
+function turnStartTime(cur) {
+  const evs = cur.events || [];
+  let firstMsg = null;
+  for (let i = evs.length - 1; i >= 0; i--) {
+    const e = evs[i].event;
+    if (!e || typeof e.time !== 'number') continue;
+    if (e.type === 'turn/end') break;
+    if (e.type === 'turn/start') return e.time;
+    if (e.type === 'user/message') firstMsg = e.time; // keeps the earliest since the last turn ended
+  }
+  return firstMsg;
+}
 function renderRunning() {
   const cur = S.cur; if (!cur) return;
   const running = !!S.running.get(cur.id);
@@ -597,7 +612,7 @@ function renderRunning() {
   $('#steerBtn').textContent = S.steer ? 'steer' : 'queue';
   clearInterval(workTimer);
   if (running) {
-    const t0 = Date.now();
+    const t0 = turnStartTime(cur) || Date.now();
     const tick = () => { $('#workingText').textContent = `Working… ${Math.floor((Date.now() - t0) / 1000)}s`; };
     tick(); workTimer = setInterval(tick, 1000);
     stick();
