@@ -49,6 +49,22 @@ function copyText(text, btn) {
   if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(done, fallback);
   else fallback();
 }
+// dsh 0.2 replaced the HTTP RPC surface this page speaks (methods like session.list are gone) and
+// wants a launch-token cookie, so nothing here can work against it. Say so instead of failing piecemeal.
+// 401 from dsh itself (not dsh-rc's login) is dsh 0.2's token gate. A 404 is ambiguous: dsh 0.2
+// renamed every method, but a /api that is not routed to dsh at all answers 404 too.
+function showUnsupportedDsh(code) {
+  const four04 = code === 'http-404';
+  const card = h('div', { class: 'card api403' },
+    h('h4', {}, four04 ? 'dsh-rc cannot find dsh here' : 'This dsh is too new for dsh-rc'),
+    h('div', { class: 'why' }, four04
+      ? 'host.describe answered 404. Either this page\'s /api is not reaching dsh (check the Tailscale Serve mount, ' +
+        'or --dsh-url when dsh-rc runs as the front door), or dsh is 0.2, which dsh-rc does not support yet ' +
+        '(tested on 0.1.1-rc.2; see Compatibility in the README).'
+      : 'dsh answered 401 to host.describe, which is how dsh 0.2 behaves. dsh-rc speaks the dsh 0.1 API ' +
+        '(tested on 0.1.1-rc.2). Run dsh 0.1.x for now; see Compatibility in the README.'));
+  $('#api403').replaceChildren(card);
+}
 // trusted: the name dsh-rc's proxy says dsh must trust; absent when the page sits beside dsh.
 function showApi403(trusted) {
   if (api403Shown) return;
@@ -75,10 +91,14 @@ function showApi403(trusted) {
 }
 
 // ---------- RPC ----------
-// dsh-rc's own server answers 401 once a login has expired (dsh never does).
+// dsh-rc's own server answers 401 once a login has expired and marks it with X-Dsh-Rc-Login.
+// dsh 0.1 never answers 401; dsh 0.2 does when it has no browser cookie, which is no login problem.
 // Relative, so it also works when the page is mounted under a path.
+// Returns true when dsh-rc's own login expired; callers then throw code 'login' so boot
+// does not mistake it for a dsh that answers 401 (dsh 0.2).
 function checkLogin(r) {
-  if (r.status === 401) location.assign('login');
+  if (r.status === 401 && r.headers.get('x-dsh-rc-login')) { location.assign('login'); return true; }
+  return false;
 }
 async function rpc(method, payload = {}, rpcId = rid()) {
   const r = await fetch('/api/' + method, {
@@ -86,7 +106,7 @@ async function rpc(method, payload = {}, rpcId = rid()) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ type: 'client-request', rpcId, method, payload }),
   });
-  checkLogin(r);
+  if (checkLogin(r)) throw Object.assign(new Error('login required'), { code: 'login' });
   if (!r.ok) {
     if (r.status === 403) showApi403(r.headers.get('x-dsh-rc-trusted-host'));
     throw Object.assign(new Error(`${method}: HTTP ${r.status}`), { code: 'http-' + r.status });
@@ -104,7 +124,7 @@ async function respond(rpcId, result) {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ type: 'client-response', rpcId, result }),
   });
-  checkLogin(r);
+  if (checkLogin(r)) throw Object.assign(new Error('login required'), { code: 'login' });
   if (!r.ok) throw new Error('respond: HTTP ' + r.status);
   const j = await r.json().catch(() => ({}));
   const v = j && (j.result ? j.result.value : j);
@@ -2181,7 +2201,11 @@ fitViewport();
       else showList();
     });
   }
-  try { S.describe = await rpc('host.describe', {}); } catch (e) { toast('dsh not reachable: ' + e.message, 6000); }
+  try { S.describe = await rpc('host.describe', {}); } catch (e) {
+    if (e.code === 'login') return; // on its way to the login page
+    if (e.code === 'http-404' || e.code === 'http-401') return showUnsupportedDsh(e.code);
+    toast('dsh not reachable: ' + e.message, 6000);
+  }
   connect();
   await loadSessions();
   if (location.hash) route();

@@ -167,7 +167,9 @@ test('with a passphrase configured, everything but login and app-install files r
   assert.equal(redirect.headers.get('location'), 'login', 'relative, so a /m mount still works');
   assert.equal((await fetch(base + '/app.js')).status, 401);
   assert.equal((await fetch(base + '/push/key')).status, 401);
-  assert.equal((await fetch(base + '/api/session.list', { method: 'POST' })).status, 401);
+  const apiDenied = await fetch(base + '/api/session.list', { method: 'POST' });
+  assert.equal(apiDenied.status, 401);
+  assert.equal(apiDenied.headers.get('x-dsh-rc-login'), '1'); // the page only redirects to login on this marker
   for (const file of ['/manifest.webmanifest', '/icon-180.png', '/icon.svg']) assert.equal((await fetch(base + file)).status, 200, file);
   assert.deepEqual(dsh.seen, []);
 
