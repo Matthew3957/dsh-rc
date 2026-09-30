@@ -262,7 +262,7 @@ applies to it; the tailnet is the boundary there.
 | --- | --- |
 | 0.1.1-rc.2 | Supported (older API), what everything here was first built against. |
 | 0.1.7-rc.2 | Supported (newer API, same as 0.2): the 0.1 line switched protocols at 0.1.7. |
-| 0.2.0-rc.2 | Supported for the core (npm's `latest` tag at the time of writing): session list, chat streaming, prompts, approvals, questions, queue, stop, model, rename, fork, archive, new session, slash commands, push notifications. Gaps are listed below. |
+| 0.2.0-rc.2 | Supported for the core (npm's `latest` tag at the time of writing): session list, chat streaming, prompts, approvals, questions, queue, stop, model, rename, fork, archive, new session, slash commands, push notifications, and the read-only plugins and connectors screen. Gaps are listed below. |
 
 The newer API arrived in 0.1.7, not 0.2: everything said about "dsh 0.2" below applies to 0.1.7 too.
 One page and one server speak both. The page asks `host.describe` (dsh 0.1) first; when that is a
@@ -291,9 +291,9 @@ file with mode 0600).
 
 Everything below comes from the generated `typert.remote-client.d.ts` contracts in
 `dsh-api-session-controller`, `dsh-api-workspace-controller`, `dsh-agent-preset-registry`,
-`dsh-commands` and `dsh-user-questions`, the framing in `dsh-api-gateway`'s stream protocol, and
-the `approval/request` and `user-questions/request` events in `dsh-user-approval` and
-`dsh-user-questions`, checked against a running 0.2.0-rc.2.
+`dsh-commands`, `dsh-user-questions` and `dsh-host-plugin-inventory`, the framing in
+`dsh-api-gateway`'s stream protocol, and the `approval/request` and `user-questions/request`
+events in `dsh-user-approval` and `dsh-user-questions`, checked against a running 0.2.0-rc.2.
 
 - **Calls.** `POST /api/<namespace>/<method>`, `payload: {args}`, every parameter under its declared
   name (`session/list` wants `{_request: {}}`, `session/prompt` wants `{request: {...}}`).
@@ -306,6 +306,12 @@ the `approval/request` and `user-questions/request` events in `dsh-user-approval
 - **Approvals and questions** are not calls but pending requests dsh holds open until some client
   answers with `POST /api/$events/result`. Like a second browser tab, dsh-rc's watcher sees them and
   never answers. dsh does not echo a cancel to the client that answered, so the page clears the card itself.
+- **Plugins and connectors.** `pluginInventory/list` exists on both APIs, but 0.2's snapshot (in
+  `dsh-host-plugin-inventory`) adds localized display metadata and each agent preset's flattened
+  composition. `fromPluginInventory` in `public/dsh02.js` resolves that, and the sheet lists failed
+  entries first, then presets (a broken or failing composition first), then every plugin.
+  `dsh-plugin-manager` does offer per-entry `setPluginEnabled`, but the sheet stays read-only: the
+  proxy refuses the whole `pluginManager` namespace, so a phone cannot change the profile.
 
 ### Not ported yet (dsh 0.2)
 
@@ -319,8 +325,8 @@ the `approval/request` and `user-questions/request` events in `dsh-user-approval
 - **A question dsh already moved on from** (its timed wait ran out and the agent continued) is not
   shown; only open requests are. `userQuestions/answer` is not used.
 - **Session search** answers as dsh does: on a deployment with the session-query index off it fails.
-- **Plugins & connectors** sheet, **file uploads**, goals, terminals, schedules and settings are not
-  touched (the last three are refused by the proxy, as before).
+- **File uploads**, goals, terminals, schedules and settings are not touched (the last three are
+  refused by the proxy, as before).
 - Checked in headless Chromium with real DeepSeek turns against 0.1.1-rc.2, 0.1.7-rc.2 and
   0.2.0-rc.2: streaming, reasoning blocks, tool calls and results, the status line, and an approval
   card answered from the page. Images in the live stream are still read from the contracts only.

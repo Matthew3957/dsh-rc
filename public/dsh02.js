@@ -22,8 +22,10 @@
 // The page's renderer and the watcher's notifier already read dsh 0.1's frames
 // (`session/event`, `approval/requested`, `host/session-status`, ...). The `from*` functions here
 // turn 0.2 items into those frames, and `createClient` maps the 0.1 method names the page calls
-// onto 0.2 endpoints. Everything is pure or takes its I/O as arguments, so the tests run it in
-// Node and the server's watcher shares it.
+// onto 0.2 endpoints. `fromPluginInventory` does the same for `pluginInventory/list`, whose call
+// is already `pluginInventory/list` on both APIs but whose 0.2 snapshot carries display metadata
+// and agent-preset compositions the 0.1 snapshot lacks. Everything is pure or takes its I/O as
+// arguments, so the tests run it in Node and the server's watcher shares it.
 
 export const MUX_PATH = '/api/remote.mux';
 
@@ -97,6 +99,61 @@ export function inboxToQueue(inbox) {
     }
   }
   return items;
+}
+
+/**
+ * Display text from a `LocalizedText` (`string`, or `{en, <locale>: string}`). The page asks
+ * for its own language and dsh sends literal fallbacks, so this picks the best one and never
+ * invents text: an absent or empty value stays undefined.
+ */
+export function localizedText(text, locale) {
+  if (typeof text === 'string') return text || undefined;
+  if (!text || typeof text !== 'object') return undefined;
+  const wanted = [];
+  if (typeof locale === 'string') {
+    const lower = locale.toLowerCase();
+    wanted.push(lower, lower.split('-')[0]);
+  }
+  wanted.push('en');
+  for (const lang of wanted) if (typeof text[lang] === 'string' && text[lang]) return text[lang];
+  for (const value of Object.values(text)) if (typeof value === 'string' && value) return value;
+  return undefined;
+}
+
+/**
+ * A `pluginInventory/list` snapshot as the rows the page renders: every entry keeps the 0.1
+ * fields (`entryId`, `moduleName`, `enabled`, `fiberPhase`) and gains the 0.2 display `meta`
+ * resolved to `title`/`description`. The 0.2-only `agentPresets` and `managementAvailable`
+ * come out beside them; a 0.1 snapshot simply has neither, so the page renders as before.
+ */
+export function fromPluginInventory(snapshot, { locale } = {}) {
+  const b = obj(snapshot);
+  const entry = (e) => {
+    const row = obj(e);
+    const meta = obj(row.meta);
+    return {
+      entryId: str(row.entryId),
+      moduleName: str(row.moduleName) || '',
+      enabled: row.enabled === true,
+      fiberPhase: row.fiberPhase ?? null,
+      title: localizedText(meta.title, locale),
+      description: localizedText(meta.description, locale),
+    };
+  };
+  const entries = (Array.isArray(b.entries) ? b.entries : Array.isArray(b.items) ? b.items : []).map(entry);
+  const presets = (Array.isArray(b.agentPresets) ? b.agentPresets : []).map((p) => {
+    const group = obj(p);
+    const rows = (Array.isArray(group.rows) ? group.rows : []).map(entry);
+    return {
+      id: str(group.id) || '',
+      name: str(group.name) || str(group.id) || '',
+      isDefault: group.isDefault === true,
+      broken: str(group.broken),
+      rows,
+      failed: rows.filter((r) => r.fiberPhase === 'failed').length,
+    };
+  });
+  return { entries, presets, managementAvailable: b.managementAvailable === true };
 }
 
 function projectionFrames(sessionId, key, value, seq) {
@@ -395,5 +452,5 @@ export function createClient({ transport, wsUrl, WebSocketImpl = globalThis.WebS
 }
 
 if (typeof window !== 'undefined') {
-  window.dsh02 = { createClient, MUX_PATH, bareCode };
+  window.dsh02 = { createClient, MUX_PATH, bareCode, fromPluginInventory, localizedText };
 }

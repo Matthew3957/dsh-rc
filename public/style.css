@@ -300,6 +300,7 @@ input, textarea, select { font: inherit; color: inherit; }
 .pmain { flex: 1; min-width: 0; }
 .pmain b { display: block; font-weight: 550; font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .pmain small { display: block; color: var(--muted); font-family: var(--mono); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pmain small.pdesc { font-family: inherit; font-size: 12px; }
 .pdot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); flex-shrink: 0; }
 .pdot.on { background: var(--ok); } .pdot.failed { background: var(--err); } .pdot.off { background: transparent; border: 1px solid var(--muted); }
 .pstate { font-size: 12px; color: var(--muted); flex-shrink: 0; }
