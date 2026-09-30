@@ -6,10 +6,17 @@
 # so personal names and hosts can be checked locally without committing them.
 set -euo pipefail
 base="${1:-origin/main}"
-range="$base..HEAD"
+# A push that creates a branch reports an all-zero "before"; then scan everything reachable.
+if [[ "$base" =~ ^0+$ ]]; then
+  diff_args=("$(git hash-object -t tree /dev/null)" HEAD); range="HEAD"
+else
+  git rev-parse --verify -q "$base^{commit}" >/dev/null || { echo "leak-check: unknown base $base" >&2; exit 2; }
+  diff_args=("$base...HEAD"); range="$base..HEAD"
+fi
 fail=0
 
-added="$(git diff --unified=0 --no-color "$base"...HEAD -- . ':!public/vendor/*' | grep -E '^\+[^+]' | cut -c2- || true)"
+diff="$(git diff --unified=0 --no-color "${diff_args[@]}" -- . ':!public/vendor/*')" || { echo "leak-check: git diff failed" >&2; exit 2; }
+added="$(printf '%s\n' "$diff" | grep -E '^\+[^+]' | cut -c2- || true)"
 
 check() { # label, regex
   local hits
@@ -31,7 +38,8 @@ if [ -n "${DSH_RC_PRIVATE_PATTERNS:-}" ] && [ -f "$DSH_RC_PRIVATE_PATTERNS" ]; t
   done < "$DSH_RC_PRIVATE_PATTERNS"
 fi
 
-bad_authors="$(git log --format='%ae%n%ce' "$range" | sort -u | grep -vE '@users\.noreply\.github\.com$|^noreply@github\.com$' || true)"
+authors="$(git log --format='%ae%n%ce' "$range")" || { echo "leak-check: git log failed" >&2; exit 2; }
+bad_authors="$(printf '%s\n' "$authors" | sort -u | grep -vE '@users\.noreply\.github\.com$|^noreply@github\.com$' || true)"
 if [ -n "$bad_authors" ]; then echo "LEAK? commit author/committer email:"; echo "$bad_authors"; fail=1; fi
 
 if [ "$fail" = 0 ]; then echo "leak-check: clean ($range)"; fi
