@@ -1591,15 +1591,68 @@ function questionCard(q) {
 const input = $('#input');
 function grow() { input.style.height = 'auto'; input.style.height = Math.min(input.scrollHeight, window.innerHeight * 0.4) + 'px'; }
 input.addEventListener('input', () => { grow(); renderCmdPop(); });
+input.addEventListener('click', () => { if (!input.value.startsWith('/')) renderCmdPop(); });
 input.addEventListener('keydown', (e) => {
   // Desktop convenience: Enter sends, Shift+Enter newline. On touch keyboards Enter inserts a newline.
   if (e.key === 'Enter' && !e.shiftKey && !e.isComposing && matchMedia('(hover: hover)').matches) { e.preventDefault(); send(); }
 });
 $('#composer').addEventListener('submit', (e) => { e.preventDefault(); send(); });
 
+// `@path` mentions, same grammar as dsh's own clients (dsh-file-reference/grammar): an `@` that
+// starts a word, or `@"` for paths with spaces. Candidates come from fileReferences/list.
+function activeAtToken(line, col) {
+  const before = line.slice(0, col);
+  const q = /(?:^|\s)(@"([^"]*))$/u.exec(before);
+  if (q) return { prefix: q[1], query: q[2], quoted: true };
+  const p = /(?:^|\s)(@([^\s]*))$/u.exec(before);
+  return p ? { prefix: p[1], query: p[2], quoted: false } : undefined;
+}
+function formatFileMention(c, keepQuote) {
+  const path = c.kind === 'directory' ? c.path + '/' : c.path;
+  if (/[\u0000-\u001f\u007f-\u009f"]/u.test(path)) return undefined;
+  const quoted = keepQuote || /\s/u.test(path);
+  if (!quoted) return '@' + path;
+  return c.kind === 'directory' ? '@"' + path : '@"' + path + '"';
+}
+let mentionSeq = 0, mentionTimer = 0;
+function renderMentionPop(tok) {
+  const pop = $('#cmdpop');
+  const cur = S.cur, seq = ++mentionSeq;
+  clearTimeout(mentionTimer);
+  if (!cur) { pop.hidden = true; return; }
+  mentionTimer = setTimeout(async () => {
+    let list;
+    try { list = await remote('fileReferences/list', { agentId: cur.id, query: tok.query }); } catch { list = null; }
+    // A newer keystroke, another session or a closed token makes this answer stale.
+    if (seq !== mentionSeq || !S.cur || S.cur.id !== cur.id) return;
+    if (!Array.isArray(list) || !list.length) { pop.hidden = true; return; }
+    pop.replaceChildren(...list.slice(0, 30).map((c) => {
+      const slash = c.path.lastIndexOf('/');
+      return h('button', { type: 'button', class: 'cmd mention', onclick: () => acceptMention(tok, c) },
+        h('b', {}, c.path.slice(slash + 1) + (c.kind === 'directory' ? '/' : '')),
+        slash >= 0 ? h('span', {}, c.path.slice(0, slash + 1)) : null);
+    }));
+    pop.hidden = false;
+  }, 120);
+}
+function acceptMention(tok, c) {
+  const text = formatFileMention(c, tok.quoted);
+  if (text === undefined) { toast('That path has characters a mention cannot hold'); return; }
+  const col = input.selectionStart, start = col - tok.prefix.length, tail = input.value.slice(col);
+  // Files finish the mention with a space; directories stay open for the next level.
+  const dir = c.kind === 'directory';
+  const ins = dir || /^\s/.test(tail) ? text : text + ' ';
+  input.value = input.value.slice(0, start) + ins + tail;
+  input.focus(); input.setSelectionRange(start + ins.length, start + ins.length); grow();
+  if (dir) renderCmdPop(); else { mentionSeq++; $('#cmdpop').hidden = true; }
+}
+
 function renderCmdPop() {
   const pop = $('#cmdpop');
-  const m = /^\/(\S*)$/.exec(input.value);
+  const tok = input.value.startsWith('/') ? undefined : activeAtToken(input.value, input.selectionStart);
+  if (tok) { renderMentionPop(tok); return; }
+  mentionSeq++; clearTimeout(mentionTimer);
+  const m =/^\/(\S*)$/.exec(input.value);
   if (!m || !S.commands.length) { pop.hidden = true; return; }
   const q = m[1].toLowerCase();
   const list = S.commands.filter((c) => c.name.toLowerCase().includes(q)).slice(0, 12);
@@ -1614,7 +1667,7 @@ async function send() {
   const text = input.value.trim();
   const images = S.images.slice();
   if (!text && !images.length) return;
-  $('#cmdpop').hidden = true;
+  $('#cmdpop').hidden = true; mentionSeq++;
   if (/^\/\S/.test(text)) {
     input.value = ''; grow();
     try {

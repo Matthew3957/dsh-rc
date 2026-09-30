@@ -232,6 +232,9 @@ applies to it; the tailnet is the boundary there.
 - Events: WebSockets `/api/events.mux` (all sessions) and `/api/events.host` (status). Receive only.
 - Approvals and questions are answered with `POST /api/respond` (a client-response).
 - Slash commands go through `commands/execute`, not `session.prompt`.
+- Typing `@` in the composer lists files and folders of the session's working directory
+  (`fileReferences/list`, payload `args: {agentId, query}`) and inserts the path, `@"..."` when it
+  has spaces. Tapping a folder keeps the list open one level down.
 - Tested against dsh 0.1.1-rc.2. Not yet tested against 0.2.x.
 
 ## Reviewing the work
