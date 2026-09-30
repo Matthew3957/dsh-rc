@@ -1499,7 +1499,7 @@ async function refreshGoal(id) {
   try {
     const g = window.dsh02.goalOf(await goalRemote('get', { agentId: id }));
     if (g) S.goalViews.set(id, g); else S.goalViews.delete(id);
-  } catch { S.goalViews.delete(id); } // a session that is not live has no goal to arm
+  } catch {} // keep the last known view: a failed lookup (socket down, timeout) is not "no goal"
   if (S.cur && S.cur.id === id) renderGoalBar();
 }
 $('#goalBar').onclick = () => goalSheet();
@@ -1507,20 +1507,22 @@ $('#goalBar').onclick = () => goalSheet();
 // One call, then the sheet shows what dsh answered (or the goal as it now stands, if it refused).
 async function goalCall(verb, args, done) {
   const cur = S.cur;
+  if (!cur) return null;
+  let r = null, stale = false;
   try {
-    const r = await goalRemote(verb, { agentId: cur.id, ...args });
+    r = await goalRemote(verb, { agentId: cur.id, ...args });
     if (done) toast(done);
-    return r;
   } catch (e) {
     // dsh answers a stale ref as a generic error whose message says so.
-    toast(/stale goal/i.test(e.message || '') ? 'The goal changed. Showing the latest.' : 'Goal: ' + e.message, 4000);
-    return null;
-  } finally {
-    await refreshGoal(cur.id);
-    if (!$('#sheet').hidden && S.cur === cur && $('#sheetBody').querySelector('[data-goal-sheet]')) goalSheet();
+    stale = /stale goal/i.test(e.message || '');
+    toast(stale ? 'The goal changed. Showing the latest.' : 'Goal: ' + e.message, 4000);
   }
+  await refreshGoal(cur.id).catch(() => {});
+  // Redraw the sheet after a success or a stale ref; after any other failure keep what was typed.
+  if ((r || stale) && !$('#sheet').hidden && S.cur === cur && $('#sheetBody').querySelector('[data-goal-sheet]')) goalSheet();
+  return r;
 }
-function goalForm({ objective = '', maxRounds = null, label, onSave }) {
+function goalForm({ objective = '', maxRounds = null, label, onSave, editing = false }) {
   const box = h('textarea', { rows: 4, placeholder: 'What should this session keep working toward?', 'aria-label': 'Goal objective' });
   box.value = objective;
   const cap = h('input', { type: 'number', inputmode: 'numeric', min: '1', step: '1', placeholder: 'default', 'aria-label': 'Round cap', value: maxRounds == null ? '' : String(maxRounds) });
@@ -1534,7 +1536,8 @@ function goalForm({ objective = '', maxRounds = null, label, onSave }) {
     await onSave({ objective: text, maxRounds: n });
     go.disabled = false;
   };
-  return [box, h('label', { class: 'goal-rounds' }, 'Round cap', cap, h('span', {}, 'blank for dsh’s default')), go];
+  // dsh can change a goal's cap but not remove it, so on an edit a blank cap keeps the current one.
+  return [box, h('label', { class: 'goal-rounds' }, 'Round cap', cap, h('span', {}, editing ? 'blank keeps the current cap' : 'blank for dsh’s default')), go];
 }
 function goalSheet(creating = false) {
   const cur = S.cur; if (!cur) return;
@@ -1575,6 +1578,7 @@ function goalSheet(creating = false) {
       objective: g.objective,
       maxRounds: g.maxRounds,
       label: 'Save changes',
+      editing: true,
       onSave: async ({ objective, maxRounds }) => {
         const request = {};
         if (objective !== g.objective) request.objective = objective;

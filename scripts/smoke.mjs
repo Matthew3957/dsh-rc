@@ -108,7 +108,7 @@ export function planChecks(methods) {
     for (const method of list) {
       if (method === probe) continue;
       const readOnly = Object.hasOwn(PROBES, method) || READ_ONLY.has(method);
-      unchecked.push({ namespace, method, readOnly });
+      unchecked.push({ namespace, method, readOnly, newerOnly: NEWER_API_ONLY.has(namespace) });
     }
   }
   probes.sort((a, b) => a.method.localeCompare(b.method));
@@ -240,9 +240,11 @@ async function main(argv) {
   if (unchecked.length) {
     console.log('');
     console.log('not called by this smoke');
-    const reads = unchecked.filter((u) => u.readOnly).map((u) => u.method);
-    const risky = unchecked.filter((u) => !u.readOnly).map((u) => u.method);
+    const newer = unchecked.filter((u) => u.newerOnly).map((u) => u.method);
+    const reads = unchecked.filter((u) => !u.newerOnly && u.readOnly).map((u) => u.method);
+    const risky = unchecked.filter((u) => !u.newerOnly && !u.readOnly).map((u) => u.method);
     if (reads.length) console.log(`  read-only, not probed:  ${reads.join(', ')}`);
+    if (newer.length) console.log(`  newer dsh API only (0.1.7+), not probed here: ${newer.join(', ')}`);
     if (risky.length) console.log(`  could start, prompt or change a session: ${risky.join(', ')}`);
   }
 
