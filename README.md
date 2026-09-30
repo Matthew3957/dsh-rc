@@ -74,7 +74,7 @@ Environment variables:
 | --- | --- | --- |
 | `DSH_RC_PORT` | `3081` | Loopback port for the page and push API |
 | `DSH_RC_STATE_DIR` | `$XDG_STATE_HOME/dsh-rc` or `~/.local/state/dsh-rc` | Where `vapid.json` and `subscriptions.json` live |
-| `DSH_RC_VAPID_SUBJECT` | `mailto:dsh-rc@localhost` | VAPID subject sent with each push |
+| `DSH_RC_VAPID_SUBJECT` | `https://github.com/Matthew3957/dsh-rc` (Apple rejects `localhost` mailto subjects; use your own `mailto:` or `https:` URL) | VAPID subject sent with each push |
 | `DSH_URL` | `http://127.0.0.1:3080` | dsh web base URL whose event sockets are watched |
 
 Push API (same origin, under `/m/`): `GET ./push/key`, `POST ./push/subscribe`,
