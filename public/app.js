@@ -61,6 +61,7 @@ const S = {
   parent: new Map(),      // childId -> parentId
   titles: new Map(),      // sessionId -> title
   running: new Map(),     // sessionId -> bool
+  turnStart: new Map(),   // sessionId -> time of the running turn's turn/start, when seen live
   approvals: new Map(),   // approvalId -> frame (+rpcId)
   questions: new Map(),   // rpcId -> frame
   queues: new Map(),      // sessionId -> items
@@ -224,6 +225,8 @@ function onMux(p, env) {
 function onHost(p) {
   switch (p.type) {
     case 'host/session-status':
+      if (p.running && !S.running.get(p.sessionId) && !S.turnStart.has(p.sessionId)) S.turnStart.set(p.sessionId, Date.now());
+      if (!p.running) S.turnStart.delete(p.sessionId);
       S.running.set(p.sessionId, !!p.running);
       if (S.cur && p.sessionId === S.cur.id) renderRunning();
       if (!$('#listView').hidden && !S.searchMode) renderList();
@@ -581,7 +584,8 @@ function applyLive(frame) {
   cur.lastSeq = seq;
   cur.events.push(frame);
   const t = frame.event.type;
-  if (t === 'turn/start') S.running.set(cur.id, true);
+  if (t === 'turn/start') { S.running.set(cur.id, true); if (typeof frame.event.time === 'number') S.turnStart.set(cur.id, frame.event.time); }
+  if (t === 'turn/end') S.turnStart.delete(cur.id);
   R.apply(frame);
   if (t === 'turn/start' || t === 'turn/end') renderRunning();
 }
@@ -592,16 +596,21 @@ let workTimer = null;
 // mid-turn shows the real elapsed time rather than restarting at 0.
 function turnStartTime(cur) {
   const evs = cur.events || [];
-  let firstMsg = null;
+  let firstMsg = null, oldest = null, ended = false;
   for (let i = evs.length - 1; i >= 0; i--) {
     const e = evs[i].event;
     if (!e) continue;
-    if (e.type === 'turn/end') break; // even without a time, so an older turn is never picked up
+    if (e.type === 'turn/end') { ended = true; break; } // even without a time, so an older turn is never picked up
     if (typeof e.time !== 'number') continue;
+    oldest = e.time;
     if (e.type === 'turn/start') return e.time;
     if (e.type === 'user/message') firstMsg = e.time; // keeps the earliest since the last turn ended
   }
-  return firstMsg;
+  if (firstMsg) return firstMsg;
+  // A long turn can start before the loaded history window: remember it if we saw it live,
+  // else count from the oldest loaded event (a lower bound beats restarting at 0).
+  if (S.turnStart.has(cur.id)) return S.turnStart.get(cur.id);
+  return !ended && cur.hasMore ? oldest : null;
 }
 function renderRunning() {
   const cur = S.cur; if (!cur) return;
@@ -614,7 +623,7 @@ function renderRunning() {
   clearInterval(workTimer);
   if (running) {
     const t0 = turnStartTime(cur) || Date.now();
-    const tick = () => { $('#workingText').textContent = `Working… ${Math.floor((Date.now() - t0) / 1000)}s`; };
+    const tick = () => { $('#workingText').textContent = `Working… ${Math.max(0, Math.floor((Date.now() - t0) / 1000))}s`; }; // clamp: phone and laptop clocks can differ slightly
     tick(); workTimer = setInterval(tick, 1000);
     stick();
   }
