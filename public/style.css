@@ -461,3 +461,18 @@ input, textarea, select { font: inherit; color: inherit; }
 .qr-tile { background: #fff; border-radius: 12px; padding: 8px; margin: 8px auto; width: fit-content; max-width: 100%; box-sizing: border-box; }
 .qr-tile canvas { display: block; max-width: 100%; height: auto; image-rendering: pixelated; }
 .note.url { word-break: break-all; user-select: all; -webkit-user-select: all; font-family: var(--mono); font-size: 12.5px; }
+
+/* Scheduled prompts sheet */
+.pdot.late { background: var(--warn); }
+.plug.sched { width: 100%; text-align: left; }
+.sched-kv { display: flex; justify-content: space-between; gap: 12px; padding: 7px 2px; border-bottom: 1px solid var(--line); font-size: 14px; }
+.sched-kv span:first-child { color: var(--muted); }
+.sched-kv span:last-child { text-align: right; }
+.sched-del { color: var(--err); }
+.sched-del.armed { font-weight: 650; }
+.when-row { display: flex; gap: 8px; margin-top: 8px; }
+.when-row > * { flex: 1; min-width: 0; }
+.when-days { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+.sched-zone { display: block; color: var(--muted); font-size: 12px; margin-top: 6px; }
+.sched-zone:empty { display: none; }
+#sheetBody textarea.sched-prompt { font-family: var(--sans); font-size: 16px; line-height: 1.35; }
