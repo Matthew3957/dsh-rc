@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { bareCode, createClient, fromControl, fromEvents, fromFollow, fromPluginInventory, fromWorkspace, inboxToQueue, liveChunksOf, localizedText } from '../public/dsh02.js';
+import { bareCode, createClient, fromControl, fromEvents, fromFollow, fromPluginInventory, fromWorkspace, goalOf, goalStatus, inboxToQueue, liveChunksOf, localizedText } from '../public/dsh02.js';
 import { createNotifier } from '../server/notify.mjs';
 
 test('api-session emits become the host frames the page reads', () => {
@@ -291,4 +291,37 @@ test('a failed core feed closes the socket so the page reconnects', () => {
   ws.push({ type: 'error', streamId: 'ctl', error: { code: 'gateway/internal', message: 'control failed' } });
   assert.equal(frames.at(-1).payload.type, 'stream/error');
   assert.equal(state.down, 1);
+});
+
+test('goalOf reads the goal projection and a goals/get view, and nothing else', () => {
+  const snap = { id: 'g1', revision: 3, objective: 'ship it', phase: 'blocked', blockedReason: { code: 'needs-input', message: 'need a key' }, maxGoalRounds: 10 };
+  assert.deepEqual(goalOf({ goal: snap, roundsStarted: 4, createdAt: 1, updatedAt: 2 }),
+    { ref: { id: 'g1', revision: 3 }, objective: 'ship it', phase: 'blocked', blocked: 'need a key', maxRounds: 10, rounds: 4, activation: undefined });
+  assert.equal(goalOf({ ...snap, roundsStarted: 4, activation: 'armed' }).activation, 'armed');
+  assert.equal(goalOf(null), null);
+  assert.equal(goalOf(undefined), null);
+  assert.equal(goalOf({ goal: { objective: 'x' } }), null);
+});
+
+test('goalStatus says when an active goal will not continue on its own', () => {
+  const g = { phase: 'active', maxRounds: 256, rounds: 3, activation: 'armed' };
+  assert.deepEqual(goalStatus(g), { glyph: '●', level: 'active', text: 'active · 3/256 rounds' });
+  assert.equal(goalStatus({ ...g, activation: 'disarmed' }).text, 'active, not continuing · 3/256 rounds');
+  assert.equal(goalStatus({ ...g, phase: 'blocked' }).level, 'err');
+  assert.equal(goalStatus({ ...g, phase: 'complete', maxRounds: null }).text, 'complete · 3 rounds');
+});
+
+test('goal calls pass their arguments by declared name', async () => {
+  const { client, calls } = harness();
+  const ref = { id: 'g1', revision: 2 };
+  await client.remote('goals/get', { agentId: 's' });
+  await client.remote('goals/create', { agentId: 's', request: { objective: 'x', maxGoalRounds: 5 } });
+  await client.remote('goals/edit', { agentId: 's', ref, request: { objective: 'y' } });
+  await client.remote('goals/pause', { agentId: 's', ref });
+  assert.deepEqual(calls.map((c) => [c.endpoint, c.payload.args]), [
+    ['goals/get', { agentId: 's' }],
+    ['goals/create', { agentId: 's', request: { objective: 'x', maxGoalRounds: 5 } }],
+    ['goals/edit', { agentId: 's', ref, request: { objective: 'y' } }],
+    ['goals/pause', { agentId: 's', ref }],
+  ]);
 });

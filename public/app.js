@@ -155,6 +155,7 @@ const S = {
   dashOpen: new Set(),    // sessionIds whose dashboard card is expanded
   dashCollapsed: false,   // Running now shows its cards (progress bars) until folded
   model: new Map(),       // sessionId -> {provider, model} in use
+  goalViews: new Map(),   // sessionId -> goals/get view (the armed state the projection lacks)
   prices: null,           // price overrides, read from localStorage once
   cur: null,
   conn: { mux: null, host: null, up: false, tries: 0, timer: null },
@@ -439,7 +440,10 @@ function onMux(p, env) {
       if (p.key === 'title') setTitle(p.sessionId, titleFromProjection(p.value));
       const seq = typeof p.seq === 'number' ? p.seq : -1;
       if (setProjection(p.sessionId, p.key, p.value, seq)) {
-        if (S.cur && p.sessionId === S.cur.id) renderStatusLine();
+        if (S.cur && p.sessionId === S.cur.id) {
+          renderStatusLine();
+          if (p.key === 'goal') { renderGoalBar(); refreshGoal(p.sessionId); }
+        }
         if (DASH_KEYS.has(p.key)) scheduleDashboard();
       }
       break;
@@ -1039,11 +1043,12 @@ async function openSession(id, { push = true } = {}) {
   // this one while its history is still loading.
   $('#statusBreakdown').hidden = true;
   $('#statusLine').setAttribute('aria-expanded', 'false');
-  renderStatusLine();
+  renderStatusLine(); renderGoalBar();
   await loadHistory();
   S.commands = [];
   remote('commands/list', { agentId: id }).then((c) => { if (S.cur && S.cur.id === id) S.commands = Array.isArray(c) ? c : []; }).catch(() => {});
   loadModel(id);
+  refreshGoal(id);
 }
 function showList({ push = true } = {}) {
   if (push && location.hash) history.pushState(null, '', location.pathname);
@@ -1080,7 +1085,7 @@ async function loadHistory() {
     rerender(true);
     for (const f of v.live || []) R.apply(f); // dsh 0.2: the reply that was mid-stream at the snapshot
     renderRunning(); // the turn's start time is only known once history is in
-    renderStatusLine();
+    renderStatusLine(); renderGoalBar();
   } catch (e) {
     R.note('Could not load history: ' + e.message, 'err');
   } finally {
@@ -1458,6 +1463,127 @@ $('#statusLine').onclick = () => {
   box.hidden = !open;
   line.setAttribute('aria-expanded', String(open));
 };
+
+// ---------- Goals (dsh 0.2) ----------
+// The `goal` projection carries the goal and its admitted rounds and arrives like any other
+// projection; `goals/get` adds what the projection leaves out, whether continuation is armed.
+// Mutations are compare-and-set on the goal's {id, revision}. The older API has no goals, so the
+// line never shows and the menu entry is not offered there.
+// The verb is joined to its namespace here, so scripts/smoke.mjs (which probes each literal
+// method the page calls on an older dsh) does not go looking for `goals` there.
+const goalRemote = (verb, args) => remote(`goals/${verb}`, args);
+function goalFor(id) {
+  if (!dsh2) return null;
+  const g = window.dsh02.goalOf(projectionValue(id, 'goal'));
+  const v = g && S.goalViews.get(id);
+  if (v && v.ref.id === g.ref.id && v.ref.revision === g.ref.revision) g.activation = v.activation;
+  return g;
+}
+function renderGoalBar() {
+  const bar = $('#goalBar');
+  const g = S.cur && goalFor(S.cur.id);
+  bar.hidden = !g;
+  if (!g) { bar.replaceChildren(); return; }
+  const st = window.dsh02.goalStatus(g);
+  bar.replaceChildren(h('span', { class: 'goal-glyph ' + st.level, 'aria-hidden': 'true' }, st.glyph),
+    h('span', { class: 'goal-text' }, g.objective), h('span', { class: 'goal-stat' }, st.text));
+}
+async function refreshGoal(id) {
+  if (!dsh2) return;
+  try {
+    const g = window.dsh02.goalOf(await goalRemote('get', { agentId: id }));
+    if (g) S.goalViews.set(id, g); else S.goalViews.delete(id);
+  } catch { S.goalViews.delete(id); } // a session that is not live has no goal to arm
+  if (S.cur && S.cur.id === id) renderGoalBar();
+}
+$('#goalBar').onclick = () => goalSheet();
+
+// One call, then the sheet shows what dsh answered (or the goal as it now stands, if it refused).
+async function goalCall(verb, args, done) {
+  const cur = S.cur;
+  try {
+    const r = await goalRemote(verb, { agentId: cur.id, ...args });
+    if (done) toast(done);
+    return r;
+  } catch (e) {
+    // dsh answers a stale ref as a generic error whose message says so.
+    toast(/stale goal/i.test(e.message || '') ? 'The goal changed. Showing the latest.' : 'Goal: ' + e.message, 4000);
+    return null;
+  } finally {
+    await refreshGoal(cur.id);
+    if (!$('#sheet').hidden && S.cur === cur && $('#sheetBody').querySelector('[data-goal-sheet]')) goalSheet();
+  }
+}
+function goalForm({ objective = '', maxRounds = null, label, onSave }) {
+  const box = h('textarea', { rows: 4, placeholder: 'What should this session keep working toward?', 'aria-label': 'Goal objective' });
+  box.value = objective;
+  const cap = h('input', { type: 'number', inputmode: 'numeric', min: '1', step: '1', placeholder: 'default', 'aria-label': 'Round cap', value: maxRounds == null ? '' : String(maxRounds) });
+  const go = h('button', { type: 'button', class: 'go' }, label);
+  go.onclick = async () => {
+    const text = box.value.trim();
+    const n = cap.value.trim() === '' ? null : Number(cap.value);
+    if (!text) { toast('Write the goal first'); return; }
+    if (n !== null && (!Number.isSafeInteger(n) || n < 1)) { toast('The round cap must be a whole number above zero'); return; }
+    go.disabled = true;
+    await onSave({ objective: text, maxRounds: n });
+    go.disabled = false;
+  };
+  return [box, h('label', { class: 'goal-rounds' }, 'Round cap', cap, h('span', {}, 'blank for dsh’s default')), go];
+}
+function goalSheet(creating = false) {
+  const cur = S.cur; if (!cur) return;
+  const g = goalFor(cur.id);
+  const mark = (...kids) => h('div', { 'data-goal-sheet': '' }, ...kids);
+  if (!g || creating) {
+    openSheet(mark(h('h3', {}, g ? 'New goal' : 'Set a goal'),
+      h('div', { class: 'note' }, 'One objective for the whole session. dsh keeps going on it, round after round, until it is done, blocked or out of rounds.'),
+      ...goalForm({
+        label: 'Set goal',
+        onSave: async ({ objective, maxRounds }) => {
+          const request = maxRounds == null ? { objective } : { objective, maxGoalRounds: maxRounds };
+          if (await goalCall('create', { request }, 'Goal set')) closeSheet();
+        },
+      })));
+    return;
+  }
+  const st = window.dsh02.goalStatus(g);
+  const act = (label, fn) => h('button', { type: 'button', onclick: fn }, label);
+  const call = (verb, done) => () => goalCall(verb, { ref: g.ref }, done);
+  const acts = [];
+  if (g.phase === 'active' && g.activation !== 'disarmed') acts.push(act('Pause', call('pause', 'Paused')));
+  if (g.phase !== 'complete' && (g.phase !== 'active' || g.activation === 'disarmed')) acts.push(act('Resume', call('resume', 'Resumed')));
+  if (g.phase !== 'complete') acts.push(act('Mark complete', call('complete', 'Marked complete')));
+  if (g.phase === 'complete') acts.push(act('New goal', () => goalSheet(true)));
+  const clear = act('Clear', () => {
+    if (!clear.classList.contains('armed')) {
+      clear.classList.add('armed'); clear.textContent = 'Tap again to clear';
+      setTimeout(() => { clear.classList.remove('armed'); clear.textContent = 'Clear'; }, 3000);
+      return;
+    }
+    goalCall('clear', { ref: g.ref }, 'Goal cleared').then((r) => { if (r) closeSheet(); });
+  });
+  acts.push(clear);
+  openSheet(mark(h('h3', {}, 'Goal'),
+    h('div', { class: 'goal-facts' }, `${st.glyph} ${st.text}`, g.blocked ? h('div', { class: 'note err' }, 'Blocked: ' + g.blocked) : null),
+    ...goalForm({
+      objective: g.objective,
+      maxRounds: g.maxRounds,
+      label: 'Save changes',
+      onSave: async ({ objective, maxRounds }) => {
+        const request = {};
+        if (objective !== g.objective) request.objective = objective;
+        if (maxRounds != null && maxRounds !== g.maxRounds) request.maxGoalRounds = maxRounds;
+        if (!Object.keys(request).length) { toast('Nothing changed'); return; }
+        await goalCall('edit', { ref: g.ref, request }, 'Goal updated');
+      },
+    }),
+    h('div', { class: 'goal-acts' }, ...acts)));
+  // The armed state may have moved since the last push.
+  refreshGoal(cur.id).then(() => {
+    const n = goalFor(cur.id);
+    if (n && n.activation !== g.activation && !$('#sheet').hidden && $('#sheetBody').querySelector('[data-goal-sheet]')) goalSheet();
+  });
+}
 
 // ---------- Running now ----------
 // One card per session that is doing something: a turn in flight, a live
@@ -2296,6 +2422,7 @@ $('#menuBtn').onclick = () => {
   openSheet(h('h3', {}, $('#title').textContent),
     h('button', { class: 'menuitem', onclick: modelSheet }, 'Model', h('small', {}, 'Switch the model for this session')),
     h('button', { class: 'menuitem', onclick: pricesSheet }, 'Prices', h('small', {}, 'Override the price table behind "est. cost"')),
+    dsh2 ? h('button', { class: 'menuitem', onclick: () => goalSheet() }, 'Goal', h('small', {}, goalFor(cur.id) ? 'View, edit, pause or clear' : 'Keep this session working toward one objective')) : null,
     h('button', { class: 'menuitem', onclick: commandsSheet }, 'Commands', h('small', {}, 'Slash commands available here')),
     notifRow,
     h('button', { class: 'menuitem', onclick: renameSheet }, 'Rename'),
