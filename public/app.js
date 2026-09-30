@@ -718,6 +718,7 @@ function diffBlock(d) {
     const o = folded[i];
     if (i >= DIFF_MAX_LINES) { body.append(h('div', { class: 'dl skip' }, `… ${plural(folded.length - i, 'more line')}`)); break; }
     if (o.op === 'skip') { body.append(h('div', { class: 'dl skip' }, `⋯ ${plural(o.count, 'unchanged line')}`)); continue; }
+    if (o.op === 'cut') { body.append(h('div', { class: 'dl skip' }, `… ${plural(o.count, 'more changed line')} not shown`)); continue; }
     const cls = o.op === '+' ? 'add' : o.op === '-' ? 'del' : 'ctx';
     body.append(h('div', { class: 'dl ' + cls }, h('span', { class: 'sg', 'aria-hidden': 'true' }, o.op), o.text));
   }

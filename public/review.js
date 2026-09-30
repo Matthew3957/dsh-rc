@@ -15,6 +15,11 @@
 // Past this many cells the middle of a change is shown as removed-then-added
 // rather than aligned: a phone should not spend seconds on one card.
 const MAX_CELLS = 1_000_000;
+// Bounds on what a diff keeps at all, so a huge generated file cannot build a
+// million-entry array on a phone: unchanged runs keep EDGE lines next to the
+// change, and a changed middle keeps MAX_CHANGED lines per side. Counts stay exact.
+const EDGE = 50;
+const MAX_CHANGED = 1000;
 
 function lines(text) {
   if (typeof text !== 'string' || text === '') return [];
@@ -34,9 +39,17 @@ export function diffLines(oldText, newText) {
   let endA = a.length, endB = b.length;
   while (endA > start && endB > start && a[endA - 1] === b[endB - 1]) { endA--; endB--; }
   const ops = [];
-  for (let i = 0; i < start; i++) ops.push({ op: ' ', text: a[i] });
+  const from = Math.max(0, start - EDGE);
+  if (from) ops.push({ op: 'skip', count: from });
+  for (let i = from; i < start; i++) ops.push({ op: ' ', text: a[i] });
   const n = endA - start, m = endB - start;
-  if (n && m && n * m <= MAX_CELLS) {
+  if (n > MAX_CHANGED || m > MAX_CHANGED) {
+    for (let i = 0; i < Math.min(n, MAX_CHANGED); i++) ops.push({ op: '-', text: a[start + i] });
+    for (let j = 0; j < Math.min(m, MAX_CHANGED); j++) ops.push({ op: '+', text: b[start + j] });
+    const cut = Math.max(0, n - MAX_CHANGED) + Math.max(0, m - MAX_CHANGED);
+    if (cut) ops.push({ op: 'cut', count: cut });
+    ops.stats = { adds: m, dels: n }; // too big to align: every changed line counts, including the ones cut
+  } else if (n && m && n * m <= MAX_CELLS) {
     // Longest common subsequence over the changed middle, walked forwards.
     const w = m + 1;
     const lcs = new Uint32Array((n + 1) * w);
@@ -57,12 +70,15 @@ export function diffLines(oldText, newText) {
     for (let i = start; i < endA; i++) ops.push({ op: '-', text: a[i] });
     for (let j = start; j < endB; j++) ops.push({ op: '+', text: b[j] });
   }
-  for (let i = endA; i < a.length; i++) ops.push({ op: ' ', text: a[i] });
+  const to = Math.min(a.length, endA + EDGE);
+  for (let i = endA; i < to; i++) ops.push({ op: ' ', text: a[i] });
+  if (a.length > to) ops.push({ op: 'skip', count: a.length - to });
   return ops;
 }
 
 /** Added and removed line counts of a diff. */
 export function diffStats(ops) {
+  if (ops && ops.stats) return { ...ops.stats };
   let adds = 0, dels = 0;
   for (const o of ops) { if (o.op === '+') adds++; else if (o.op === '-') dels++; }
   return { adds, dels };
@@ -134,7 +150,8 @@ export function summarizeTurn(tools, reason) {
   const commands = [];
   for (const t of tools || []) {
     if (!t) continue;
-    const diffs = t.done && !t.isError ? diffsOf(t) : null;
+    // An orphan (interrupted before its result) only ever shows the intended change: not a file change.
+    const diffs = t.done && !t.isError && !t.orphan ? diffsOf(t) : null;
     if (diffs) {
       for (const d of diffs) {
         const { adds, dels } = diffStats(diffLines(d.oldText, d.newText));
