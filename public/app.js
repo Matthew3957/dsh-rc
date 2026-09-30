@@ -72,12 +72,18 @@ function showApi403() {
 }
 
 // ---------- RPC ----------
+// dsh-rc's own server answers 401 once a login has expired (dsh never does).
+// Relative, so it also works when the page is mounted under a path.
+function checkLogin(r) {
+  if (r.status === 401) location.assign('login');
+}
 async function rpc(method, payload = {}, rpcId = rid()) {
   const r = await fetch('/api/' + method, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ type: 'client-request', rpcId, method, payload }),
   });
+  checkLogin(r);
   if (!r.ok) {
     if (r.status === 403) showApi403();
     throw Object.assign(new Error(`${method}: HTTP ${r.status}`), { code: 'http-' + r.status });
@@ -95,6 +101,7 @@ async function respond(rpcId, result) {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ type: 'client-response', rpcId, result }),
   });
+  checkLogin(r);
   if (!r.ok) throw new Error('respond: HTTP ' + r.status);
   const j = await r.json().catch(() => ({}));
   const v = j && (j.result ? j.result.value : j);
