@@ -487,7 +487,7 @@ async function loadSessions() {
     if (!S.searchMode) renderList();
     renderDashboard();
     fillTitles();
-    checkUnreadTails();
+    checkUnreadTails().catch(() => {});
   } catch (e) {
     $('#sessions').replaceChildren(h('li', { class: 'empty' }, 'Could not load sessions: ' + e.message));
   }
@@ -498,7 +498,6 @@ async function fillTitles() {
   try {
     const missing = S.sessions.slice(0, Math.min(S.shown, 25)).filter((s) => !S.titles.has(s.sessionId));
     for (const s of missing) {
-      tailChecked.set(s.sessionId, s.updatedAt || 0);
       try {
         const v = await rpc('session.history', { sessionId: s.sessionId, maxMessages: 1 });
         const t = v.projections && v.projections.values && titleFromProjection(v.projections.values.title);
@@ -532,7 +531,14 @@ function saveReadState() {
   try {
     // Keep the newest 500 of each so storage stays small.
     const trim = (o) => Object.fromEntries(Object.entries(o).sort((a, b) => b[1] - a[1]).slice(0, 500));
-    localStorage.setItem('dshm.seen', JSON.stringify(trim(readState.seen)));
+    const kept = trim(readState.seen);
+    if (Object.keys(kept).length < Object.keys(readState.seen).length) {
+      // Rows dropped from `seen` were all seen no later than the oldest one kept: move the
+      // seed mark up to it, so a trimmed row reads as read unless it changed after that.
+      readState.seededAt = Math.max(readState.seededAt || 0, Math.min(...Object.values(kept)));
+      readState.seen = kept;
+    }
+    localStorage.setItem('dshm.seen', JSON.stringify(kept));
     localStorage.setItem('dshm.failed', JSON.stringify(trim(readState.failed)));
     if (readState.seededAt) localStorage.setItem('dshm.seededAt', String(readState.seededAt));
   } catch {}
@@ -540,7 +546,9 @@ function saveReadState() {
 function sessionUpdatedAt(id) { const s = S.sessions.find((x) => x.sessionId === id); return (s && s.updatedAt) || 0; }
 function markSeen(id) {
   if (!id) return;
-  readState.seen[id] = Math.max(Date.now(), sessionUpdatedAt(id));
+  // Server time (the session's own updatedAt) when known, so a phone clock running ahead
+  // or behind the laptop's cannot hide or invent unread sessions.
+  readState.seen[id] = sessionUpdatedAt(id) || Date.now();
   delete readState.failed[id];
   saveReadState();
 }
@@ -572,6 +580,7 @@ async function checkUnreadTails() {
       && (tailChecked.get(s.sessionId) || 0) < (s.updatedAt || 0)).slice(0, 10);
     let changed = false;
     for (const s of todo) {
+      tailChecked.set(s.sessionId, s.updatedAt || 0);
       try {
         const v = await rpc('session.history', { sessionId: s.sessionId, maxMessages: 1 });
         const ends = (v.events || []).map((f) => f.event).filter((e) => e && e.type === 'turn/end');
