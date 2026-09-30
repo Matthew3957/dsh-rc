@@ -595,8 +595,9 @@ function turnStartTime(cur) {
   let firstMsg = null;
   for (let i = evs.length - 1; i >= 0; i--) {
     const e = evs[i].event;
-    if (!e || typeof e.time !== 'number') continue;
-    if (e.type === 'turn/end') break;
+    if (!e) continue;
+    if (e.type === 'turn/end') break; // even without a time, so an older turn is never picked up
+    if (typeof e.time !== 'number') continue;
     if (e.type === 'turn/start') return e.time;
     if (e.type === 'user/message') firstMsg = e.time; // keeps the earliest since the last turn ended
   }
