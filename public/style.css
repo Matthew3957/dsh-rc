@@ -444,6 +444,13 @@ input, textarea, select { font: inherit; color: inherit; }
 .run-agent .afail { flex-shrink: 0; color: var(--err); }
 .run-more-txt { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .run-empty { font-size: 12px; color: var(--muted); }
+/* 0.2 jobs: a row can reveal its own output and stop a running job. */
+.run-jobwrap { display: flex; flex-direction: column; min-width: 0; }
+.run-job .jtoggle { padding: 0; text-align: left; }
+.run-job .jcaret { flex-shrink: 0; color: var(--muted); font-size: 9px; }
+.run-job .jstop { flex-shrink: 0; padding: 0 5px; border: 1px solid var(--line); border-radius: 6px; color: var(--muted); font-family: var(--mono); font-size: 10.5px; line-height: 16px; }
+.run-job .jstop.armed { border-color: var(--err); color: var(--err); }
+.jout { margin: 2px 0 0 14px; padding: 6px 8px; max-height: 132px; overflow: auto; border-radius: 8px; background: var(--bg2); color: var(--muted); font-family: var(--mono); font-size: 10.5px; line-height: 1.4; white-space: pre-wrap; word-break: break-word; }
 
 /* Prices sheet */
 #sheetBody textarea { width: 100%; padding: 10px 12px; border-radius: 10px; border: 1px solid var(--line); background: var(--card); font-family: var(--mono); font-size: 16px; /* under 16px iOS zooms on focus */ line-height: 1.45; resize: vertical; }
