@@ -456,7 +456,9 @@ async function loadSessions() {
     // workspace.list carries the archive set; session.list keeps returning archived rows.
     const [v, ws] = await Promise.all([rpc('session.list', {}), rpc('workspace.list', {}).catch(() => null)]);
     const acts = window.dshActions; // guarded like dshPrices and dshReview: a missing module must not blank the list
-    if (acts && ws && ws.archivedSessionIds) S.archived = acts.archiveSet(ws.archivedSessionIds);
+    // dsh cannot unarchive, so the set only grows: merging means an older, slower answer
+    // can never bring back a session archived after it was sent.
+    if (acts && ws && ws.archivedSessionIds) S.archived = new Set([...(S.archived || []), ...acts.archiveSet(ws.archivedSessionIds)]);
     const items = v.items || [];
     for (const s of items) {
       if (s.parentSessionId && s.origin === 'subagent') S.parent.set(s.sessionId, s.parentSessionId);
@@ -1284,11 +1286,11 @@ function sessionStart(id) {
   const s = S.sessions.find((x) => x.sessionId === id);
   return s && typeof s.updatedAt === 'number' ? s.updatedAt : null;
 }
+// One definition of "still working", shared by Running now and the archive guard:
+// a running turn, a live background job, or a live subagent.
+function sessionIsWorking(id) { return !!S.running.get(id) || liveJobs(id).length > 0 || hasLiveAgent(id); }
 function activeSessions() {
-  const list = (S.sessions || []).filter((s) => {
-    const id = s.sessionId;
-    return !!S.running.get(id) || liveJobs(id).length > 0 || hasLiveAgent(id);
-  });
+  const list = (S.sessions || []).filter((s) => sessionIsWorking(s.sessionId));
   return list.sort((a, b) => (sessionStart(b.sessionId) || b.updatedAt || 0) - (sessionStart(a.sessionId) || a.updatedAt || 0));
 }
 function toggleDashCard(id) {
@@ -2107,13 +2109,14 @@ async function forkSession() {
     S.sessions.unshift({ sessionId: r.sessionId, cwd: m.cwd, agentPreset: m.agentPreset, updatedAt: Date.now() });
     toast('Forked. You are in the new session.');
     openSession(r.sessionId);
-  } catch (e) { toast(window.dshActions.forkFailure(e), 5000); }
+  } catch (e) { toast(window.dshActions ? window.dshActions.forkFailure(e) : 'Fork failed: ' + e.message, 5000); }
 }
 function exportSheet() {
   const cur = S.cur;
   const withSub = h('input', { type: 'checkbox', id: 'expSub' });
   const go = h('button', { type: 'button', class: 'go' }, 'Download ZIP');
   go.onclick = () => {
+    if (!window.dshActions) { toast('Export is unavailable: reload the page'); return; }
     // Click the link inside the tap: iOS Safari blocks a programmatic download once an
     // await has spent the user gesture, so there is no preflight here.
     const url = window.dshActions.exportUrl(cur.id, { includeDescendants: withSub.checked });
@@ -2129,12 +2132,12 @@ function exportSheet() {
 }
 function archiveSheet() {
   const cur = S.cur;
+  if (!window.dshActions) { toast('Archive is unavailable: reload the page'); return; }
   // dsh has no unarchive, and an archived session leaves the list and Running now: never
   // archive one that is still working.
-  const live = S.running.get(cur.id) || (S.jobs.get(cur.id) || []).some((j) => j && (j.status === 'running' || j.status === 'stopping'));
-  if (live) {
+  if (sessionIsWorking(cur.id)) {
     openSheet(h('h3', {}, 'Archive this session?'),
-      h('div', { class: 'note' }, 'It is still working (a turn or a background job is running). Stop it first: an archived session cannot be reopened from here.'),
+      h('div', { class: 'note' }, 'It is still working (a turn, a background job or a subagent is running). Stop it first: an archived session cannot be reopened from here.'),
       h('button', { type: 'button', class: 'menuitem', onclick: closeSheet }, 'OK'));
     return;
   }
