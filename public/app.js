@@ -1469,9 +1469,8 @@ $('#statusLine').onclick = () => {
 // projection; `goals/get` adds what the projection leaves out, whether continuation is armed.
 // Mutations are compare-and-set on the goal's {id, revision}. The older API has no goals, so the
 // line never shows and the menu entry is not offered there.
-// The verb is joined to its namespace here, so scripts/smoke.mjs (which probes each literal
-// method the page calls on an older dsh) does not go looking for `goals` there.
-// Literal method names, so scripts/smoke.mjs sees every dsh call the page makes.
+// Literal method names, so scripts/smoke.mjs sees every dsh call the page makes (it lists goals/*
+// as newer-API-only rather than probing them against an older dsh).
 const GOAL_CALLS = {
   get: (a) => remote('goals/get', a), create: (a) => remote('goals/create', a), edit: (a) => remote('goals/edit', a),
   pause: (a) => remote('goals/pause', a), resume: (a) => remote('goals/resume', a),
@@ -1510,7 +1509,8 @@ async function goalCall(verb, args, done) {
   if (!cur) return null;
   let r = null, stale = false;
   try {
-    r = await goalRemote(verb, { agentId: cur.id, ...args });
+    // Success is the call not throwing: dsh may answer an empty value, which must still count.
+    r = (await goalRemote(verb, { agentId: cur.id, ...args })) ?? true;
     if (done) toast(done);
   } catch (e) {
     // dsh answers a stale ref as a generic error whose message says so.
