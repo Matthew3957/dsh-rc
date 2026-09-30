@@ -11,7 +11,7 @@ fork, export and archive from the session menu, image attachments, dictation thr
 Web Speech API where it exists, a read-only plugins and connectors screen, session goals on dsh 0.2
 (shown in the chat and set, edited, paused or cleared from the session menu), a per-session status line
 (model and route, context fill, session tokens, estimated cost), a Running now dashboard for
-every active session, and Web Push notifications for approvals, questions, finished turns and
+every active session, scheduled prompts on dsh 0.2, and Web Push notifications for approvals, questions, finished turns and
 errors.
 
 No build step. `public/` is plain HTML, CSS and JS; `server/` is plain Node ESM (Node 22 or newer). Markdown uses
@@ -340,6 +340,27 @@ calls `job/kill`. There is no `job/kill` in the older API, so the stop control i
 page's recursion reaches grandchildren. The `userQuestions` projection is mirrored as question
 frames: a `continued` row (the timed wait ran out and the agent moved on) shows as an expired
 card and is still answered through `userQuestions/answer`.
+
+### Scheduled prompts (dsh 0.2 with the schedule plugin)
+
+The session menu gets a **Scheduled prompts** entry when dsh has its optional schedule plugin
+switched on (Automation tasks in dsh's Plugins page, the `dsh-experimental-schedule-bundle`).
+dsh ships it off; without it every `schedule/*` call is a 404, dsh-rc notices once per connection
+and shows nothing. The older API has no schedules and never sees the entry.
+
+- **List and open** this session's tasks (name, how often, next run, a glyph for scheduled,
+  overdue or finished) from `schedule/catalog`; the sheet refreshes on dsh's `schedule/changed`.
+- **Edit** the name, the prompt or the timing with `schedule/update`, which is compare-and-update:
+  an edit made elsewhere since you opened the task answers a conflict instead of being overwritten.
+  Timing is one of in N minutes/hours/days (sent as an absolute time, which is all an update accepts
+  for a one-shot), at a date and time, every N, daily at, or on chosen weekdays at, in the phone's zone.
+- **Delete** with `schedule/delete`, armed by a first tap (no `confirm()`, which a Home Screen app lacks).
+- **Create** is different: dsh's remote API has no create call, only the agent's `schedule_create`
+  tool. The form therefore sends a message asking the agent to call it with exactly the chosen
+  arguments. That is one short model turn, and the task appears in the list once the agent has made it.
+- **Not here:** pause (dsh has none; a finished one-shot stays listed as finished), cron rules (shown,
+  not editable), delivery history (`schedule/history`) and turning the plugin on, which is a
+  `pluginManager` call the proxy refuses.
 
 ### Not ported yet (dsh 0.2)
 

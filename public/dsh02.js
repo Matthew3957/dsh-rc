@@ -67,6 +67,8 @@ export function fromEvents(item, pending = new Map()) {
         return [{ kind: 'host', payload: { type: 'host/session-status', sessionId: a[0], running: !!a[1] } }];
       case 'api-session/error':
         return [{ kind: 'host', payload: { type: 'host/agent-error', sessionId: a[0], message: str(a[1]) || 'Agent error' } }];
+      case 'schedule/changed':
+        return [{ kind: 'host', payload: { type: 'host/schedules-changed' } }];
       default:
         return [];
     }
@@ -828,6 +830,11 @@ export function createClient({ transport, wsUrl, WebSocketImpl = globalThis.WebS
     'workspace.archiveSession': async (p) => call('workspace/archiveSession', { request: { sessionId: p.sessionId } }),
     'host.listDirectory': async (p) => call('directoryPicker/list', { path: p.path }),
     'agentPreset.list': async () => call('agentPresets/list', {}),
+    // dsh-schedule is an optional plugin: without it every schedule/* endpoint is a 404, which the
+    // page reads as "not here" and hides the feature (see schedules.js).
+    'schedule.catalog': async () => call('schedule/catalog', {}),
+    'schedule.update': async (p) => call('schedule/update', { request: p }),
+    'schedule.delete': async (p) => call('schedule/delete', { request: { sessionId: p.sessionId, id: p.id } }),
   };
 
   /** 0.1's `remote(method, args)` calls were already namespaced; only a few arguments were renamed. */
