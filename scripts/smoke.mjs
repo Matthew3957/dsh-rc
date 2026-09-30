@@ -44,6 +44,8 @@ export const PROBES = Object.freeze({
   'commands/list': (ctx) => ({ args: { agentId: ctx.placeholderSessionId } }),
   // Typert method: no arguments, but the envelope still needs one args field.
   'pluginInventory/list': () => ({ args: {} }),
+  // Typert method (dsh-api-remotes client): { args: { agentId, query } }; read-only file lookup.
+  'fileReferences/list': (ctx) => ({ args: { agentId: ctx.placeholderSessionId, query: '' } }),
 });
 
 // One probe per namespace, in preference order: the first method the app calls wins.
@@ -56,6 +58,7 @@ const PROBE_ORDER = Object.freeze({
   subagent: ['subagent.list'],
   commands: ['commands/list'],
   pluginInventory: ['pluginInventory/list'],
+  fileReferences: ['fileReferences/list'],
 });
 
 // Read-only methods the app calls that are deliberately not probed: one harmless read
