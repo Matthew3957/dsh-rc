@@ -149,7 +149,7 @@ const S = {
   subagents: new Map(),   // parentId -> {entries, parentAvailable, at}
   agentsLoading: new Set(), // parentIds whose subagent.list call is in flight
   dashOpen: new Set(),    // sessionIds whose dashboard card is expanded
-  dashCollapsed: true,    // Running now is one quiet line until tapped open
+  dashCollapsed: false,   // Running now shows its cards (progress bars) until folded
   model: new Map(),       // sessionId -> {provider, model} in use
   prices: null,           // price overrides, read from localStorage once
   cur: null,

@@ -211,16 +211,16 @@ test('a running session shows title, todo progress, the active todo and context 
   assert.equal(oneByClass(card, 'run-elapsed').getAttribute('data-since'), String(PROMPT_AT));
 });
 
-test('the section shows as one quiet line when something runs and the head opens it', async () => {
+test('the section opens with its progress cards when something runs and the head folds it', async () => {
   const t = harness({ respond: (m) => (m === 'session.list' ? { items: [summary()] } : m === 'subagent.list' ? { entries: [], parentAvailable: true } : undefined) });
   await t.loadSessions();
   assert.equal(t.el('#running').hidden, false, 'an active session shows the section');
-  assert.equal(isLive(t.el('#runningCards')), true, 'the cards are folded by default');
-  assert.equal(t.el('#runningHead').getAttribute('aria-expanded'), 'false');
-  // The head is a flex row; opening it is a state flip plus a render.
-  t.el('#runningHead').onclick();
-  assert.equal(isLive(t.el('#runningCards')), false);
+  assert.equal(isLive(t.el('#runningCards')), false, 'the cards, with their progress bars, show by default');
   assert.equal(t.el('#runningHead').getAttribute('aria-expanded'), 'true');
+  // The head is a flex row; folding it is a state flip plus a render.
+  t.el('#runningHead').onclick();
+  assert.equal(isLive(t.el('#runningCards')), true);
+  assert.equal(t.el('#runningHead').getAttribute('aria-expanded'), 'false');
 });
 
 test('a session/jobs frame fills the job list', async () => {
