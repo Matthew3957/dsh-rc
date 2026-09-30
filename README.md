@@ -16,6 +16,18 @@ errors.
 No build step. `public/` is plain HTML, CSS and JS; `server/` is plain Node ESM (Node 22 or newer). Markdown uses
 marked and DOMPurify, vendored in `public/vendor/` (their license headers are kept in the files).
 
+## Screenshots
+
+Made from the demo sessions described under "Regenerating the screenshots", never from a real
+dsh. Every project, path and conversation in them is invented.
+
+| | | | |
+|:-:|:-:|:-:|:-:|
+| <img src="docs/screenshots/sessions.png" width="180" alt="Session list"> | <img src="docs/screenshots/running.png" width="180" alt="Running now with a card expanded"> | <img src="docs/screenshots/chat.png" width="180" alt="A chat with tool rows"> | <img src="docs/screenshots/diff.png" width="180" alt="A file edit opened as a line diff"> |
+| Session list | Running now, one card open | Chat with tool rows | Edit as a line diff |
+| <img src="docs/screenshots/summary.png" width="180" alt="Turn summary card"> | <img src="docs/screenshots/status.png" width="180" alt="Status line with the per-turn breakdown open"> | <img src="docs/screenshots/plan.png" width="180" alt="Plan review card"> | <img src="docs/screenshots/approval.png" width="180" alt="Approval card above the composer"> |
+| Turn summary | Status line, per-turn breakdown | Plan review | Approval while a turn runs |
+
 ## Setup
 
 ```
@@ -367,6 +379,30 @@ Everything there is read-only. Tapping a card's title opens that session; tappin
 expands the jobs and subagent tree. The section follows the projection and jobs pushes, refetches
 a subagent catalog only when it is stale, and stops while a chat is open.
 
+## Regenerating the screenshots
+
+`scripts/demo-dsh.mjs` is a deterministic mock of the dsh web API. It replays hand-written
+sessions from `scripts/demo-fixtures.mjs` (projects under `/work/demo`, nothing real) and answers
+only the reads the page makes. To click through the demo yourself:
+
+```
+node scripts/demo-dsh.mjs --port 3180
+node server/index.mjs --dsh-url http://127.0.0.1:3180
+```
+
+`scripts/screenshots.mjs` starts both, opens the page in a headless Chromium at 390x844 (2x) with
+the clock pinned, and writes `docs/screenshots/*.png`. A browser is not a dependency of this repo;
+point the script at one you have:
+
+```
+PLAYWRIGHT_CORE=/path/to/node_modules/playwright-core \
+CHROMIUM_PATH=/path/to/chrome-or-headless-shell \
+npm run screenshots
+```
+
+The output is byte-identical between runs. Edit the fixtures, rerun, and commit the new images.
+Keep each image under around 250 KB, and never point this at a real instance.
+
 ## Roadmap
 
 Next, in priority order:
@@ -375,7 +411,6 @@ Next, in priority order:
 
 Later:
 
-- Screenshots from a clean demo instance.
 
 ## License
 
