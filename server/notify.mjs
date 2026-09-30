@@ -5,6 +5,7 @@
 // whether a frame becomes a notification lives here, with no I/O, so it can be
 // tested directly. The payload shape is the one public/sw.js renders:
 // { title, body, sessionId, tag }.
+import { planReviewOf } from '../public/review.js';
 
 /** Repeat notifications with the same tag inside this window are dropped. */
 export const DEBOUNCE_MS = 5000;
@@ -26,10 +27,11 @@ function firstQuestionText(questions) {
 // A plan-mode review (a question tagged `intent.kind: 'plan-review'`, the plan
 // markdown in `detail`): the plan's first heading, '' when it has none, or null
 // when this is an ordinary question.
+// Same narrowing as the page (public/review.js), so the notification and the card agree.
 function planHeading(questions) {
-  const first = Array.isArray(questions) && questions.length === 1 ? questions[0] : null;
-  if (!first || !first.intent || first.intent.kind !== 'plan-review' || typeof first.detail !== 'string') return null;
-  const m = /^#{1,6}\s+(.+?)\s*$/m.exec(first.detail);
+  const review = planReviewOf(questions);
+  if (!review) return null;
+  const m = /^#{1,6}\s+(.+?)\s*$/m.exec(review.plan);
   return m ? m[1] : '';
 }
 

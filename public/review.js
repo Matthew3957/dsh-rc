@@ -168,6 +168,8 @@ export function summarizeTurn(tools, reason) {
         title: (call && call.title) || (res && res.title) || '',
         done: !!t.done,
         failed: !!t.done && commandFailed(t),
+        // Settled without any result (killed by Stop, or the turn ended first): not a success.
+        noResult: !!t.done && !t.isError && !res,
         exitCode: res && typeof res.exitCode === 'number' ? res.exitCode : null,
         signal: res && typeof res.signal === 'string' ? res.signal : null,
       });
@@ -180,6 +182,7 @@ export function summarizeTurn(tools, reason) {
   else if (kind === 'blocked') { outcome = 'failed'; why = 'the turn was blocked'; }
   else if (kind === 'aborted' || kind === 'interrupted') { outcome = 'stopped'; why = 'the turn was interrupted'; }
   else if (kind === 'max-tokens') { outcome = 'stopped'; why = 'the output limit was reached'; }
+  else if (last && last.noResult) { outcome = 'stopped'; why = 'the last command reported no result'; }
   else if (last && last.failed) { outcome = 'failed'; why = 'the last command ' + (last.signal ? 'was killed by ' + last.signal : 'exited ' + (last.exitCode ?? 'with an error')); }
   else { outcome = 'passed'; why = last ? 'the last command succeeded' : ''; }
   let adds = 0, dels = 0;
