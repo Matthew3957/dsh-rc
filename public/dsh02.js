@@ -254,6 +254,129 @@ export function goalStatus(g) {
   return { glyph: GOAL_GLYPH[g.phase] || '●', level: g.phase === 'blocked' ? 'err' : (idle ? 'warn' : g.phase), text: `${phase} · ${rounds}` };
 }
 
+// ---------- Tool presentation ----------
+//
+// dsh 0.1 sent each tool event with the view its tool's `presentCall` / `presentResult` made
+// (dsh-tools' presentation vocabulary: `card: 'diff' | 'terminal' | ...`). dsh 0.2 runs neither on
+// the wire: `tool/call` carries the raw `arguments` string and `tool/result` the model-facing
+// result plus the tool's private `meta` (dsh-session's event map). dsh's own web client
+// (dsh-client-ui-tool's diff and terminal card models) rebuilds the cards from those, and so do
+// these two functions, returning the 0.1 views the page and public/review.js already read.
+
+const SHELLS = new Set(['bash', 'pwsh']);
+
+function argsOf(raw) {
+  let v = raw;
+  if (typeof raw === 'string') { try { v = JSON.parse(raw); } catch { return null; } }
+  return v && typeof v === 'object' && !Array.isArray(v) ? v : null;
+}
+
+/** The one text block a first-party result renders from, or undefined for any other layout. */
+function onlyText(content) {
+  if (!Array.isArray(content) || content.length !== 1) return undefined;
+  const b = obj(content[0]);
+  return b.type === 'text' && typeof b.text === 'string' ? b.text : undefined;
+}
+
+// A foreground shell call. A call without `description` is the persistent shell (dsh-tool-bash-persistent
+// takes only `command`); a background one acknowledges a job rather than running to an exit.
+function shellCall(name, a) {
+  if (!SHELLS.has(name) || !a || typeof a.command !== 'string' || !a.command.trim()) return null;
+  if (a.run_in_background === true) return null;
+  return { command: a.command, description: str(a.description), workdir: str(a.workdir), persistent: a.description === undefined };
+}
+
+// The change a write, edit or str_replace_editor call means to make, from its arguments.
+function intendedDiff(name, a) {
+  if (!a) return null;
+  if (name === 'str_replace_editor') {
+    const path = a.path;
+    if (typeof path !== 'string' || !path.trim()) return null;
+    if (a.command === 'create' && (a.file_text === undefined || typeof a.file_text === 'string')) return { path, oldText: null, newText: a.file_text ?? '' };
+    if (a.command === 'str_replace' && (a.old_str === undefined || typeof a.old_str === 'string') && (a.new_str === undefined || typeof a.new_str === 'string')) return { path, oldText: a.old_str || null, newText: a.new_str ?? '' };
+    return null;
+  }
+  const path = a.file_path;
+  if (typeof path !== 'string' || !path.trim()) return null;
+  if (name === 'write') return typeof a.content === 'string' ? { path, oldText: null, newText: a.content } : null;
+  if (name === 'edit' && typeof a.old_string === 'string' && typeof a.new_string === 'string') return { path, oldText: a.old_string || null, newText: a.new_string };
+  return null;
+}
+
+// dsh-tool-fs's result meta, `{diffs: FileDiff[], operation?}`: the applied hunks. 'empty' is a
+// valid meta with no hunks (an unchanged overwrite); null is absent or malformed.
+function appliedDiffs(meta) {
+  const m = meta && typeof meta === 'object' && !Array.isArray(meta) ? meta : null;
+  if (!m || !Array.isArray(m.diffs)) return null;
+  if (!m.diffs.length) return 'empty';
+  const out = [];
+  for (const d of m.diffs) {
+    const x = obj(d);
+    if (typeof x.path !== 'string' || typeof x.newText !== 'string' || (x.oldText !== null && typeof x.oldText !== 'string')) return null;
+    out.push({ path: x.path, oldText: x.oldText, newText: x.newText });
+  }
+  return out;
+}
+
+// The exit markers dsh-shell's renderer appends (`parseExitStatus` in dsh-shell/render): a signal,
+// a non-zero code, or neither for a clean exit.
+function exitStatus(text) {
+  const sig = /\n\[killed by signal: ([^\]\n]+)\]$/.exec(text);
+  if (sig) return { output: text.slice(0, sig.index), signal: sig[1] };
+  const code = /\n\[exit code: (\d+)\]$/.exec(text);
+  if (code) return { output: text.slice(0, code.index), exitCode: Number(code[1]) };
+  return { output: text, exitCode: 0 };
+}
+
+// A result dsh-spill-policy cut short ends in its notice, which can hide the exit marker.
+const spilled = (text) => text.endsWith(')') && text.includes(' Full formatted result stored at: ');
+
+/** The 0.1 call view for a 0.2 `tool/call`, or null for the generic row. */
+export function toolCallView(name, argsRaw) {
+  const a = argsOf(argsRaw);
+  const sh = shellCall(name, a);
+  if (sh) {
+    const v = { card: 'terminal', title: sh.command };
+    if (sh.description) v.description = sh.description;
+    if (sh.workdir) v.cwd = sh.workdir;
+    return v;
+  }
+  const d = intendedDiff(name, a);
+  if (!d) return null;
+  const verb = name === 'write' || (name === 'str_replace_editor' && a.command === 'create') ? 'Write' : 'Edit';
+  return { card: 'diff', title: `${verb} ${d.path}`, diffs: [d] };
+}
+
+/**
+ * The 0.1 result view for a 0.2 `tool/result` of the call `name(argsRaw)`, or null when there is
+ * nothing to add to the raw result. `result` is `{content, isError, meta}`: the tool-result block's
+ * content and error flag, and the event's `meta`.
+ */
+export function toolResultView(name, argsRaw, result) {
+  const r = obj(result);
+  if (r.isError) return null; // the error text is the result, and a failed write changed nothing
+  const a = argsOf(argsRaw);
+  const sh = shellCall(name, a);
+  if (sh) {
+    const text = onlyText(r.content);
+    if (text === undefined) return null;
+    if (sh.persistent) {
+      // The persistent shell reports its own marker when the command finished.
+      const m = /\n?\[Command finished with exit code (\d+)\]$/.exec(text);
+      return m ? { card: 'terminal', output: text.slice(0, m.index), exitCode: Number(m[1]) } : { card: 'terminal', output: text };
+    }
+    if (spilled(text)) return { card: 'terminal', output: text };
+    return { card: 'terminal', ...exitStatus(text) };
+  }
+  const d = intendedDiff(name, a);
+  if (!d) return null;
+  // str_replace_editor has no result view on dsh 0.2, and an edit is only drawn from its applied hunks.
+  if (name === 'str_replace_editor') return { card: 'generic' };
+  const applied = appliedDiffs(r.meta);
+  if (Array.isArray(applied)) return { card: 'diff', diffs: applied };
+  return name === 'write' ? { card: 'diff', diffs: [d] } : { card: 'generic' };
+}
+
 const toEvents = (sessionId, records) => (records || []).map((r) => ({ sessionId, event: r.event }));
 
 /**
@@ -481,5 +604,5 @@ export function createClient({ transport, wsUrl, WebSocketImpl = globalThis.WebS
 }
 
 if (typeof window !== 'undefined') {
-  window.dsh02 = { createClient, MUX_PATH, bareCode, fromPluginInventory, localizedText, goalOf, goalStatus };
+  window.dsh02 = { createClient, MUX_PATH, bareCode, fromPluginInventory, localizedText, goalOf, goalStatus, toolCallView, toolResultView };
 }

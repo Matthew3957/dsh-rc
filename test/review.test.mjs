@@ -5,6 +5,7 @@ import vm from 'node:vm';
 
 import * as review from '../public/review.js';
 import * as prices from '../public/prices.js';
+import * as dsh02 from '../public/dsh02.js';
 import { mapFrame } from '../server/notify.mjs';
 
 const { diffLines, diffStats, foldContext, diffsOf, summarizeTurn, planReviewOf, planAnswer } = review;
@@ -206,7 +207,7 @@ function harness(respond) {
     querySelector(sel) { if (!els.has(sel)) els.set(sel, stubEl(sel)); return els.get(sel); },
     querySelectorAll: () => [],
   };
-  const window = { dshPrices: prices, dshReview: review, addEventListener() {}, innerHeight: 800, matchMedia: () => ({ matches: false }), scrollTo() {} };
+  const window = { dshPrices: prices, dshReview: review, dsh02, addEventListener() {}, innerHeight: 800, matchMedia: () => ({ matches: false }), scrollTo() {} };
   const calls = [];
   const context = {
     window, document, navigator: {}, console, setTimeout, clearTimeout, setInterval, clearInterval,
@@ -229,7 +230,7 @@ function harness(respond) {
   };
   context.globalThis = context;
   vm.createContext(context);
-  vm.runInContext(APP + '\n;globalThis.__t = { S, R, onMux, openSession };', context, { filename: 'public/app.js' });
+  vm.runInContext(APP + '\n;globalThis.__t = { S, R, onMux, openSession, useDsh02: (c) => { dsh2 = c; } };', context, { filename: 'public/app.js' });
   const t = context.__t;
   t.calls = calls;
   t.el = (sel) => document.querySelector(sel);
@@ -377,4 +378,65 @@ test('the push notifier uses the same plan-review narrowing as the page', () => 
   const frame = { type: 'question/requested', sessionId: 's1', questions: [q] };
   const n = mapFrame({ payload: frame, rpcId: 'r1' }, {});
   assert.ok(!n || n.title !== 'Plan ready for review', 'three options is an ordinary question on the page, so not a plan push');
+});
+
+// --- dsh 0.2: no view on the wire -------------------------------------------
+// dsh 0.2's tool events: raw arguments on the call, result text and the tool's `meta` on the
+// result (dsh-tool-fs's applied hunks, dsh-shell's exit marker in the text). No `view`.
+const result02 = (seq, callId, text, meta, isError = false) => {
+  const e = toolResult(seq, callId, text, undefined, isError);
+  if (meta !== undefined) e.event.data.meta = meta;
+  return e;
+};
+const TURN_02 = [
+  ev(1, 'turn/start', { turn: 1 }),
+  toolCall(2, 'e1', 'edit', { file_path: '/work/proj/src/a.js', old_string: 'two', new_string: 'TWO\nthree' }),
+  result02(3, 'e1', 'Edited', { diffs: [{ path: '/work/proj/src/a.js', oldText: 'one\ntwo\n', newText: 'one\nTWO\nthree\n' }] }),
+  toolCall(4, 'w1', 'write', { file_path: '/work/proj/b.txt', content: 'hi\n' }),
+  result02(5, 'w1', 'Wrote', { diffs: [], operation: 'create' }),
+  toolCall(6, 'b1', 'bash', { command: 'npm test', description: 'Run the tests' }),
+  result02(7, 'b1', 'fail\n[exit code: 1]'),
+  toolCall(8, 'b2', 'bash', { command: 'npm test', description: 'Run the tests again' }),
+  result02(9, 'b2', 'ok'),
+  ev(10, 'turn/end', { turn: 1, reason: { kind: 'completed' } }),
+];
+
+async function openWith02(events) {
+  const t = harness();
+  const answer = (method) => {
+    if (method === 'session.history') return { events, hasMore: false };
+    if (method === 'session.models') return { current: { provider: 'p', model: 'm' } };
+    return {};
+  };
+  t.useDsh02({ rpc: async (method) => answer(method), remote: async () => ({}), has: () => true, isOpen: () => true, connect() {}, close() {} });
+  t.S.sessions = [{ sessionId: 's1', cwd: '/work/proj' }];
+  await t.openSession('s1');
+  return t;
+}
+
+test('dsh 0.2: tool rows get their diffs and exit codes, and the turn its summary card', async () => {
+  const t = await openWith02(TURN_02);
+  const card = byClass(t.el('#msgs'), 'turncard')[0];
+  assert.ok(card, 'summary card rendered');
+  assert.match(card.className, /passed/);
+  const text = textOf(card);
+  assert.match(text, /2 files changed\+3 −1/);
+  assert.match(text, /src\/a\.js\+2 −1/);
+  assert.match(text, /b\.txt\+1 −0/); // a create with empty hunks draws the whole written file
+  assert.match(text, /2 commands run, 1 failed/);
+  assert.match(text, /✗npm testexit 1✓npm testexit 0/);
+  const row = t.R.tools.get('e1').el;
+  row.open = true; row.ontoggle();
+  assert.deepEqual(byClass(row, 'dl').map((n) => textOf(n)), [' one', '-two', '+TWO', '+three']);
+  // A command row shows the output without dsh's marker, and the exit code on its own.
+  const cmd = t.R.tools.get('b1').el;
+  cmd.open = true; cmd.ontoggle();
+  assert.match(textOf(cmd), /outputfailexit 1/);
+  assert.doesNotMatch(textOf(cmd), /\[exit code/);
+});
+
+test('dsh 0.1 frames without a view stay generic (no views are made up there)', async () => {
+  const t = await openWith(TURN_02);
+  assert.equal(byClass(t.el('#msgs'), 'turncard').length, 0);
+  assert.equal(byClass(t.R.tools.get('e1').el, 'delta').length, 0);
 });

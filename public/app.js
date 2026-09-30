@@ -780,7 +780,9 @@ const R = {
       case 'assistant/message': this.final(d); break;
       case 'tool/call': {
         const t = this.tool(d.callId, d.name, d.arguments);
-        if (f.view && f.view.view) { t.view = f.view.view; this.paintTool(t); }
+        // dsh 0.2 sends no view: rebuild it from the arguments, as dsh's own web client does.
+        const v = (f.view && f.view.view) || (dsh2 ? window.dsh02.toolCallView(d.name, d.arguments) : null);
+        if (v) { t.view = v; this.paintTool(t); }
         break;
       }
       case 'tool/result': {
@@ -791,7 +793,9 @@ const R = {
         t.done = true;
         t.isError = !!block.isError || !!d.error;
         t.result = textOf(block.content) || (d.error && (d.error.message || String(d.error))) || '';
-        if (f.view && f.view.view) t.rview = f.view.view;
+        // dsh 0.2: from the call, the result text and the tool's `meta` (a write or edit's applied hunks).
+        const rv = (f.view && f.view.view) || (dsh2 ? window.dsh02.toolResultView(t.name, t.args, { content: block.content, isError: t.isError, meta: d.meta }) : null);
+        if (rv) t.rview = rv;
         this.paintTool(t);
         break;
       }
