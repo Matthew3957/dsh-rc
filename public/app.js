@@ -2025,8 +2025,9 @@ function planCard(q, review) {
   const sub = q.sessionId !== (S.cur && S.cur.id) ? ' (subagent)' : '';
   const body = h('div', { class: 'md plan-body' });
   body.append(mdNode(review.plan));
-  const card = h('div', { class: 'card plan', 'data-rpc': q.rpcId },
+  const card = h('div', { class: 'card plan' + (q.expired ? ' expired' : ''), 'data-rpc': q.rpcId },
     h('h4', {}, 'Plan review' + sub),
+    q.expired ? h('div', { class: 'why expired-note' }, 'The timed wait ran out; the agent carried on. You can still answer.') : null,
     review.question ? h('div', { class: 'why' }, review.question) : null,
     body);
   let fb = null;
@@ -2082,7 +2083,8 @@ function approvalCard(a) {
 }
 function questionCard(q) {
   const state = (q.questions || []).map((qq) => ({ id: qq.id, selected: new Set(), custom: '' }));
-  const card = h('div', { class: 'card' }, h('h4', {}, 'dsh is asking'));
+  const card = h('div', { class: 'card' + (q.expired ? ' expired' : '') }, h('h4', {}, q.expired ? 'Question expired' : 'dsh is asking'));
+  if (q.expired) card.append(h('div', { class: 'why expired-note' }, 'The timed wait ran out; the agent carried on. You can still answer.'));
   (q.questions || []).forEach((qq, i) => {
     const st = state[i];
     card.append(h('div', { class: 'q' }, qq.header ? `${qq.header}: ` : '', qq.question));
@@ -2102,7 +2104,7 @@ function questionCard(q) {
     other.oninput = () => { st.custom = other.value; };
     card.append(other);
   });
-  const cancel = h('button', { type: 'button' }, 'Skip');
+  const cancel = h('button', { type: 'button' }, q.expired ? 'Dismiss' : 'Skip');
   const send = h('button', { type: 'button', class: 'yes' }, 'Answer');
   cancel.onclick = async () => {
     try { await respond(q.rpcId, { ok: false, error: { code: 'cancelled', message: 'Skipped from mobile', details: {} } }); S.questions.delete(q.rpcId); renderPending(); } catch (e) { toast(e.message); }

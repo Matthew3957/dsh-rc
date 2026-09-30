@@ -344,6 +344,17 @@ test('an ordinary question still renders as a question card', async () => {
   assert.match(textOf(t.el('#pending')), /dsh is asking/);
 });
 
+test('an expired question renders as expired and still offers a dismissable answer', async () => {
+  const t = await openWith([]);
+  t.onMux({ type: 'question/requested', sessionId: 's1', callId: 'c1', expired: true, questions: [{ id: 'q', question: 'Which branch?' }] }, { rpcId: 'question:s1:c1' });
+  const card = byClass(t.el('#pending'), 'expired')[0];
+  assert.ok(card, 'expired card rendered');
+  assert.match(textOf(card), /Question expired/);
+  assert.match(textOf(card), /still answer/);
+  assert.ok(buttonNamed(card, 'Dismiss'), 'an expired question can be dismissed');
+  assert.ok(buttonNamed(card, 'Answer'), 'an expired question can still be answered');
+});
+
 test('a huge diff keeps bounded ops and exact counts', () => {
   const big = Array.from({ length: 200000 }, (_, i) => 'line ' + i).join('\n');
   const edited = big.replace('line 100000\n', 'changed\n');

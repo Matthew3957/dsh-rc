@@ -36,6 +36,11 @@ export const MUX_PATH = '/api/remote.mux';
 const obj = (v) => (v && typeof v === 'object' ? v : {});
 const str = (v) => (typeof v === 'string' ? v : undefined);
 
+/** Card id for a question read from the `userQuestions` projection rather than a live waterfall. */
+export const questionKey = (sessionId, callId) => `question:${String(sessionId)}:${String(callId)}`;
+const isQuestionKey = (id) => typeof id === 'string' && id.startsWith('question:');
+const callKey = (sessionId, callId) => `${String(sessionId)}\u0000${String(callId)}`;
+
 function reasonOf(req) {
   const r = str(req.reason);
   if (r) return r;
@@ -453,12 +458,36 @@ export function createClient({ transport, wsUrl, WebSocketImpl = globalThis.WebS
   const obsWanted = new Map(); // jobId -> owning sessionId, for open job/follow streams
   const obs = new Map(); // jobId -> {sessionId, streamId}
   const obsStream = new Map(); // job/follow streamId -> jobId
+  // The `subagentCatalog` projection only lists a session's direct children, and the
+  // control feed may omit a child session's own catalog. Cache every catalog this
+  // client has seen (control push, snapshot, or a read) and probe only what is
+  // missing, so `subagent.list` can answer `hasChildren` and the page can recurse.
+  const catalogs = new Map(); // sessionId -> direct-child catalog entries
+  const catalogReads = new Map(); // sessionId -> in-flight projections read
+  const timings = new Map(); // sessionId -> the subagentTiming projection
+  // Questions the projection reports as `continued`: their timed wait ran out and the
+  // agent moved on, but they are still answerable through `userQuestions/answer`.
+  const projected = new Map(); // rpcId -> {sessionId, callId, sig}
+  const liveQuestionCall = new Map(); // sessionId\0callId -> waterfall eventId
+  const liveQuestionEvent = new Map(); // waterfall eventId -> {sessionId, callId}
+  const questionViews = new Map(); // sessionId -> the last userQuestions projection view
+  const inboxes = new Map(); // sessionId -> the inbox projection value
 
   const call = (endpoint, args, rpcId) => transport(endpoint, { args }, rpcId);
   const emit = (frames) => {
     for (const f of frames) {
-      if (f.kind === 'host' && f.payload.type === 'host/session-status') running.set(f.payload.sessionId, f.payload.running);
-      onFrame(f.kind, f.payload, f.env || {});
+      const p = f.payload;
+      if (f.kind === 'host' && p.type === 'host/session-status') running.set(p.sessionId, p.running);
+      const env = f.env || {};
+      if (p.type === 'question/requested' && p.callId && env.rpcId && !isQuestionKey(env.rpcId)) {
+        liveQuestionCall.set(callKey(p.sessionId, p.callId), env.rpcId);
+        liveQuestionEvent.set(env.rpcId, { sessionId: p.sessionId, callId: p.callId });
+      } else if (p.type === 'question/resolved' && p.questionRpcId && !isQuestionKey(p.questionRpcId)) {
+        const was = liveQuestionEvent.get(p.questionRpcId);
+        if (was) liveQuestionCall.delete(callKey(was.sessionId, was.callId));
+        liveQuestionEvent.delete(p.questionRpcId);
+      }
+      onFrame(f.kind, p, env);
     }
   };
   const send = (m) => { if (ws && ws.readyState === 1) ws.send(JSON.stringify(m)); };
@@ -517,6 +546,88 @@ export function createClient({ transport, wsUrl, WebSocketImpl = globalThis.WebS
     emit([{ kind: 'mux', payload: { type: 'job/output', sessionId, jobId, kind: 'end' } }]);
   }
 
+  // Keep the projection caches in step with the control feed, and turn a
+  // `userQuestions` view into expired-question cards for the page.
+  function cacheProjection(p) {
+    if (!p || p.type !== 'session/projection') return;
+    if (p.key === 'subagentCatalog') catalogs.set(p.sessionId, Array.isArray(p.value) ? p.value : []);
+    else if (p.key === 'subagentTiming') timings.set(p.sessionId, p.value);
+    else if (p.key === 'userQuestions') { questionViews.set(p.sessionId, p.value); syncQuestions(p.sessionId, p.value); }
+    else if (p.key === 'inbox') { inboxes.set(p.sessionId, p.value); syncQuestions(p.sessionId, questionViews.get(p.sessionId)); }
+  }
+
+  /** Call ids whose late answer a client already steered into this session's inbox. */
+  function queuedReplies(sessionId) {
+    const out = new Set();
+    const b = obj(inboxes.get(sessionId));
+    for (const list of ['next-turn', 'next-step']) {
+      for (const m of Array.isArray(b[list]) ? b[list] : []) {
+        const source = obj(obj(m).source);
+        if (source.kind === 'user-question-reply' && typeof source.callId === 'string') out.add(source.callId);
+      }
+    }
+    return out;
+  }
+
+  /**
+   * Mirror the `userQuestions` projection's `continued` rows as expired question cards.
+   * A row is `continued` once the timed wait ran out and the agent carried on; it is
+   * still answerable, so it stays until the projection drops it. A live waterfall for
+   * the same call is retired first, so one call never shows two cards, and a call whose
+   * reply already sits in the inbox stays hidden, as dsh's own client hides it.
+   */
+  function syncQuestions(sessionId, view) {
+    const active = Array.isArray(obj(view).active) ? obj(view).active : [];
+    const continued = new Map(); // callId -> questions
+    for (const row of active) {
+      const r = obj(row);
+      if (r.state === 'continued' && typeof r.callId === 'string') continued.set(r.callId, r.questions);
+    }
+    const queued = queuedReplies(sessionId);
+    const live = new Set([...continued.keys()].filter((callId) => !queued.has(callId)));
+    for (const [rpcId, info] of [...projected]) {
+      if (info.sessionId !== sessionId || live.has(info.callId)) continue;
+      projected.delete(rpcId);
+      emit([{ kind: 'mux', payload: { type: 'question/resolved', questionRpcId: rpcId } }]);
+    }
+    for (const callId of live) {
+      const waterfall = liveQuestionCall.get(callKey(sessionId, callId));
+      if (waterfall) {
+        const was = liveQuestionEvent.get(waterfall);
+        if (was) liveQuestionCall.delete(callKey(was.sessionId, was.callId));
+        liveQuestionEvent.delete(waterfall);
+        pending.delete(waterfall);
+        emit([{ kind: 'mux', payload: { type: 'question/resolved', questionRpcId: waterfall } }]);
+      }
+      const rpcId = questionKey(sessionId, callId);
+      const sig = JSON.stringify(continued.get(callId));
+      const prev = projected.get(rpcId);
+      if (prev && prev.sig === sig) continue;
+      projected.set(rpcId, { sessionId, callId, sig });
+      emit([{ kind: 'mux', env: { rpcId }, payload: { type: 'question/requested', sessionId, callId, questions: continued.get(callId), expired: true } }]);
+    }
+  }
+
+  // Read one session's direct-child catalog, deduping concurrent reads. A session
+  // the control feed already described never reaches the network.
+  function catalogOf(sessionId) {
+    if (catalogs.has(sessionId)) return Promise.resolve(catalogs.get(sessionId));
+    const inflight = catalogReads.get(sessionId);
+    if (inflight) return inflight;
+    const read = call('session/projections', { request: { sessionId } })
+      .then((proj) => {
+        const values = obj(obj(proj).values);
+        const entries = Array.isArray(values.subagentCatalog) ? values.subagentCatalog : [];
+        catalogs.set(sessionId, entries);
+        if (values.subagentTiming !== undefined) timings.set(sessionId, values.subagentTiming);
+        return entries;
+      })
+      .catch(() => []);
+    const tracked = read.finally(() => catalogReads.delete(sessionId));
+    catalogReads.set(sessionId, tracked);
+    return tracked;
+  }
+
   function onItem(streamId, value) {
     if (streamId === 'ev') {
       if (value && value.type === 'ready') {
@@ -527,7 +638,9 @@ export function createClient({ transport, wsUrl, WebSocketImpl = globalThis.WebS
       }
       emit(fromEvents(value, pending));
     } else if (streamId === 'ctl') {
-      emit(fromControl(value));
+      const frames = fromControl(value);
+      emit(frames);
+      for (const f of frames) cacheProjection(f.payload);
     } else if (streamId === 'ws') {
       if (value && value.type === 'baseline') {
         workspace = obj(value.value);
@@ -543,6 +656,9 @@ export function createClient({ transport, wsUrl, WebSocketImpl = globalThis.WebS
     } else if (follow && streamId === follow.streamId) {
       if (value && value.type === 'snapshot') {
         cursors.set(follow.sessionId, value.cursor);
+        for (const [key, val] of Object.entries(obj(obj(value.projections).values))) {
+          cacheProjection({ type: 'session/projection', sessionId: follow.sessionId, key, value: val });
+        }
         if (follow.snapshot) { const s = follow.snapshot; follow.snapshot = null; s.resolve(value); }
         return;
       }
@@ -593,18 +709,24 @@ export function createClient({ transport, wsUrl, WebSocketImpl = globalThis.WebS
     sock.onerror = () => {};
     sock.onclose = () => {
       if (ws !== sock) return;
-      ws = null; clientId = null; pending.clear();
+      ws = null; clientId = null;
+      // A reconnect re-reads the control baseline and re-probes catalogs; a pending
+      // waterfall is replayed, so its live mapping is rebuilt then.
+      pending.clear(); liveQuestionCall.clear(); liveQuestionEvent.clear();
       jobWatch.clear(); jobStream.clear();
       obs.clear(); obsStream.clear();
+      catalogs.clear(); catalogReads.clear(); timings.clear(); questionViews.clear(); inboxes.clear();
       onDown();
     };
   }
 
   function close() {
     if (!ws) return;
-    const sock = ws; ws = null; clientId = null; pending.clear();
+    const sock = ws; ws = null; clientId = null;
+    pending.clear(); liveQuestionCall.clear(); liveQuestionEvent.clear();
     jobWatch.clear(); jobStream.clear();
     obs.clear(); obsStream.clear();
+    catalogs.clear(); catalogReads.clear(); timings.clear(); questionViews.clear(); inboxes.clear();
     sock.onclose = null;
     try { sock.close(); } catch { /* already closed */ }
   }
@@ -675,11 +797,29 @@ export function createClient({ transport, wsUrl, WebSocketImpl = globalThis.WebS
       const sel = obj(obj(obj(proj).values).modelSelection);
       return { ...catalog, current: sel.next || sel.lastUsed || catalog.default };
     },
+    // The 0.1 contract answers one parent's direct children with `hasChildren` and
+    // `activity`. The 0.2 `subagentCatalog` projection is only that parent's direct
+    // children, so follow it down: probe a child's own catalog when the control feed
+    // has not described it, and the page's recursion reaches every generation.
     'subagent.list': async (p) => {
-      const proj = await call('session/projections', { request: { sessionId: p.parentSessionId } });
-      const catalog = obj(obj(proj).values).subagentCatalog;
-      const entries = (Array.isArray(catalog) ? catalog : []).map((e) => ({ kind: 'child', id: e.id, mode: e.mode, label: e.label, activity: running.get(e.id) ? 'running' : 'inactive', hasChildren: false }));
-      return { entries, parentAvailable: !!proj };
+      const parentId = p.parentSessionId;
+      let parentAvailable = true;
+      if (!catalogs.has(parentId)) {
+        const proj = await call('session/projections', { request: { sessionId: parentId } }).catch(() => null);
+        parentAvailable = !!proj;
+        const values = obj(obj(proj).values);
+        catalogs.set(parentId, Array.isArray(values.subagentCatalog) ? values.subagentCatalog : []);
+        if (values.subagentTiming !== undefined) timings.set(parentId, values.subagentTiming);
+      }
+      const rows = catalogs.get(parentId) || [];
+      const entries = await Promise.all(rows.map(async (e) => {
+        const id = e.id;
+        if (!catalogs.has(id)) await catalogOf(id);
+        const hasChildren = (catalogs.get(id) || []).length > 0;
+        const active = running.get(id) === true || !!obj(timings.get(id)).active;
+        return { kind: 'child', id, mode: e.mode, label: e.label, activity: active ? 'running' : 'inactive', hasChildren };
+      }));
+      return { entries, parentAvailable };
     },
     'workspace.list': async () => workspaceBaseline(),
     'workspace.archiveSession': async (p) => call('workspace/archiveSession', { request: { sessionId: p.sessionId } }),
@@ -734,10 +874,28 @@ export function createClient({ transport, wsUrl, WebSocketImpl = globalThis.WebS
       return fn(obj(payload), rpcId).catch((e) => { throw e && e.code ? Object.assign(e, { code: bareCode(e.code) }) : e; });
     },
     remote: (method, args) => call(method, (remoteArgs[method] || ((a) => a))(obj(args))),
-    /** Answer a pending approval or question: the page's `respond(rpcId, result)`. */
-    async respond(eventId, result) {
-      if (!clientId) throw new Error('not connected to dsh');
+    /**
+     * Answer a pending approval or question: the page's `respond(rpcId, result)`.
+     * A question read from the `userQuestions` projection is no longer a waterfall,
+     * so it goes through dsh 0.2's `userQuestions/answer` late-answer path instead.
+     */
+    async respond(rpcId, result) {
       const r = obj(result);
+      const expired = projected.get(rpcId);
+      if (expired) {
+        if (!r.ok) {
+          projected.delete(rpcId);
+          emit([{ kind: 'mux', payload: { type: 'question/resolved', questionRpcId: rpcId } }]);
+          return {};
+        }
+        const answer = obj(obj(r.value).answer);
+        const accepted = await call('userQuestions/answer', { agentId: expired.sessionId, callId: expired.callId, answer });
+        if (accepted === false) throw Object.assign(new Error('this question is no longer answerable'), { code: 'question-closed' });
+        projected.delete(rpcId);
+        emit([{ kind: 'mux', payload: { type: 'question/resolved', questionRpcId: rpcId } }]);
+        return {};
+      }
+      if (!clientId) throw new Error('not connected to dsh');
       let outcome;
       if (r.ok) {
         const v = obj(r.value);
@@ -746,12 +904,12 @@ export function createClient({ transport, wsUrl, WebSocketImpl = globalThis.WebS
         const e = obj(r.error);
         outcome = { kind: 'rejected', error: { name: 'Error', message: str(e.message) || 'Skipped', code: str(e.code) } };
       }
-      await call('$events/result', { clientId, eventId, outcome });
+      await call('$events/result', { clientId, eventId: rpcId, outcome });
       // dsh does not echo a waterfall's cancel back to the client that answered it.
-      const kind = pending.get(eventId);
-      pending.delete(eventId);
-      if (kind === 'approval') emit([{ kind: 'mux', payload: { type: 'approval/resolved', approvalId: eventId } }]);
-      if (kind === 'question') emit([{ kind: 'mux', payload: { type: 'question/resolved', questionRpcId: eventId } }]);
+      const kind = pending.get(rpcId);
+      pending.delete(rpcId);
+      if (kind === 'approval') emit([{ kind: 'mux', payload: { type: 'approval/resolved', approvalId: rpcId } }]);
+      if (kind === 'question') emit([{ kind: 'mux', payload: { type: 'question/resolved', questionRpcId: rpcId } }]);
       return {};
     },
     followSession,

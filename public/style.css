@@ -256,6 +256,8 @@ input, textarea, select { font: inherit; color: inherit; }
 .opt.sel { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, transparent); }
 .card input[type=text] { width: 100%; margin-top: 6px; padding: 9px 11px; border-radius: 10px; border: 1px solid var(--line); background: var(--bg); font-size: 16px; }
 .card.plan { border-color: color-mix(in srgb, var(--warn) 60%, var(--line)); }
+.card.expired { border-color: color-mix(in srgb, var(--muted) 55%, var(--line)); }
+.card .expired-note { font-style: italic; }
 .card.plan .plan-body { max-height: 36vh; overflow-y: auto; overscroll-behavior: contain; font-size: 14px; border: 1px solid var(--line); border-radius: 10px; padding: 4px 10px; background: var(--bg); }
 .card.plan .plan-body .plain { white-space: pre-wrap; }
 .card.plan .plan-fb { width: 100%; margin-top: 8px; padding: 9px 11px; border-radius: 10px; border: 1px solid var(--line); background: var(--bg); font-size: 16px; resize: vertical; }

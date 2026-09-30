@@ -24,7 +24,7 @@ function stubEl(selector) {
     className: '',
     childNodes: [],
     dataset: {},
-    style: { setProperty() {}, removeProperty() {} },
+    style: { _p: {}, setProperty(k, v) { this._p[k] = v; }, removeProperty(k) { delete this._p[k]; }, getPropertyValue(k) { return this._p[k] || ''; } },
     scrollTop: 0,
     scrollHeight: 0,
     clientHeight: 0,
@@ -285,6 +285,26 @@ test('the subagent tree comes from subagent.list and timing from its projection'
   t.onMux({ type: 'session/projection', sessionId: 'sub-1', key: 'subagentTiming', value: { settledMs: 0, active: { since: PROMPT_AT, through: T0 } }, seq: 4 }, {});
   t.renderDashboard();
   assert.equal(oneByClass(t.card('s1'), 'atime').getAttribute('data-since'), String(PROMPT_AT));
+});
+
+test('a child with its own catalog is followed down to its children', async () => {
+  const t = harness({
+    respond: (m, body) => {
+      if (m === 'session.list') return { items: [summary()] };
+      if (m === 'subagent.list') {
+        if (body.payload.parentSessionId === 's1') return { entries: [childEntry({ hasChildren: true })], parentAvailable: true };
+        if (body.payload.parentSessionId === 'sub-1') return { entries: [childEntry({ id: 'sub-2', label: 'Grandchild', mode: 'continuable', hasChildren: false })], parentAvailable: true };
+      }
+      return undefined;
+    },
+  });
+  await t.loadSessions();
+  await settle();
+  t.renderDashboard();
+  t.toggleDashCard('s1');
+  const rows = allByClass(t.card('s1'), 'run-agent');
+  assert.deepEqual(rows.map((r) => textOf(oneByClass(r, 'aname'))), ['Run the tests', 'Grandchild']);
+  assert.deepEqual(rows.map((r) => r.style.getPropertyValue('--depth')), ['0', '1']);
 });
 
 test('a settled subagent shows its accumulated time instead of a live clock', async () => {
