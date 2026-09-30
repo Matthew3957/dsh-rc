@@ -1,0 +1,17 @@
+name: commit-check
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+permissions:
+  contents: read
+jobs:
+  commit-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Conventional Commits on every commit and the PR title
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+        run: scripts/commit-check.sh "origin/${{ github.base_ref }}"
