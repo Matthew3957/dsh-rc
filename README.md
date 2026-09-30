@@ -409,9 +409,6 @@ Next, in priority order:
 
 1. **Port to the dsh 0.2 API** (#37, see Compatibility).
 
-Later:
-
-
 ## License
 
 MIT, see `LICENSE`.

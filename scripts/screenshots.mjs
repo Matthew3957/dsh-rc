@@ -11,7 +11,7 @@
 //   CHROMIUM_PATH=/path/to/chrome                           optional; playwright's own browser otherwise
 //
 // Usage:
-//   PLAYWRIGHT_CORE=... node scripts/screenshots.mjs [--out docs/screenshots] [--scale 2] [--only list,chat]
+//   PLAYWRIGHT_CORE=... node scripts/screenshots.mjs [--out docs/screenshots] [--scale 2] [--only sessions,chat]
 
 import fs from 'node:fs';
 import os from 'node:os';
@@ -34,7 +34,12 @@ function parseArgs(argv) {
     const a = argv[i];
     if (a === '--out') out.out = path.resolve(argv[++i]);
     else if (a === '--scale') out.scale = Number(argv[++i]);
-    else if (a === '--only') out.only = new Set(String(argv[++i]).split(',').filter(Boolean));
+    else if (a === '--only') {
+      out.only = new Set(String(argv[++i]).split(',').filter(Boolean));
+      const known = new Set(SCENES.map((s) => s.name));
+      const bad = [...out.only].filter((n) => !known.has(n));
+      if (bad.length) throw new Error(`unknown scene ${bad.join(', ')}; scenes: ${[...known].join(', ')}`);
+    }
     else throw new Error(`unknown option ${a}`);
   }
   if (!(out.scale >= 1 && out.scale <= 3)) throw new Error('--scale must be between 1 and 3');
@@ -136,16 +141,17 @@ async function main() {
   const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-rc-shots-'));
   const quiet = { log() {}, error: console.error, warn: console.error };
 
-  const mock = await startDemoDsh({ now: NOW });
-  const app = await startServer({ env: {}, stateDir, port: 0, host: '127.0.0.1', dshUrl: mock.url, watch: false, logger: quiet });
-  const base = `http://127.0.0.1:${app.port}`;
-
-  const browser = await chromium.launch({
-    executablePath: process.env.CHROMIUM_PATH || undefined,
-    args: ['--no-sandbox'],
-  });
+  // Everything started here is stopped in the finally, whichever step fails.
+  let mock = null, app = null, browser = null;
   const written = [];
   try {
+    mock = await startDemoDsh({ now: NOW });
+    app = await startServer({ env: {}, stateDir, port: 0, host: '127.0.0.1', dshUrl: mock.url, watch: false, logger: quiet });
+    const base = `http://127.0.0.1:${app.port}`;
+    browser = await chromium.launch({
+      executablePath: process.env.CHROMIUM_PATH || undefined,
+      args: ['--no-sandbox'],
+    });
     for (const scene of SCENES) {
       if (args.only && !args.only.has(scene.name)) continue;
       mock.setPending({ approval: false, plan: false, ...scene.pending });
@@ -177,9 +183,9 @@ async function main() {
       await context.close();
     }
   } finally {
-    await browser.close();
-    await app.close();
-    await mock.close();
+    if (browser) await browser.close().catch(() => {});
+    if (app) await app.close().catch(() => {});
+    if (mock) await mock.close().catch(() => {});
     fs.rmSync(stateDir, { recursive: true, force: true });
   }
   for (const f of written) console.log(`${path.relative(ROOT, f)}  ${(fs.statSync(f).size / 1024).toFixed(0)} KB`);

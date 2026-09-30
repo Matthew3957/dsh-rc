@@ -207,7 +207,8 @@ export async function startDemoDsh({ port = 0, now = Date.now() } = {}) {
   });
 
   server.on('upgrade', (req, socket) => {
-    const path = new URL(req.url, 'http://localhost').pathname;
+    let path;
+    try { path = new URL(req.url, 'http://localhost').pathname; } catch { socket.end('HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\n\r\n'); return; }
     const kind = path === '/api/events.mux' ? 'mux' : path === '/api/events.host' ? 'host' : null;
     const key = req.headers['sec-websocket-key'];
     if (!kind || !key) { socket.end('HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n'); return; }
