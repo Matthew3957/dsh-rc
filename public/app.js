@@ -217,6 +217,14 @@ function md(text) {
   const d = document.createElement('div'); d.textContent = text;
   return d.innerHTML.replace(/\n/g, '<br>');
 }
+// The same markdown as nodes rather than an HTML string, so a caller appends it
+// and never assigns innerHTML. Without the vendored libraries it is plain text.
+function mdNode(text) {
+  if (window.marked && window.DOMPurify) {
+    try { return DOMPurify.sanitize(marked.parse(text, { gfm: true, breaks: true }), { RETURN_DOM_FRAGMENT: true }); } catch {}
+  }
+  return h('div', { class: 'plain' }, text);
+}
 function linkTargets() {
   if (window.DOMPurify && !linkTargets.done) {
     linkTargets.done = true;
@@ -512,7 +520,8 @@ const R = {
   live: new Map(),   // "turn:step" -> {el, blocks: Map(index -> {type, text, el})}
   tools: new Map(),  // callId -> {el, ...}
   fin: new Set(),
-  reset() { this.live.clear(); this.tools.clear(); this.fin = new Set(); $('#msgs').replaceChildren(); },
+  turn: null,        // {tools, sawStart}: the calls of the turn being rendered, for its summary card
+  reset() { this.live.clear(); this.tools.clear(); this.fin = new Set(); this.turn = null; $('#msgs').replaceChildren(); },
   add(el) { $('#msgs').append(el); return el; },
   note(text, kind = '') { const el = this.add(h('div', { class: 'note ' + kind }, text)); stick(); return el; },
 
@@ -554,8 +563,13 @@ const R = {
         else if (r.kind === 'max-tokens') this.note('Stopped: output limit reached');
         else if (r.kind === 'blocked') this.note('Turn blocked');
         for (const t of this.tools.values()) if (!t.done) { t.done = true; t.orphan = true; this.paintTool(t); }
+        this.summary(r);
+        this.turn = null;
         break;
       }
+      case 'turn/start':
+        this.turn = { tools: [], sawStart: true };
+        break;
       case 'command/done':
         if (d.text) this.note(d.text, d.kind === 'error' ? 'err' : 'cmd');
         break;
@@ -621,6 +635,7 @@ const R = {
     if (!t) {
       t = { id, name, args, el: h('details', { class: 'tool run' }) };
       this.tools.set(id, t);
+      (this.turn || (this.turn = { tools: [], sawStart: false })).tools.push(t);
       (parent || $('#msgs')).append(t.el);
     }
     if (name && !t.name) t.name = name;
@@ -637,13 +652,28 @@ const R = {
     const lines = (t.result || '').split('\n').length;
     const resLine = t.done ? (t.orphan && !t.result ? 'no result' : (first.slice(0, 160) + (lines > 1 ? `  (+${lines - 1} lines)` : ''))) : '';
     const detail = h('div', { class: 'detail' });
+    const diffs = window.dshReview ? window.dshReview.diffsOf(t) : null;
+    let delta = null;
+    if (diffs) {
+      let adds = 0, dels = 0;
+      for (const d of diffs) {
+        const st = window.dshReview.diffStats(window.dshReview.diffLines(d.oldText, d.newText));
+        adds += st.adds; dels += st.dels;
+      }
+      delta = deltaEl(adds, dels);
+    }
     t.el.replaceChildren(
-      h('summary', {}, h('span', { class: 'bullet' }, '⏺'), h('span', { class: 'name' }, prettyTool(t.name)), h('span', { class: 'sum' }, sum)),
+      h('summary', {}, h('span', { class: 'bullet' }, '⏺'), h('span', { class: 'name' }, prettyTool(t.name)), h('span', { class: 'sum' }, sum), delta),
       t.done && resLine ? h('div', { class: 'res' }, resLine) : null,
       detail);
     // Build detail lazily when opened (keeps long histories fast)
     const fill = () => {
       if (detail.childElementCount) return;
+      if (diffs) {
+        for (const d of diffs) detail.append(diffBlock(d));
+        if (t.isError && t.result) detail.append(h('div', { class: 'lbl' }, 'error'), h('pre', {}, clip(t.result, 20000)));
+        return;
+      }
       if (t.args != null) detail.append(h('div', { class: 'lbl' }, 'input'), h('pre', {}, clip(prettyArgs(t.args), 20000)));
       const out = (t.rview && typeof t.rview.output === 'string' && t.rview.output) || t.result;
       if (out) detail.append(h('div', { class: 'lbl' }, t.isError ? 'error' : 'output'), h('pre', {}, clip(out, 20000)));
@@ -652,7 +682,89 @@ const R = {
     t.el.ontoggle = () => { if (t.el.open) fill(); };
     if (open) { t.el.open = true; fill(); }
   },
+  // A card closing a turn that touched files or ran commands. A history window
+  // can open mid-turn, so a turn whose start was not loaded says so.
+  summary(reason) {
+    const lib = window.dshReview, T = this.turn;
+    if (!lib || !T || !T.tools.length) return;
+    const s = lib.summarizeTurn(T.tools, reason);
+    if (!s.files.length && !s.commands.length) return;
+    this.add(turnCard(s, !T.sawStart));
+    stick();
+  },
 };
+
+// ---------- Review: diffs and turn summaries ----------
+const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
+function deltaEl(adds, dels) {
+  return h('span', { class: 'delta' }, h('span', { class: 'add' }, '+' + adds), ' ', h('span', { class: 'del' }, '−' + dels));
+}
+// Paths as the model saw them, shortened against the session folder when inside it.
+function relPath(p) {
+  const cwd = S.cur && sessionMeta(S.cur.id).cwd;
+  if (cwd && p.startsWith(cwd.replace(/\/+$/, '') + '/')) return p.slice(cwd.replace(/\/+$/, '').length + 1);
+  return tildify(p);
+}
+const DIFF_MAX_LINES = 600;
+function diffBlock(d) {
+  const lib = window.dshReview;
+  const ops = lib.diffLines(d.oldText, d.newText);
+  const st = lib.diffStats(ops);
+  const box = h('div', { class: 'diff' });
+  box.append(h('div', { class: 'dhead' }, h('span', { class: 'dpath' }, relPath(d.path)), deltaEl(st.adds, st.dels)));
+  const folded = lib.foldContext(ops);
+  const body = h('div', { class: 'dbody' });
+  for (let i = 0; i < folded.length; i++) {
+    const o = folded[i];
+    if (i >= DIFF_MAX_LINES) { body.append(h('div', { class: 'dl skip' }, `… ${plural(folded.length - i, 'more line')}`)); break; }
+    if (o.op === 'skip') { body.append(h('div', { class: 'dl skip' }, `⋯ ${plural(o.count, 'unchanged line')}`)); continue; }
+    const cls = o.op === '+' ? 'add' : o.op === '-' ? 'del' : 'ctx';
+    body.append(h('div', { class: 'dl ' + cls }, h('span', { class: 'sg', 'aria-hidden': 'true' }, o.op), o.text));
+  }
+  if (!ops.length) body.append(h('div', { class: 'dl skip' }, 'No line changes'));
+  box.append(body);
+  return box;
+}
+// Open a tool row from the summary card and bring it into view.
+function revealTool(id) {
+  const t = R.tools.get(id);
+  if (!t) return;
+  t.el.open = true;
+  R.paintTool(t);
+  t.el.scrollIntoView({ block: 'start', behavior: 'smooth' });
+}
+const firstLine = (s) => String(s || '').split('\n')[0];
+function turnCard(s, partial) {
+  const verdict = { passed: '✓ passed', failed: '✗ failed', stopped: '■ stopped' }[s.outcome];
+  const card = h('div', { class: 'turncard ' + s.outcome },
+    h('div', { class: 'tc-head' }, h('b', {}, 'Turn summary'), h('span', { class: 'verdict ' + s.outcome }, verdict)),
+    s.why ? h('div', { class: 'tc-why' }, s.why.charAt(0).toUpperCase() + s.why.slice(1)) : null);
+  const MAX = 8;
+  if (s.files.length) {
+    card.append(h('div', { class: 'tc-sec' }, h('span', {}, plural(s.files.length, 'file') + ' changed'), deltaEl(s.adds, s.dels)));
+    for (const f of s.files.slice(0, MAX)) {
+      card.append(h('button', { type: 'button', class: 'tc-row', onclick: () => revealTool(f.callIds[f.callIds.length - 1]) },
+        h('span', { class: 'tc-main' }, relPath(f.path)), deltaEl(f.adds, f.dels)));
+    }
+    if (s.files.length > MAX) card.append(h('div', { class: 'tc-more' }, `and ${s.files.length - MAX} more`));
+  }
+  if (s.commands.length) {
+    card.append(h('div', { class: 'tc-sec' }, h('span', {}, plural(s.commands.length, 'command') + ' run' + (s.failedCommands ? `, ${s.failedCommands} failed` : ''))));
+    // The latest commands matter most: the verdict rests on the last one.
+    const shown = s.commands.slice(-MAX);
+    if (s.commands.length > MAX) card.append(h('div', { class: 'tc-more' }, `${s.commands.length - MAX} earlier not shown`));
+    for (const c of shown) {
+      const mark = !c.done ? '·' : c.failed ? '✗' : '✓';
+      const exit = c.signal ? c.signal : c.exitCode != null ? 'exit ' + c.exitCode : '';
+      card.append(h('button', { type: 'button', class: 'tc-row', onclick: () => revealTool(c.callId) },
+        h('span', { class: 'tc-mark ' + (c.failed ? 'err' : c.done ? 'ok' : '') }, mark),
+        h('span', { class: 'tc-main mono' }, firstLine(c.title) || 'command'),
+        exit ? h('span', { class: 'tc-exit' }, exit) : null));
+    }
+  }
+  if (partial) card.append(h('div', { class: 'tc-more' }, 'Earlier steps of this turn are not loaded.'));
+  return card;
+}
 function paintSoon(b) {
   if (b.raf) return;
   b.raf = requestAnimationFrame(() => { b.raf = 0; b.el.innerHTML = md(b.text); stick(); });
@@ -1360,9 +1472,54 @@ function renderPending() {
   if (!S.cur) { box.replaceChildren(); return; }
   const cards = [];
   for (const a of S.approvals.values()) if (belongsToCur(a.sessionId)) cards.push(approvalCard(a));
-  for (const q of S.questions.values()) if (belongsToCur(q.sessionId)) cards.push(questionCard(q));
+  for (const q of S.questions.values()) {
+    if (!belongsToCur(q.sessionId)) continue;
+    const review = window.dshReview && window.dshReview.planReviewOf(q.questions);
+    cards.push(review ? planCard(q, review) : questionCard(q));
+  }
   box.replaceChildren(...cards);
   if (cards.length) stick();
+}
+// Plan mode asks for review through an ordinary question tagged plan-review, with
+// the plan as markdown in its detail. It is drawn as the plan itself with
+// approve and keep-planning buttons, answered with the option labels dsh named.
+const planDrafts = new Map(); // rpcId -> feedback typed so far, kept across re-renders of #pending
+function planCard(q, review) {
+  const lib = window.dshReview;
+  const sub = q.sessionId !== (S.cur && S.cur.id) ? ' (subagent)' : '';
+  const body = h('div', { class: 'md plan-body' });
+  body.append(mdNode(review.plan));
+  const card = h('div', { class: 'card plan' },
+    h('h4', {}, 'Plan review' + sub),
+    review.question ? h('div', { class: 'why' }, review.question) : null,
+    body);
+  let fb = null;
+  if (review.decline) {
+    fb = h('textarea', { rows: '2', class: 'plan-fb', placeholder: `Feedback, sent with ${review.decline.label} (optional)` });
+    fb.value = planDrafts.get(q.rpcId) || '';
+    fb.oninput = () => { planDrafts.set(q.rpcId, fb.value); };
+    card.append(fb);
+  }
+  const approve = h('button', { type: 'button', class: 'yes' }, review.approve.label);
+  const keep = review.decline ? h('button', { type: 'button' }, review.decline.label) : null;
+  // Closing the review without a decision: dsh stays in plan mode and waits for a message.
+  const reply = h('button', { type: 'button' }, 'Reply instead');
+  const btns = [approve, keep, reply].filter(Boolean);
+  const settle = async (btn, result) => {
+    const label = btn.textContent;
+    btns.forEach((b) => { b.disabled = true; });
+    btn.textContent = '…';
+    try {
+      await respond(q.rpcId, result);
+      S.questions.delete(q.rpcId); planDrafts.delete(q.rpcId); renderPending(); badge();
+      if (btn === reply) input.focus();
+    } catch (e) { toast(e.message); btns.forEach((b) => { b.disabled = false; }); btn.textContent = label; }
+  };
+  approve.onclick = () => settle(approve, { ok: true, value: { sessionId: q.sessionId, answer: lib.planAnswer(review, true) } });
+  if (keep) keep.onclick = () => settle(keep, { ok: true, value: { sessionId: q.sessionId, answer: lib.planAnswer(review, false, fb.value) } });
+  reply.onclick = () => settle(reply, { ok: false, error: { code: 'cancelled', message: 'the user closed this question request', details: {} } });
+  card.append(h('div', { class: 'row' }, ...btns));
+  return card;
 }
 function approvalCard(a) {
   const t = a.callId && R.tools.get(a.callId);
