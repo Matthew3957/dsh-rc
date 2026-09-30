@@ -113,6 +113,9 @@ const S = {
   approvals: new Map(),   // approvalId -> frame (+rpcId)
   questions: new Map(),   // rpcId -> frame
   queues: new Map(),      // sessionId -> items
+  projections: new Map(), // sessionId -> Map(key -> {seq, value})
+  model: new Map(),       // sessionId -> {provider, model} in use
+  prices: null,           // price overrides, read from localStorage once
   cur: null,
   conn: { mux: null, host: null, up: false, tries: 0, timer: null },
   describe: null,
@@ -137,6 +140,24 @@ function titleFromProjection(v) {
   if (typeof v === 'string') return v;
   if (typeof v.title === 'string') return v.title;
   return null;
+}
+// dsh keeps one value per projection per session: pushed live by
+// `session/projection` frames and seeded from the history tail page's block.
+// Frames carry a watermark, so a stale frame arriving after a fresher value is
+// dropped (higher seq wins) instead of regressing the store. A history seed
+// counts as -1, since the block carries no watermark of its own.
+function setProjection(sessionId, key, value, seq) {
+  let box = S.projections.get(sessionId);
+  if (!box) { box = new Map(); S.projections.set(sessionId, box); }
+  const prev = box.get(key);
+  if (prev && seq <= prev.seq) return false;
+  box.set(key, { seq, value });
+  return true;
+}
+function projectionValue(sessionId, key) {
+  const box = S.projections.get(sessionId);
+  const hit = box && box.get(key);
+  return hit ? hit.value : undefined;
 }
 
 // ---------- Helpers ----------
@@ -195,6 +216,23 @@ function prettyArgs(argsStr) {
 }
 const clip = (s, n) => (s.length > n ? s.slice(0, n) + `\n… (${s.length - n} more chars)` : s);
 const textOf = (content) => (content || []).filter((b) => b.type === 'text').map((b) => b.text).join('\n');
+// dsh's own token formatting, so the status line reads like the web UI.
+function fmtTokens(n) {
+  if (typeof n !== 'number' || !Number.isFinite(n) || n < 0) return '';
+  const scaled = (v) => (v >= 100 ? String(Math.round(v)) : String(Math.round(v * 10) / 10));
+  if (n < 1e3) return String(n);
+  if (n < 1e6) return scaled(n / 1e3) + 'K';
+  return scaled(n / 1e6) + 'M';
+}
+// Estimates run to a fraction of a cent, so precision follows magnitude: a
+// $0.12 session should not read "est. $0.12" and a $0.0004 one not "est. $0.00".
+function fmtUsd(n) {
+  if (typeof n !== 'number' || !Number.isFinite(n) || n < 0) return '';
+  if (n === 0) return '$0';
+  if (n < 0.0001) return '<$0.0001';
+  if (n < 1) return '$' + n.toFixed(4);
+  return '$' + n.toFixed(2);
+}
 
 // ---------- Connection ----------
 function setConn(up) {
@@ -262,9 +300,12 @@ function onMux(p, env) {
       S.queues.set(p.sessionId, p.items || []);
       if (S.cur && p.sessionId === S.cur.id) renderQueue();
       break;
-    case 'session/projection':
+    case 'session/projection': {
       if (p.key === 'title') setTitle(p.sessionId, titleFromProjection(p.value));
+      const seq = typeof p.seq === 'number' ? p.seq : -1;
+      if (setProjection(p.sessionId, p.key, p.value, seq) && S.cur && p.sessionId === S.cur.id) renderStatusLine();
       break;
+    }
     case 'stream/error':
       toast('Stream error: ' + (p.error && p.error.message || 'unknown'));
       break;
@@ -557,9 +598,15 @@ async function openSession(id, { push = true } = {}) {
   $('#subtitle').textContent = [tildify(m.cwd), m.agentPreset].filter(Boolean).join(' · ');
   R.reset(); pinned = true;
   renderRunning(); renderPending(); renderQueue();
+  // Start collapsed and empty: the previous session's line must not linger over
+  // this one while its history is still loading.
+  $('#statusBreakdown').hidden = true;
+  $('#statusLine').setAttribute('aria-expanded', 'false');
+  renderStatusLine();
   await loadHistory();
   S.commands = [];
   remote('commands/list', { agentId: id }).then((c) => { if (S.cur && S.cur.id === id) S.commands = Array.isArray(c) ? c : []; }).catch(() => {});
+  loadModel(id);
 }
 function showList({ push = true } = {}) {
   if (push && location.hash) history.pushState(null, '', location.pathname);
@@ -587,8 +634,12 @@ async function loadHistory() {
     const t = v.projections && v.projections.values && titleFromProjection(v.projections.values.title);
     if (t) setTitle(cur.id, t);
     cur.lastSeq = cur.events.length ? cur.events[cur.events.length - 1].event.seq : -1;
+    if (v.projections && v.projections.values) {
+      for (const [key, value] of Object.entries(v.projections.values)) setProjection(cur.id, key, value, -1);
+    }
     rerender(true);
     renderRunning(); // the turn's start time is only known once history is in
+    renderStatusLine();
   } catch (e) {
     R.note('Could not load history: ' + e.message, 'err');
   } finally {
@@ -606,6 +657,7 @@ function rerender(toBottom) {
   for (const f of cur.events) R.apply(f);
   $('#olderBtn').hidden = !cur.hasMore;
   if (toBottom) { pinned = true; stick(true); }
+  renderStatusLine(); // the per-turn breakdown follows the paged-in history
 }
 $('#olderBtn').onclick = async () => {
   const cur = S.cur; if (!cur || !cur.events.length) return;
@@ -757,6 +809,205 @@ $('#stopBtn').onclick = async () => {
   try { await rpc('session.cancel', { sessionId: S.cur.id }); toast('Stopping…'); } catch (e) { toast('Stop failed: ' + e.message); }
 };
 $('#steerBtn').onclick = () => { S.steer = !S.steer; renderRunning(); };
+
+// ---------- Status line ----------
+// A compact line under the session header: which model and route are in use,
+// how full the context is, the tokens this session has spent, and what that
+// works out to in dollars. Every part is dropped when dsh has not reported it,
+// so nothing here invents a zero.
+const BUCKETS = [
+  ['uncachedInputTokens', 'in'],
+  ['outputTokens', 'out'],
+  ['cacheReadTokens', 'cache read'],
+  ['cacheWriteTokens', 'cache write'],
+];
+const zeroBuckets = () => ({ uncachedInputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 });
+// Token figures arrive as whatever dsh sent; anything unusable counts as none.
+const nonzero = (n) => (typeof n === 'number' && Number.isFinite(n) && n > 0 ? n : 0);
+function sumBuckets(buckets) {
+  let total = 0;
+  for (const [key] of BUCKETS) total += buckets[key];
+  return total;
+}
+// The two sides name a bucket differently: a usage sample reports uncached
+// input as `inputTokens`, while the tokenUsage projection counts it as
+// `uncachedInputTokens`. Mapping both into the projection's names is what lets
+// the per-turn rows sum to the session total beside them.
+function projectedBuckets(usage) {
+  const out = zeroBuckets();
+  for (const [key] of BUCKETS) out[key] = nonzero(usage[key]);
+  return out;
+}
+function eventBuckets(usage) {
+  return {
+    uncachedInputTokens: nonzero(usage.inputTokens),
+    outputTokens: nonzero(usage.outputTokens),
+    cacheReadTokens: nonzero(usage.cacheReadTokens),
+    cacheWriteTokens: nonzero(usage.cacheWriteTokens),
+  };
+}
+// Per-turn usage across the loaded history. A step reports usage twice (an early
+// usage chunk, then the finalized message), so one turn/step's sample replaces
+// its predecessor rather than adding to it — token-meter's rule, which is what
+// keeps these turns adding up to the session projection.
+function turnUsage(events) {
+  const steps = new Map(); // "turn:step" -> {turn, buckets}
+  for (const frame of events || []) {
+    const ev = frame && frame.event;
+    if (!ev) continue;
+    const d = ev.data || {};
+    if (typeof d.turn !== 'number' || typeof d.step !== 'number') continue;
+    let usage = null;
+    if (ev.type === 'assistant/message') usage = d.usage;
+    else if (ev.type === 'assistant/chunk' && d.chunk && d.chunk.type === 'usage') usage = d.chunk.usage;
+    if (!usage) continue;
+    steps.set(`${d.turn}:${d.step}`, { turn: d.turn, buckets: eventBuckets(usage) });
+  }
+  const turns = new Map();
+  for (const step of steps.values()) {
+    const acc = turns.get(step.turn) || zeroBuckets();
+    for (const [key] of BUCKETS) acc[key] += step.buckets[key];
+    turns.set(step.turn, acc);
+  }
+  return [...turns].sort((a, b) => a[0] - b[0]).map(([turn, buckets]) => ({ turn, buckets }));
+}
+// dsh has no model projection. The session's current selection comes from
+// `session.models`, and the log records what a request actually ran as
+// `request/context` (or the config inside `request/header`), which is the
+// fallback when that call has not answered.
+function routeFromEvents(events) {
+  for (let i = (events || []).length - 1; i >= 0; i--) {
+    const ev = events[i] && events[i].event;
+    if (!ev) continue;
+    const d = ev.data || {};
+    if (ev.type === 'request/context') {
+      if (d.provider && d.model) return { provider: d.provider, model: d.model };
+    } else if (ev.type === 'request/header') {
+      const config = d.header && d.header.config;
+      if (config && config.provider && config.model) return { provider: config.provider, model: config.model };
+    }
+  }
+  return null;
+}
+const routeFor = (cur) => S.model.get(cur.id) || routeFromEvents(cur.events);
+async function loadModel(id) {
+  try {
+    const v = await rpc('session.models', { sessionId: id });
+    const current = v && v.current;
+    if (!current || !current.model) return;
+    S.model.set(id, { provider: current.provider, model: current.model });
+    if (S.cur && S.cur.id === id) renderStatusLine();
+  } catch {} // the log fallback still covers a session whose models call fails
+}
+// Read once and cache: the renderer runs on every projection push.
+function priceOverrides() {
+  const lib = window.dshPrices;
+  if (!lib) return {};
+  if (S.prices === null) S.prices = lib.loadPriceOverrides();
+  return S.prices;
+}
+function priceRowFor(cur) {
+  const lib = window.dshPrices;
+  if (!lib) return null;
+  const route = routeFor(cur);
+  return lib.priceFor(route && route.model, priceOverrides());
+}
+function renderStatusLine() {
+  const bar = $('#statusBar');
+  const cur = S.cur;
+  if (!cur) { bar.hidden = true; renderStatusBreakdown(); return; }
+  const parts = [];
+
+  const route = routeFor(cur);
+  if (route) parts.push(h('span', { class: 'status-part model' }, route.model, route.provider ? ` · ${route.provider}` : null));
+
+  // Context fill: the provider-anchored prompt size over the route's capacity.
+  // dsh reports neither until a request has run, so a fresh session shows no bar.
+  const pressure = projectionValue(cur.id, 'contextPressure');
+  const used = pressure && (typeof pressure.projectedTokens === 'number' ? pressure.projectedTokens : pressure.pressureTokens);
+  const capacity = pressure && pressure.contextWindow;
+  if (typeof used === 'number' && typeof capacity === 'number' && capacity > 0) {
+    const pct = Math.min(100, Math.round((used / capacity) * 100));
+    const level = pct >= 90 ? ' err' : (pct >= 70 ? ' warn' : '');
+    const fill = h('span', { class: 'status-fill' + level });
+    fill.style.setProperty('--fill', pct + '%');
+    parts.push(h('span', { class: 'status-part' },
+      h('span', { class: 'status-track' }, fill),
+      h('span', { class: 'status-pct' }, pct + '%')));
+  }
+
+  // Session tokens. Buckets dsh has not billed stay out of the line rather than
+  // reading as zero, and a session with no usage yet shows no token part at all.
+  const usage = projectionValue(cur.id, 'tokenUsage');
+  const buckets = usage ? projectedBuckets(usage) : null;
+  const billed = buckets ? sumBuckets(buckets) : 0;
+  if (billed > 0) {
+    // Four labeled buckets are wider than a phone, so this part alone wraps
+    // between them; each bucket stays whole so a break never splits a figure
+    // from its label. `.tokens` clears the nowrap the other parts keep.
+    const kids = [];
+    for (const [key, label] of BUCKETS) {
+      if (buckets[key] <= 0) continue;
+      if (kids.length) kids.push(' · ');
+      kids.push(h('span', { class: 'bucket' }, `${label} ${fmtTokens(buckets[key])}`));
+    }
+    parts.push(h('span', { class: 'status-part tokens' }, kids));
+    // Only price a model we know. Until `session.models` answers, the route is
+    // unknown rather than unpriced, and "cost n/a" would be a claim about a
+    // model we have not identified yet.
+    if (route) {
+      const cost = window.dshPrices ? window.dshPrices.costOf(buckets, priceRowFor(cur)) : null;
+      parts.push(h('span', { class: 'status-part' }, cost === null ? 'cost n/a' : `est. ${fmtUsd(cost)}`));
+    }
+  }
+
+  $('#statusSummary').replaceChildren(...parts);
+  bar.hidden = parts.length === 0;
+  const caret = $('#statusCaret');
+  caret.hidden = parts.length === 0 || !turnUsage(cur.events).length;
+  if (!$('#statusBreakdown').hidden) renderStatusBreakdown();
+}
+function renderStatusBreakdown() {
+  const box = $('#statusBreakdown');
+  const cur = S.cur;
+  if (!cur) { box.replaceChildren(); return; }
+  const lib = window.dshPrices;
+  const row = priceRowFor(cur);
+  const turns = turnUsage(cur.events);
+  if (!turns.length) { box.replaceChildren(h('div', { class: 'status-note' }, 'No per-turn usage reported yet.')); return; }
+  // A table rather than a line per turn: four buckets plus a cost do not fit
+  // across a phone, and truncating them would hide the numbers this panel exists
+  // to show. Columns are shared, so a bucket dsh billed nothing for reads as 0
+  // here — the compact line above is the place where a spent-nothing bucket is
+  // left out.
+  const table = h('div', { class: 'status-table' });
+  // Header cells; the four bucket columns are right-aligned to match their figures.
+  for (const [label, alignRight] of [['turn', false], ['in', true], ['out', true], ['read', true], ['write', true], ['est.', false]]) {
+    table.append(h('span', { class: 'th' + (alignRight ? ' num' : '') }, label));
+  }
+  for (const { turn, buckets } of turns) {
+    const cost = lib ? lib.costOf(buckets, row) : null;
+    table.append(
+      h('span', { class: 'turn' }, String(turn)),
+      h('span', { class: 'num' }, fmtTokens(buckets.uncachedInputTokens) || '0'),
+      h('span', { class: 'num' }, fmtTokens(buckets.outputTokens) || '0'),
+      h('span', { class: 'num' }, fmtTokens(buckets.cacheReadTokens) || '0'),
+      h('span', { class: 'num' }, fmtTokens(buckets.cacheWriteTokens) || '0'),
+      h('span', { class: 'cost' }, cost === null ? 'n/a' : fmtUsd(cost)));
+  }
+  box.replaceChildren(table, h('div', { class: 'status-note' }, 'read and write are cache read and cache write.'));
+  // The line above counts the whole session log; these rows only cover the turns
+  // paged in, so say so instead of letting the two look like they disagree.
+  if (cur.hasMore) box.append(h('div', { class: 'status-note' }, 'Earlier turns are not loaded yet.'));
+}
+$('#statusLine').onclick = () => {
+  const line = $('#statusLine');
+  const box = $('#statusBreakdown');
+  const open = box.hidden;
+  if (open) renderStatusBreakdown();
+  box.hidden = !open;
+  line.setAttribute('aria-expanded', String(open));
+};
 
 // ---------- Approvals & questions ----------
 function renderPending() {
@@ -1118,6 +1369,7 @@ $('#menuBtn').onclick = () => {
   refreshPushState().then((st) => { notifState.textContent = pushStateLabel(st); });
   openSheet(h('h3', {}, $('#title').textContent),
     h('button', { class: 'menuitem', onclick: modelSheet }, 'Model', h('small', {}, 'Switch the model for this session')),
+    h('button', { class: 'menuitem', onclick: pricesSheet }, 'Prices', h('small', {}, 'Override the price table behind "est. cost"')),
     h('button', { class: 'menuitem', onclick: commandsSheet }, 'Commands', h('small', {}, 'Slash commands available here')),
     notifRow,
     h('button', { class: 'menuitem', onclick: renameSheet }, 'Rename'),
@@ -1184,6 +1436,7 @@ async function modelSheet() {
             const payload = { sessionId: cur.id, provider: g.id, model: m.id };
             if (m.reasoning && m.reasoning.defaultEffort) payload.reasoningEffort = m.reasoning.defaultEffort;
             await rpc('session.selectModel', payload);
+            await loadModel(cur.id); // relabel the status line for the new route
             toast('Model: ' + (m.name || m.id)); closeSheet();
           } catch (e) { toast('Switch failed: ' + e.message, 4000); }
         } }, (isCur ? '✓ ' : '') + (m.name || m.id), m.description ? h('small', {}, m.description) : null));
@@ -1191,6 +1444,35 @@ async function modelSheet() {
     }
     openSheet(...kids);
   } catch (e) { openSheet(h('h3', {}, 'Model'), h('div', { class: 'note err' }, e.message)); }
+}
+// Prices sheet: the est. cost numbers come from a shipped table that goes stale,
+// so any model prefix can be re-priced here without shipping a new build.
+function pricesSheet() {
+  const lib = window.dshPrices;
+  if (!lib) {
+    openSheet(h('h3', {}, 'Prices'), h('div', { class: 'note err' }, 'The price table did not load, so estimated cost stays "n/a".'));
+    return;
+  }
+  const saved = priceOverrides();
+  const box = h('textarea', { rows: '9', spellcheck: 'false', autocapitalize: 'off', autocorrect: 'off' });
+  box.value = Object.keys(saved).length ? JSON.stringify(saved, null, 2) : '';
+  const save = h('button', { type: 'button', class: 'go' }, 'Save prices');
+  const clear = h('button', { type: 'button', class: 'ghost wide' }, 'Clear overrides');
+  save.onclick = () => {
+    let rows;
+    try { rows = lib.parsePriceOverrides(box.value); }
+    catch (e) { toast('Prices: ' + e.message, 5000); return; }
+    if (!lib.savePriceOverrides(rows)) { toast('Could not save: this browser refused storage', 5000); return; }
+    S.prices = rows; // the renderer caches reads, so hand it the new rows
+    renderStatusLine();
+    toast(Object.keys(rows).length ? 'Prices saved' : 'Overrides cleared');
+    closeSheet();
+  };
+  clear.onclick = () => { box.value = ''; save.onclick(); };
+  openSheet(h('h3', {}, 'Prices'),
+    h('div', { class: 'note' }, 'USD per million tokens, as JSON keyed by model-id prefix. The longest matching prefix wins, and an override beats the built-in table. Blank clears them.'),
+    h('div', { class: 'note' }, 'Fields: input, output, cacheRead, cacheWrite.'),
+    box, save, clear);
 }
 function commandsSheet() {
   const list = S.commands || [];

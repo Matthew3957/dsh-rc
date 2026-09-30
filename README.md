@@ -5,8 +5,9 @@ Independent project, not affiliated with or endorsed by DeepSeek.
 
 Session list, chat with streaming replies, compact tool rows you tap to expand, approval and
 question cards above the composer, stop / steer / queue, slash commands, model switching,
-image attachments, a read-only plugins and connectors screen, and Web Push notifications for
-approvals, questions, finished turns and errors.
+image attachments, a read-only plugins and connectors screen, a per-session status line
+(model and route, context fill, session tokens, estimated cost), and Web Push notifications
+for approvals, questions, finished turns and errors.
 
 No build step. `public/` is plain HTML, CSS and JS; `server/` is plain Node ESM (Node 22 or newer). Markdown uses
 marked and DOMPurify, vendored in `public/vendor/` (their license headers are kept in the files).
@@ -100,6 +101,29 @@ your private network.
 - Approvals and questions are answered with `POST /api/respond` (a client-response).
 - Slash commands go through `commands/execute`, not `session.prompt`.
 - Tested against dsh 0.1.1-rc.2. Not yet tested against 0.2.x.
+
+## Estimated cost
+
+The status line shows what a session has cost, but dsh reports tokens and never dollars, so the page
+multiplies the reported buckets by a price table shipped in `public/prices.js`. That table is a
+transcription of the vendors' published rates for the models this dsh routes to, in USD per million
+tokens. Prices change, so treat the numbers as a snapshot and override them when they drift.
+
+Two rules keep the figure from being worse than useless:
+
+- Model ids match by longest prefix, so a re-priced member of a family never inherits the family
+  rate (Claude Opus 5.5 and Opus 5 differ).
+- A model with no matching row reads `cost n/a` rather than a guess. Local models and free tiers
+  have no row at all.
+
+Every amount is labeled `est.` and ignores batch discounts, long-context tiers, data-residency
+multipliers, and DeepSeek's peak/off-peak split (the table holds the peak rate, so it is an upper
+bound).
+
+To override a price, open the ⋯ menu in a session and tap **Prices**. The field takes JSON keyed by
+model-id prefix, each mapping `input`, `output`, `cacheRead` and `cacheWrite`; blank clears it.
+The longest prefix wins and an override beats the shipped table. It is saved in this browser's
+`localStorage`, so it is per device.
 
 ## Roadmap
 
