@@ -197,8 +197,8 @@ Environment variables:
 | `DSH_RC_STATE_DIR` | `$XDG_STATE_HOME/dsh-rc` or `~/.local/state/dsh-rc` | Where `vapid.json`, `subscriptions.json`, `passphrase.json` and `session-secret` live |
 | `DSH_RC_VAPID_SUBJECT` | `https://github.com/Matthew3957/dsh-rc` (Apple rejects `localhost` mailto subjects; use your own `mailto:` or `https:` URL) | VAPID subject sent with each push |
 | `DSH_URL` | `http://127.0.0.1:3080` | dsh web base URL: its event sockets are watched and `/api` is proxied to it |
-| `DSH_TOKEN` | none | dsh 0.2 only: the launch token dsh printed at start (or the whole `?token=` URL) |
-| `DSH_TOKEN_FILE` | none | dsh 0.2 only: a file holding that token, read again on every exchange |
+| `DSH_TOKEN` | none | dsh 0.1.7 and later only: the launch token dsh printed at start (or the whole `?token=` URL) |
+| `DSH_TOKEN_FILE` | none | dsh 0.1.7 and later only: a file holding that token, read again on every exchange |
 | `DSH_RC_UPSTREAM_HOST` | `dsh-rc.internal` | Host the proxy presents to dsh; start dsh with `--trusted-host` for it |
 | `DSH_RC_TRUSTED_HOSTS` | none | Comma-separated extra Host names the proxy accepts when there is no passphrase |
 | `DSH_RC_PASSPHRASE` | none | Login passphrase, 12 characters or more (hashed in memory; `--set-passphrase` avoids keeping the plaintext around) |
@@ -253,16 +253,18 @@ applies to it; the tailnet is the boundary there.
 - Typing `@` in the composer lists files and folders of the session's working directory
   (`fileReferences/list`, payload `args: {agentId, query}`) and inserts the path, `@"..."` when it
   has spaces. Tapping a folder keeps the list open one level down.
-- The above is dsh 0.1. dsh 0.2 differs on every point (namespaced methods, one `/api/remote.mux`
+- The above is the older dsh API (0.1.6 and earlier). The newer one, from 0.1.7 on ("dsh 0.2" below), differs on every point (namespaced methods, one `/api/remote.mux`
   socket, a cookie); `public/dsh02.js` maps it onto the same shapes. See Compatibility below.
 
 ## Compatibility
 
 | dsh | Status |
 | --- | --- |
-| 0.1.1-rc.2 | Supported, what everything here was first built against. |
-| 0.2.0-rc.2 | Supported for the core: session list, chat streaming, prompts, approvals, questions, queue, stop, model, rename, fork, archive, new session, slash commands, push notifications. Gaps are listed below. |
+| 0.1.1-rc.2 | Supported (older API), what everything here was first built against. |
+| 0.1.7-rc.2 | Supported (newer API, same as 0.2): the 0.1 line switched protocols at 0.1.7. |
+| 0.2.0-rc.2 | Supported for the core (npm's `latest` tag at the time of writing): session list, chat streaming, prompts, approvals, questions, queue, stop, model, rename, fork, archive, new session, slash commands, push notifications. Gaps are listed below. |
 
+The newer API arrived in 0.1.7, not 0.2: everything said about "dsh 0.2" below applies to 0.1.7 too.
 One page and one server speak both. The page asks `host.describe` (dsh 0.1) first; when that is a
 404 it asks `session/canOpenWorkspacePath` (dsh 0.2) and, if that answers, switches to the 0.2
 transport. The push watcher makes the same choice on every (re)connect, so a dsh restarted as the
@@ -319,10 +321,10 @@ the `approval/request` and `user-questions/request` events in `dsh-user-approval
 - **Session search** answers as dsh does: on a deployment with the session-query index off it fails.
 - **Plugins & connectors** sheet, **file uploads**, goals, terminals, schedules and settings are not
   touched (the last three are refused by the proxy, as before).
-- Unverified against a real model: only a scripted Messages-compatible stand-in was available, so
-  reasoning blocks, tool-call chunks and images in 0.2's live stream are read from the contracts.
-- There is no browser-level test of the 0.2 path; the adapter is covered in Node (`test/dsh02.test.mjs`)
-  and was driven live through the proxy.
+- Checked in headless Chromium with real DeepSeek turns against 0.1.1-rc.2, 0.1.7-rc.2 and
+  0.2.0-rc.2: streaming, reasoning blocks, tool calls and results, the status line, and an approval
+  card answered from the page. Images in the live stream are still read from the contracts only.
+- The adapter is also covered in Node (`test/dsh02.test.mjs`).
 
 ## Smoke test
 
@@ -440,7 +442,7 @@ Keep each image under around 250 KB, and never point this at a real instance.
 
 Next, in priority order:
 
-1. **Finish the dsh 0.2 port** (#37): the gaps listed under Compatibility, and dropping 0.1 once 0.2.0 is final.
+1. **Finish the newer-API port** (#37): the gaps listed under Compatibility, and dropping the older API once 0.2.0 is final.
 
 ## License
 
