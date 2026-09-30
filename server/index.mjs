@@ -493,7 +493,12 @@ export async function startServer(options = {}) {
       if (pathname === '/logout') return auth.handleLogout(req, res);
 
       if (!auth.isAuthed(req) && !auth.isPublic(req, pathname)) {
-        if (isApi || isPush) return sendJson(res, 401, { error: 'authentication required' });
+        if (isApi || isPush) {
+          // The header lets the page tell this login 401 from a 401 dsh itself sends (dsh 0.2 wants its own cookie).
+          const buf = Buffer.from(JSON.stringify({ error: 'authentication required' }), 'utf8');
+          res.writeHead(401, { 'Content-Type': 'application/json; charset=utf-8', 'Content-Length': buf.length, 'Cache-Control': 'no-store', 'X-Dsh-Rc-Login': '1' });
+          return res.end(buf);
+        }
         if ((req.method === 'GET' || req.method === 'HEAD') && (pathname === '/' || pathname === '/index.html')) {
           res.writeHead(303, { Location: 'login', 'Cache-Control': 'no-store' });
           return res.end();

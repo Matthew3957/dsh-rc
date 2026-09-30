@@ -235,8 +235,45 @@ applies to it; the tailnet is the boundary there.
 - Typing `@` in the composer lists files and folders of the session's working directory
   (`fileReferences/list`, payload `args: {agentId, query}`) and inserts the path, `@"..."` when it
   has spaces. Tapping a folder keeps the list open one level down.
-- Tested against dsh 0.1.1-rc.2. dsh 0.2.x is not supported yet: it gates the API behind a
-  token printed in its startup URL, which this page does not send (see "Smoke test").
+- Tested against dsh 0.1.1-rc.2. dsh 0.2 is not supported, see Compatibility below.
+
+## Compatibility
+
+| dsh | Status |
+| --- | --- |
+| 0.1.1-rc.2 | Supported, what everything here is tested against. |
+| 0.2.0-rc.2 | **Not supported.** The page shows a "too new for dsh-rc" card; nothing else works. |
+
+Checked against the newest 0.2 on npm (0.2.0-rc.2), run in isolation beside 0.1.1 with the same
+probes. Findings:
+
+- **The 0.1 schemas are gone.** 0.1.1 ships its wire types as zod schemas in
+  `dsh-host-apiproxy` (`sessions`, `events`, `rpc-map` and the rest). 0.2 has no such package.
+  Its contracts are generated per feature package (`typert.remote-client.d.ts` in
+  `dsh-api-session-controller` and its siblings) on top of `dsh-api-gateway`.
+- **Every RPC method the page calls answers 404.** `host.describe`, `session.list`,
+  `session.history`, `session.prompt`, `workspace.list`, `agentPreset.list`, `host.listDirectory`,
+  `subagent.list` and the rest are not routes in 0.2. Endpoints are now `<namespace>/<method>`
+  (`session/list`, `session/modelCatalog`, `session/canOpenWorkspacePath`) and `args` must carry
+  every parameter by its declared name (`session/list` wants `{args: {_request: {}}}`). The
+  `client-request` and `server-response` envelope is unchanged.
+- **The event sockets are gone.** `/api/events.mux` and `/api/events.host` cannot be opened.
+  Live data moves to streams (`session/follow`, `session/control` and others) multiplexed over one
+  `/api/remote.mux` WebSocket with its own framing. That replaces the page's whole event handling,
+  and the push watcher in `server/notify.mjs` with it.
+- **dsh 0.2 needs a browser login.** Every method and socket answers 401 without a signed cookie.
+  dsh prints `http://127.0.0.1:<port>/?token=...` at start; opening that exchanges the token for
+  an HttpOnly cookie bound to the host and port. The Host and Origin trust rules (`--trusted-host`)
+  are unchanged and still answer 403. dsh-rc's proxy has no cookie to send, so a port needs its
+  own token handshake as well.
+- **`session.prompt` and the approval, question and plan flows** were not probed: they sit behind
+  the same gate. Treat their payloads as unverified until the port reads the new contracts.
+
+What dsh-rc does about it: the page treats a 404 or 401 from `host.describe` as "dsh too new" and
+says so, rather than redirecting to the login page or failing call by call. dsh-rc's own login
+401 carries an `X-Dsh-Rc-Login` header, so an upstream 401 is no longer mistaken for an expired
+login. Both changes work the same on 0.1.1. A real port is a separate piece of work: new client
+on `/api/remote.mux`, a token handshake in the proxy, and a rewritten watcher.
 
 ## Smoke test
 
@@ -253,9 +290,8 @@ The only requests it can send are the read methods on its allowlist; it never st
 prompts, steers or changes a session. The session-changing methods the page calls are
 listed in the output as not called, so a rename there still takes a live phone to notice.
 
-Against dsh 0.2.x the handshake answers 401, because that release gates the API behind the
-token in its startup URL and this page does not send it yet. The smoke reports that rather
-than working around it.
+Against dsh 0.2.x the handshake answers 401 (see Compatibility), and the smoke reports that
+rather than working around it.
 
 ## Reviewing the work
 
@@ -326,7 +362,7 @@ Next, in priority order:
 
 Later:
 
-- Support dsh 0.2.x, whose web API is gated behind a token in its startup URL.
+- Port to the dsh 0.2 API (#37, see Compatibility).
 - Screenshots from a clean demo instance.
 - A dictation button.
 - A QR code for the tunnel URL in the terminal and the page, if a no-dependency way to draw one
