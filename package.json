@@ -11,7 +11,8 @@
   "scripts": {
     "start": "node server/index.mjs",
     "test": "node --test",
-    "smoke": "node scripts/smoke.mjs"
+    "smoke": "node scripts/smoke.mjs",
+    "screenshots": "node scripts/screenshots.mjs"
   },
   "dependencies": {
     "web-push": "^3.6.7"
