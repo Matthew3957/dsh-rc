@@ -35,6 +35,17 @@
     <div class="searchwrap"><input id="q" type="search" placeholder="Search sessions" autocomplete="off" enterkeyhint="search"></div>
     <div id="pendingGlobal"></div>
     <div id="api403"></div>
+    <!-- Running now: what every active session is doing with itself right now.
+         Shown open when anything is running; the header folds it to one line. -->
+    <section id="running" class="running" hidden aria-label="Running now">
+      <button id="runningHead" class="running-head" type="button" aria-expanded="true" aria-controls="runningCards">
+        <span class="running-dot" aria-hidden="true"></span>
+        <span class="running-label">Running now</span>
+        <span id="runningCount" class="running-count"></span>
+        <span class="running-caret" aria-hidden="true">▾</span>
+      </button>
+      <div id="runningCards" class="running-cards" hidden></div>
+    </section>
     <ul id="sessions" class="sessions"></ul>
     <button id="moreBtn" class="ghost wide" hidden>Show more</button>
   </section>

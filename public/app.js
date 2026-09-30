@@ -124,6 +124,11 @@ const S = {
   questions: new Map(),   // rpcId -> frame
   queues: new Map(),      // sessionId -> items
   projections: new Map(), // sessionId -> Map(key -> {seq, value})
+  jobs: new Map(),        // sessionId -> JobView[] (the session/jobs snapshot)
+  subagents: new Map(),   // parentId -> {entries, parentAvailable, at}
+  agentsLoading: new Set(), // parentIds whose subagent.list call is in flight
+  dashOpen: new Set(),    // sessionIds whose dashboard card is expanded
+  dashCollapsed: false,   // the Running now section is open until folded
   model: new Map(),       // sessionId -> {provider, model} in use
   prices: null,           // price overrides, read from localStorage once
   cur: null,
@@ -169,6 +174,16 @@ function projectionValue(sessionId, key) {
   const hit = box && box.get(key);
   return hit ? hit.value : undefined;
 }
+// A `session.list` row carries a projection baseline for every attached session.
+// It may lag a live push, so it only fills a key no live frame has set yet.
+function seedProjection(sessionId, key, value) {
+  let box = S.projections.get(sessionId);
+  if (!box) { box = new Map(); S.projections.set(sessionId, box); }
+  const prev = box.get(key);
+  if (prev && prev.seq >= 0) return false;
+  box.set(key, { seq: -1, value });
+  return true;
+}
 
 // ---------- Helpers ----------
 const home = () => (S.describe && S.describe.home) || '/home/';
@@ -182,6 +197,18 @@ function ago(ms) {
   if (s < 86400) return Math.floor(s / 3600) + 'h';
   if (s < 86400 * 7) return Math.floor(s / 86400) + 'd';
   return new Date(ms).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+}
+// Elapsed working time for the dashboard. Unlike ago(), this counts up and keeps
+// seconds, because a turn that has run for two minutes should not read "2m" and
+// then appear stuck.
+function fmtElapsed(ms) {
+  const s = Math.max(0, Math.floor((typeof ms === 'number' && Number.isFinite(ms) ? ms : 0) / 1000));
+  if (s < 60) return s + 's';
+  const m = Math.floor(s / 60);
+  if (m < 60) return m + 'm ' + String(s % 60).padStart(2, '0') + 's';
+  const hrs = Math.floor(m / 60);
+  if (hrs < 24) return hrs + 'h ' + String(m % 60).padStart(2, '0') + 'm';
+  return Math.floor(hrs / 24) + 'd ' + String(hrs % 24).padStart(2, '0') + 'h';
 }
 function md(text) {
   if (window.marked && window.DOMPurify) {
@@ -285,12 +312,41 @@ document.addEventListener('visibilitychange', () => {
   else if (!$('#listView').hidden) loadSessions();
 });
 
+// A session created by another client starts blank, so `host/session-added` does
+// not reload the list. Its first turn/start is the moment it becomes a real row;
+// pull the list once then (throttled) so the dashboard and the list both see it.
+let sessionsReload = null;
+let sessionsReloadAt = 0;
+function sessionKnown(id) { return S.parent.has(id) || (S.sessions || []).some((s) => s.sessionId === id); }
+function scheduleSessionsReload() {
+  if (sessionsReload) return;
+  const wait = Math.max(0, 1500 - (Date.now() - sessionsReloadAt));
+  sessionsReload = setTimeout(() => {
+    sessionsReload = null;
+    sessionsReloadAt = Date.now();
+    if (!$('#listView').hidden) loadSessions();
+  }, wait);
+  if (sessionsReload && sessionsReload.unref) sessionsReload.unref();
+}
+
 function onMux(p, env) {
   switch (p.type) {
-    case 'session/event':
+    case 'session/event': {
+      const ev = p.event;
+      if (ev) {
+        // Track the running turn for every session, not only the open one: the
+        // dashboard shows sessions whose events the chat view never ingests.
+        if (ev.type === 'turn/start') {
+          S.running.set(p.sessionId, true);
+          if (typeof ev.time === 'number') S.turnStart.set(p.sessionId, ev.time);
+          if (!sessionKnown(p.sessionId)) scheduleSessionsReload();
+        } else if (ev.type === 'turn/end') { S.running.set(p.sessionId, false); S.turnStart.delete(p.sessionId); }
+      }
       if (S.cur && p.sessionId === S.cur.id) ingest(p);
-      if (p.event && p.event.type === 'session/title') setTitle(p.sessionId, p.event.data && p.event.data.title);
+      if (ev && ev.type === 'session/title') setTitle(p.sessionId, ev.data && ev.data.title);
+      if (ev && (ev.type === 'turn/start' || ev.type === 'turn/end')) scheduleDashboard();
       break;
+    }
     case 'session/subscribed':
       if (S.cur && p.sessionId === S.cur.id && !S.cur.loading && p.lastSeq > S.cur.lastSeq) loadHistory();
       break;
@@ -310,10 +366,20 @@ function onMux(p, env) {
       S.queues.set(p.sessionId, p.items || []);
       if (S.cur && p.sessionId === S.cur.id) renderQueue();
       break;
+    case 'session/jobs':
+      // The frame is the complete set for one session; an emptied set still
+      // arrives as [] because absence cannot express "just finished".
+      if (Array.isArray(p.jobs) && p.jobs.length) S.jobs.set(p.sessionId, p.jobs);
+      else S.jobs.delete(p.sessionId);
+      scheduleDashboard();
+      break;
     case 'session/projection': {
       if (p.key === 'title') setTitle(p.sessionId, titleFromProjection(p.value));
       const seq = typeof p.seq === 'number' ? p.seq : -1;
-      if (setProjection(p.sessionId, p.key, p.value, seq) && S.cur && p.sessionId === S.cur.id) renderStatusLine();
+      if (setProjection(p.sessionId, p.key, p.value, seq)) {
+        if (S.cur && p.sessionId === S.cur.id) renderStatusLine();
+        if (DASH_KEYS.has(p.key)) scheduleDashboard();
+      }
       break;
     }
     case 'stream/error':
@@ -329,10 +395,16 @@ function onHost(p) {
       S.running.set(p.sessionId, !!p.running);
       if (S.cur && p.sessionId === S.cur.id) renderRunning();
       if (!$('#listView').hidden && !S.searchMode) renderList();
+      scheduleDashboard();
       break;
     case 'host/session-added':
       if (p.parentSessionId) S.parent.set(p.sessionId, p.parentSessionId);
       if (!p.blank && !p.parentSessionId && !$('#listView').hidden) loadSessions();
+      scheduleDashboard();
+      break;
+    case 'host/session-removed':
+      S.jobs.delete(p.sessionId); S.subagents.delete(p.sessionId); S.dashOpen.delete(p.sessionId);
+      scheduleDashboard();
       break;
     case 'host/agent-error':
       if (S.cur && belongsToCur(p.sessionId)) R.note(p.message || 'Agent error', 'err');
@@ -349,12 +421,15 @@ async function loadSessions() {
       if (s.parentSessionId) S.parent.set(s.sessionId, s.parentSessionId);
       S.running.set(s.sessionId, !!s.running);
       if (!s.running) S.turnStart.delete(s.sessionId);
-      const t = s.projections && s.projections.values && titleFromProjection(s.projections.values.title);
+      const values = s.projections && s.projections.values;
+      if (values) for (const [key, value] of Object.entries(values)) seedProjection(s.sessionId, key, value);
+      const t = values && titleFromProjection(values.title);
       if (t) S.titles.set(s.sessionId, t);
     }
     S.sessions = items.filter((s) => !s.blank && !s.parentSessionId && s.origin !== 'subagent');
     saveTitles();
     if (!S.searchMode) renderList();
+    renderDashboard();
     fillTitles();
   } catch (e) {
     $('#sessions').replaceChildren(h('li', { class: 'empty' }, 'Could not load sessions: ' + e.message));
@@ -603,6 +678,7 @@ async function openSession(id, { push = true } = {}) {
   S.cur = { id, events: [], lastSeq: -1, loading: false, buffer: [], hasMore: false, gen: 0 };
   S.images = []; renderAttachments(); S.steer = false; queueEditing = null;
   $('#listView').hidden = true; $('#chatView').hidden = false;
+  stopDashTick(); // the dashboard is off screen while a chat is open
   const m = sessionMeta(id);
   $('#title').textContent = S.titles.get(id) || basename(m.cwd) || 'Session';
   $('#subtitle').textContent = [tildify(m.cwd), m.agentPreset].filter(Boolean).join(' · ');
@@ -922,6 +998,17 @@ function priceRowFor(cur) {
   const route = routeFor(cur);
   return lib.priceFor(route && route.model, priceOverrides());
 }
+// `contextPressure` is the wire view of dsh-token-meter's unit: provider-anchored
+// prompt tokens plus the newest route capacity. Neither side alone is a reading,
+// so both must be present or there is no fill to show.
+function contextFill(cp) {
+  if (!cp) return null;
+  const used = typeof cp.projectedTokens === 'number' ? cp.projectedTokens : cp.pressureTokens;
+  const capacity = cp.contextWindow;
+  if (typeof used !== 'number' || typeof capacity !== 'number' || capacity <= 0) return null;
+  const pct = Math.min(100, Math.round((used / capacity) * 100));
+  return { pct, level: pct >= 90 ? ' err' : (pct >= 70 ? ' warn' : '') };
+}
 function renderStatusLine() {
   const bar = $('#statusBar');
   const cur = S.cur;
@@ -933,17 +1020,13 @@ function renderStatusLine() {
 
   // Context fill: the provider-anchored prompt size over the route's capacity.
   // dsh reports neither until a request has run, so a fresh session shows no bar.
-  const pressure = projectionValue(cur.id, 'contextPressure');
-  const used = pressure && (typeof pressure.projectedTokens === 'number' ? pressure.projectedTokens : pressure.pressureTokens);
-  const capacity = pressure && pressure.contextWindow;
-  if (typeof used === 'number' && typeof capacity === 'number' && capacity > 0) {
-    const pct = Math.min(100, Math.round((used / capacity) * 100));
-    const level = pct >= 90 ? ' err' : (pct >= 70 ? ' warn' : '');
-    const fill = h('span', { class: 'status-fill' + level });
-    fill.style.setProperty('--fill', pct + '%');
+  const fill = contextFill(projectionValue(cur.id, 'contextPressure'));
+  if (fill) {
+    const bar = h('span', { class: 'status-fill' + fill.level });
+    bar.style.setProperty('--fill', fill.pct + '%');
     parts.push(h('span', { class: 'status-part' },
-      h('span', { class: 'status-track' }, fill),
-      h('span', { class: 'status-pct' }, pct + '%')));
+      h('span', { class: 'status-track' }, bar),
+      h('span', { class: 'status-pct' }, fill.pct + '%')));
   }
 
   // Session tokens. Buckets dsh has not billed stay out of the line rather than
@@ -1018,6 +1101,258 @@ $('#statusLine').onclick = () => {
   box.hidden = !open;
   line.setAttribute('aria-expanded', String(open));
 };
+
+// ---------- Running now ----------
+// One card per session that is doing something: a turn in flight, a live
+// background job, or a live subagent. Everything comes from existing dsh
+// surfaces — `session.list` carries a projection baseline (todos,
+// contextPressure, subagentTiming, sessionListMetadata), the mux pushes
+// `session/projection` and `session/jobs` frames, and `subagent.list` answers
+// the direct-child catalog for one parent.
+const DASH_KEYS = new Set(['todos', 'contextPressure', 'tokenUsage', 'subagent', 'subagentTiming', 'sessionListMetadata', 'title']);
+const dashLive = (j) => !!j && (j.status === 'running' || j.status === 'stopping');
+// Projection frames arrive per streamed chunk, so a render is coalesced to one
+// per macrotask and then skipped entirely when the signature did not move.
+let dashPending = null;
+function scheduleDashboard() {
+  if (dashPending) return;
+  dashPending = setTimeout(() => { dashPending = null; renderDashboard(); }, 0);
+  if (dashPending && dashPending.unref) dashPending.unref();
+}
+function liveJobs(id) { return (S.jobs.get(id) || []).filter(dashLive); }
+function hasLiveAgent(id, depth = 0) {
+  const tree = S.subagents.get(id);
+  if (!tree || depth > 3) return false;
+  return tree.entries.some((e) => e && e.kind === 'child' &&
+    (e.activity === 'running' || (e.hasChildren && hasLiveAgent(e.id, depth + 1))));
+}
+// When the running turn began. Live turn/start events are exact; the list
+// baseline's last human prompt is the best available anchor when the page
+// opened mid-turn, and `updatedAt` covers a log we have not seen a prompt for.
+function sessionStart(id) {
+  const live = S.turnStart.get(id);
+  if (typeof live === 'number') return live;
+  const meta = projectionValue(id, 'sessionListMetadata');
+  if (meta && typeof meta.lastPromptAt === 'number') return meta.lastPromptAt;
+  const s = S.sessions.find((x) => x.sessionId === id);
+  return s && typeof s.updatedAt === 'number' ? s.updatedAt : null;
+}
+function activeSessions() {
+  const list = (S.sessions || []).filter((s) => {
+    const id = s.sessionId;
+    return !!S.running.get(id) || liveJobs(id).length > 0 || hasLiveAgent(id);
+  });
+  return list.sort((a, b) => (sessionStart(b.sessionId) || b.updatedAt || 0) - (sessionStart(a.sessionId) || a.updatedAt || 0));
+}
+function toggleDashCard(id) {
+  if (S.dashOpen.has(id)) S.dashOpen.delete(id); else S.dashOpen.add(id);
+  dashSig = null;
+  renderDashboard();
+}
+// ----- subagent catalogs -----
+// The catalog is a snapshot, not a push, so it is refreshed while a card stays
+// on screen. Children with children are followed a few levels down; the budget
+// stops one pathological tree from turning a refresh into a crawl.
+function ensureAgentTrees(list) {
+  const now = Date.now();
+  for (const s of list) {
+    const id = s.sessionId;
+    const cached = S.subagents.get(id);
+    if (cached && now - cached.at < 8000) continue;
+    if (S.agentsLoading.has(id)) continue;
+    loadAgentTree(id, 0, { n: 0 }).catch(() => {});
+  }
+}
+async function loadAgentTree(id, depth, budget) {
+  if (budget.n >= 40 || depth > 3) return;
+  budget.n++;
+  S.agentsLoading.add(id);
+  try {
+    const v = await rpc('subagent.list', { parentSessionId: id });
+    const entries = Array.isArray(v && v.entries) ? v.entries : [];
+    S.subagents.set(id, { entries, parentAvailable: !!(v && v.parentAvailable), at: Date.now() });
+    for (const e of entries) if (e && e.kind === 'child' && e.hasChildren) await loadAgentTree(e.id, depth + 1, budget);
+  } catch {
+    // Record the attempt anyway: a deployment with no subagent domain (or a
+    // denied call) must not be retried on every render.
+    if (!S.subagents.has(id)) S.subagents.set(id, { entries: [], parentAvailable: false, at: Date.now(), failed: true });
+  } finally {
+    S.agentsLoading.delete(id);
+    scheduleDashboard();
+  }
+}
+function flattenAgents(parentId, depth, out) {
+  const tree = S.subagents.get(parentId);
+  if (!tree || depth > 3) return out;
+  for (const e of tree.entries) {
+    out.push({ e, depth });
+    if (e && e.kind === 'child' && e.hasChildren) flattenAgents(e.id, depth + 1, out);
+  }
+  return out;
+}
+// `subagentTiming` is dsh-subagent's own projection: an open interval while the
+// child turns, and accumulated settled time once it ends.
+function agentTiming(e) {
+  const t = projectionValue(e.id, 'subagentTiming');
+  if (!t) return null;
+  if (t.active && typeof t.active.since === 'number') return { since: t.active.since, live: true };
+  if (typeof t.settledMs === 'number' && t.settledMs > 0) return { settledMs: t.settledMs, live: false };
+  return null;
+}
+function jobRow(j) {
+  const live = dashLive(j);
+  const row = h('div', { class: 'run-job' },
+    h('span', { class: 'jdot ' + String(j.status || '') }),
+    h('span', { class: 'jkind' }, j.kind || 'job'),
+    h('span', { class: 'jlabel', title: j.label || '' }, j.label || ''));
+  if (live && typeof j.startedAt === 'number') row.append(h('span', { class: 'jtime', 'data-since': String(j.startedAt) }, fmtElapsed(Date.now() - j.startedAt)));
+  else row.append(h('span', { class: 'jtime' }, [j.status, j.detail].filter(Boolean).join(' · ')));
+  return row;
+}
+function agentRow({ e, depth }) {
+  const row = h('div', { class: 'run-agent' });
+  row.style.setProperty('--depth', String(depth));
+  if (e.kind === 'diagnostic') {
+    row.append(h('span', { class: 'adot' }), h('span', { class: 'aname' }, e.id || 'subagent'), h('span', { class: 'afail' }, e.reason || 'unavailable'));
+    return row;
+  }
+  const live = e.activity === 'running';
+  row.append(h('span', { class: 'adot ' + (live ? 'running' : 'settled') }));
+  row.append(h('span', { class: 'aname', title: e.id || '' }, e.label || e.id || 'subagent'));
+  if (e.mode) row.append(h('span', { class: 'amode' }, e.mode));
+  const t = agentTiming(e);
+  if (t && t.live) row.append(h('span', { class: 'atime', 'data-since': String(t.since) }, fmtElapsed(Date.now() - t.since)));
+  else if (t) row.append(h('span', { class: 'atime' }, fmtElapsed(t.settledMs)));
+  return row;
+}
+function sessionCard(s) {
+  const id = s.sessionId;
+  const running = !!S.running.get(id);
+  const start = running ? sessionStart(id) : null;
+  const title = S.titles.get(id) || basename(s.cwd) || 'Session';
+  const top = h('button', { class: 'run-top', type: 'button', 'aria-label': 'Open ' + title, onclick: () => openSession(id) },
+    h('span', { class: 'run-dot' + (running ? '' : ' idle') }),
+    h('span', { class: 'run-name' }, title),
+    running && typeof start === 'number' ? h('span', { class: 'run-elapsed', 'data-since': String(start) }, fmtElapsed(Date.now() - start)) : null);
+
+  const meters = [];
+  const todos = projectionValue(id, 'todos');
+  if (Array.isArray(todos) && todos.length) {
+    const done = todos.filter((t) => t && t.status === 'completed').length;
+    const pct = Math.round((done / todos.length) * 100);
+    const fill = h('span', { class: 'run-fill' });
+    fill.style.setProperty('--fill', pct + '%');
+    meters.push(h('div', { class: 'run-meter' },
+      h('span', { class: 'run-meter-label' }, 'todos'),
+      h('span', { class: 'run-track' }, fill),
+      h('span', { class: 'run-meter-value' }, `${done}/${todos.length}`)));
+    const current = todos.find((t) => t && t.status === 'in_progress');
+    if (current && current.content) meters.push(h('div', { class: 'run-current' }, current.content));
+  }
+  const cf = contextFill(projectionValue(id, 'contextPressure'));
+  if (cf) {
+    const fill = h('span', { class: 'run-fill' + cf.level });
+    fill.style.setProperty('--fill', cf.pct + '%');
+    meters.push(h('div', { class: 'run-meter' },
+      h('span', { class: 'run-meter-label' }, 'ctx'),
+      h('span', { class: 'run-track' }, fill),
+      h('span', { class: 'run-meter-value' }, cf.pct + '%')));
+  }
+
+  const jobs = S.jobs.get(id) || [];
+  const live = jobs.filter(dashLive);
+  const agents = flattenAgents(id, 0, []);
+  const bits = [];
+  if (live.length) bits.push(`${live.length} running job${live.length > 1 ? 's' : ''}`);
+  else if (jobs.length) bits.push(`${jobs.length} job${jobs.length > 1 ? 's' : ''}`);
+  if (agents.length) bits.push(`${agents.length} subagent${agents.length > 1 ? 's' : ''}`);
+  const expanded = S.dashOpen.has(id);
+  const more = h('button', { class: 'run-more', type: 'button', 'aria-expanded': String(expanded), onclick: () => toggleDashCard(id) },
+    h('span', { class: 'run-more-txt' }, bits.length ? bits.join(' · ') : (running ? 'working' : 'idle')),
+    h('span', { class: 'run-caret', 'aria-hidden': 'true' }, '▾'));
+
+  const detail = h('div', { class: 'run-detail' });
+  if (jobs.length) {
+    detail.append(h('div', { class: 'run-sec-title' }, 'Background jobs'));
+    const ordered = jobs.slice().sort((a, b) => (dashLive(b) ? 1 : 0) - (dashLive(a) ? 1 : 0));
+    for (const j of ordered.slice(0, 8)) detail.append(jobRow(j));
+    if (ordered.length > 8) detail.append(h('div', { class: 'run-empty' }, `+${ordered.length - 8} more`));
+  }
+  if (agents.length) {
+    detail.append(h('div', { class: 'run-sec-title' }, 'Subagents'));
+    for (const node of agents.slice(0, 24)) detail.append(agentRow(node));
+    if (agents.length > 24) detail.append(h('div', { class: 'run-empty' }, `+${agents.length - 24} more`));
+  }
+  if (!jobs.length && !agents.length) detail.append(h('div', { class: 'run-empty' }, 'No jobs or subagents.'));
+  detail.hidden = !expanded;
+  return h('article', { class: 'run-card', 'data-session': id }, top, h('div', { class: 'run-meters' }, meters), more, detail);
+}
+function agentsSig(parentId, depth) {
+  const tree = S.subagents.get(parentId);
+  if (!tree || depth > 3) return '';
+  const out = [];
+  for (const e of tree.entries) {
+    out.push([e.kind, e.id, e.activity, e.mode, e.label, e.reason].filter((x) => x != null).join(':'));
+    const t = agentTiming(e);
+    if (t) out.push(t.live ? 's' + t.since : 'd' + t.settledMs);
+    if (e.kind === 'child' && e.hasChildren) out.push('(' + agentsSig(e.id, depth + 1) + ')');
+  }
+  return out.join(',');
+}
+// What the cards would render, with time-derived strings left out so the 1s
+// ticker never forces a rebuild.
+function dashboardSignature(list) {
+  const parts = [];
+  for (const s of list) {
+    const id = s.sessionId;
+    parts.push(id, S.running.get(id) ? 'run' : 'idle', 'S' + (sessionStart(id) || ''));
+    const todos = projectionValue(id, 'todos');
+    parts.push('T' + (Array.isArray(todos) ? todos.map((t) => ((t && t.status) || '?')[0] + ((t && t.content) || '')).join('\u0001') : ''));
+    const cf = contextFill(projectionValue(id, 'contextPressure'));
+    parts.push('C' + (cf ? cf.pct : ''));
+    for (const j of S.jobs.get(id) || []) parts.push(['J', j.id, j.status, j.startedAt, j.finishedAt, j.detail, j.label].join(':'));
+    parts.push('A' + agentsSig(id, 0));
+    parts.push('O' + (S.dashOpen.has(id) ? '1' : '0'));
+  }
+  return parts.join('|');
+}
+let dashSig = null;
+let dashTickTimer = null;
+function startDashTick() {
+  if (dashTickTimer) return;
+  dashTickTimer = setInterval(tickDashboard, 1000);
+  if (dashTickTimer && dashTickTimer.unref) dashTickTimer.unref();
+}
+function stopDashTick() { if (dashTickTimer) { clearInterval(dashTickTimer); dashTickTimer = null; } }
+function tickDashboard() {
+  const box = $('#running');
+  if (!box || box.hidden) return;
+  const now = Date.now();
+  for (const el of box.querySelectorAll('[data-since]')) {
+    const since = Number(el.getAttribute('data-since'));
+    if (Number.isFinite(since)) el.textContent = fmtElapsed(now - since);
+  }
+}
+function renderDashboard() {
+  const box = $('#running');
+  if (!box) return;
+  if ($('#listView').hidden) { stopDashTick(); return; }
+  const active = activeSessions();
+  if (!active.length) { box.hidden = true; dashSig = null; stopDashTick(); return; }
+  box.hidden = false;
+  const sig = dashboardSignature(active);
+  if (sig !== dashSig) {
+    dashSig = sig;
+    $('#runningCards').replaceChildren(...active.map(sessionCard));
+    $('#runningCount').textContent = String(active.length);
+  }
+  const open = !S.dashCollapsed;
+  $('#runningHead').setAttribute('aria-expanded', String(open));
+  $('#runningCards').hidden = !open;
+  startDashTick();
+  ensureAgentTrees(active);
+}
+$('#runningHead').onclick = () => { S.dashCollapsed = !S.dashCollapsed; renderDashboard(); };
 
 // ---------- Approvals & questions ----------
 function renderPending() {

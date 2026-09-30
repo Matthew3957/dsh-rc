@@ -6,8 +6,9 @@ Independent project, not affiliated with or endorsed by DeepSeek.
 Session list, chat with streaming replies, compact tool rows you tap to expand, approval and
 question cards above the composer, stop / steer / queue, slash commands, model switching,
 image attachments, a read-only plugins and connectors screen, a per-session status line
-(model and route, context fill, session tokens, estimated cost), and Web Push notifications
-for approvals, questions, finished turns and errors.
+(model and route, context fill, session tokens, estimated cost), a Running now dashboard for
+every active session, and Web Push notifications for approvals, questions, finished turns and
+errors.
 
 No build step. `public/` is plain HTML, CSS and JS; `server/` is plain Node ESM (Node 22 or newer). Markdown uses
 marked and DOMPurify, vendored in `public/vendor/` (their license headers are kept in the files).
@@ -254,14 +255,32 @@ model-id prefix, each mapping `input`, `output`, `cacheRead` and `cacheWrite`; b
 The longest prefix wins and an override beats the shipped table. It is saved in this browser's
 `localStorage`, so it is per device.
 
+## Running now
+
+The session list opens with a **Running now** section listing every active session, meaning a
+session with a turn in flight, a live background job, or a running subagent. Tapping its header
+folds it to a one-line count. Each card carries:
+
+- **elapsed time** for the current turn. A live `turn/start` event supplies the exact origin;
+  when the page opens mid-turn it falls back to that session's last human prompt in the
+  `sessionListMetadata` projection.
+- **todo progress** from the `todos` projection, with the in-progress item named.
+- **context fill** from the `contextPressure` projection, the same provider-anchored figure as
+  the per-session status line.
+- **background jobs** from the `session/jobs` mux frame: kind, label, state and elapsed time for
+  each `JobView`.
+- **the subagent tree** from `subagent.list`, one direct-child catalog per parent, with each
+  child's `subagentTiming` projection giving its active or settled time.
+
+Everything there is read-only. Tapping a card's title opens that session; tapping its summary row
+expands the jobs and subagent tree. The section follows the projection and jobs pushes, refetches
+a subagent catalog only when it is stale, and stops while a chat is open.
+
 ## Roadmap
 
 Next, in priority order:
 
-1. **Running now dashboard**: every active session with elapsed time, todo progress
-   (`todos` projection), context fill (`contextPressure`, `tokenUsage`), background jobs
-   (`session/jobs`) and the subagent tree (`subagent.list`).
-2. **Review the work**: render `diff` view cards as real diffs, a per-turn summary card
+1. **Review the work**: render `diff` view cards as real diffs, a per-turn summary card
    (files changed, commands run, pass or fail), and plan-mode plans as approve / reject cards.
 
 Later:
