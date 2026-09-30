@@ -225,7 +225,7 @@ function onMux(p, env) {
 function onHost(p) {
   switch (p.type) {
     case 'host/session-status':
-      if (p.running && !S.running.get(p.sessionId) && !S.turnStart.has(p.sessionId)) S.turnStart.set(p.sessionId, Date.now());
+      if (p.running && !S.running.get(p.sessionId)) S.turnStart.set(p.sessionId, Date.now());
       if (!p.running) S.turnStart.delete(p.sessionId);
       S.running.set(p.sessionId, !!p.running);
       if (S.cur && p.sessionId === S.cur.id) renderRunning();
@@ -249,6 +249,7 @@ async function loadSessions() {
     for (const s of items) {
       if (s.parentSessionId) S.parent.set(s.sessionId, s.parentSessionId);
       S.running.set(s.sessionId, !!s.running);
+      if (!s.running) S.turnStart.delete(s.sessionId);
       const t = s.projections && s.projections.values && titleFromProjection(s.projections.values.title);
       if (t) S.titles.set(s.sessionId, t);
     }
@@ -585,7 +586,7 @@ function applyLive(frame) {
   cur.events.push(frame);
   const t = frame.event.type;
   if (t === 'turn/start') { S.running.set(cur.id, true); if (typeof frame.event.time === 'number') S.turnStart.set(cur.id, frame.event.time); }
-  if (t === 'turn/end') S.turnStart.delete(cur.id);
+  if (t === 'turn/end') { S.turnStart.delete(cur.id); S.running.set(cur.id, false); }
   R.apply(frame);
   if (t === 'turn/start' || t === 'turn/end') renderRunning();
 }
@@ -606,10 +607,10 @@ function turnStartTime(cur) {
     if (e.type === 'turn/start') return e.time;
     if (e.type === 'user/message') firstMsg = e.time; // keeps the earliest since the last turn ended
   }
+  // A long turn can start before the loaded history window: prefer the start we saw live,
+  // then the earliest message since the last turn, then the oldest loaded event (a lower bound beats 0).
+  if (!ended && S.turnStart.has(cur.id)) return S.turnStart.get(cur.id);
   if (firstMsg) return firstMsg;
-  // A long turn can start before the loaded history window: remember it if we saw it live,
-  // else count from the oldest loaded event (a lower bound beats restarting at 0).
-  if (S.turnStart.has(cur.id)) return S.turnStart.get(cur.id);
   return !ended && cur.hasMore ? oldest : null;
 }
 function renderRunning() {
