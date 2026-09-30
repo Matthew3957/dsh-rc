@@ -261,7 +261,7 @@ export function startWatcher({
   reconnectCapMs = RECONNECT_CAP_MS,
 } = {}) {
   if (typeof WebSocketImpl !== 'function') {
-    throw new Error('This Node has no global WebSocket. dsh-rc needs Node 22+, or Node 20 with --experimental-websocket.');
+    throw new Error('This Node has no global WebSocket. dsh-rc needs Node 22 or newer.');
   }
   const wsBase = String(dshUrl).replace(/\/+$/, '').replace(/^http/, 'ws');
   const streams = [
