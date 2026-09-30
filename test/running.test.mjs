@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import vm from 'node:vm';
 
 import * as prices from '../public/prices.js';
+import * as actions from '../public/session-actions.js';
 
 // The Running now section is rendered from the same browser script the page
 // loads. This harness runs the real public/app.js in a vm over a small DOM stub
@@ -91,6 +92,7 @@ function harness({ respond } = {}) {
   };
   const window = {
     dshPrices: prices,
+    dshActions: actions,
     addEventListener() {},
     innerHeight: 800,
     matchMedia: () => ({ matches: false }),
@@ -385,4 +387,17 @@ test('an idle session with neither a turn nor a job stays off the dashboard', as
   await t.loadSessions();
   assert.equal(t.el('#running').hidden, true);
   assert.equal(t.activeSessions().length, 0);
+});
+
+test('archived sessions leave the list and a fork with lineage stays in it', async () => {
+  const rows = [
+    { sessionId: 'a1', updatedAt: T0, running: false, blank: false, cwd: '/work/a' },
+    { sessionId: 'f1', updatedAt: T0, running: false, blank: false, cwd: '/work/a', parentSessionId: 'a1' },
+    { sessionId: 'k1', updatedAt: T0, running: false, blank: false, cwd: '/work/a', parentSessionId: 'a1', origin: 'subagent' },
+  ];
+  const t = harness({ respond: (m) => (m === 'session.list' ? { items: rows } : m === 'workspace.list' ? { items: [], archivedSessionIds: ['a1'] } : undefined) });
+  await t.loadSessions();
+  assert.deepEqual(plain(t.S.sessions.map((s) => s.sessionId)), ['f1']);
+  t.onHost({ type: 'host/archived-sessions-changed', archivedSessionIds: ['a1', 'f1'] });
+  assert.equal(t.S.sessions.length, 0);
 });

@@ -135,6 +135,7 @@ async function respond(rpcId, result) {
 // ---------- State ----------
 const S = {
   sessions: [],
+  archived: new Set(),    // ids hidden from the list (workspace.archiveSession)
   shown: 40,
   parent: new Map(),      // childId -> parentId
   titles: new Map(),      // sessionId -> title
@@ -426,12 +427,20 @@ function onHost(p) {
       scheduleDashboard();
       break;
     case 'host/session-added':
-      if (p.parentSessionId) S.parent.set(p.sessionId, p.parentSessionId);
-      if (!p.blank && !p.parentSessionId && !$('#listView').hidden) loadSessions();
+      // Only subagents fold into their parent. A fork also carries parentSessionId (lineage), but it
+      // is a session of its own and belongs in the list.
+      if (p.parentSessionId && p.origin === 'subagent') S.parent.set(p.sessionId, p.parentSessionId);
+      if (!p.blank && p.origin !== 'subagent' && !$('#listView').hidden) loadSessions();
       scheduleDashboard();
       break;
     case 'host/session-removed':
       S.jobs.delete(p.sessionId); S.subagents.delete(p.sessionId); S.dashOpen.delete(p.sessionId);
+      scheduleDashboard();
+      break;
+    case 'host/archived-sessions-changed':
+      S.archived = window.dshActions.archiveSet(p.archivedSessionIds);
+      S.sessions = window.dshActions.visibleSessions(S.sessions, S.archived);
+      if (!$('#listView').hidden && !S.searchMode) renderList();
       scheduleDashboard();
       break;
     case 'host/agent-error':
@@ -443,10 +452,12 @@ function onHost(p) {
 // ---------- Sessions list ----------
 async function loadSessions() {
   try {
-    const v = await rpc('session.list', {});
+    // workspace.list carries the archive set; session.list keeps returning archived rows.
+    const [v, ws] = await Promise.all([rpc('session.list', {}), rpc('workspace.list', {}).catch(() => null)]);
+    if (ws && ws.archivedSessionIds) S.archived = window.dshActions.archiveSet(ws.archivedSessionIds);
     const items = v.items || [];
     for (const s of items) {
-      if (s.parentSessionId) S.parent.set(s.sessionId, s.parentSessionId);
+      if (s.parentSessionId && s.origin === 'subagent') S.parent.set(s.sessionId, s.parentSessionId);
       S.running.set(s.sessionId, !!s.running);
       if (!s.running) S.turnStart.delete(s.sessionId);
       const values = s.projections && s.projections.values;
@@ -454,7 +465,7 @@ async function loadSessions() {
       const t = values && titleFromProjection(values.title);
       if (t) S.titles.set(s.sessionId, t);
     }
-    S.sessions = items.filter((s) => !s.blank && !s.parentSessionId && s.origin !== 'subagent');
+    S.sessions = window.dshActions.visibleSessions(items.filter((s) => !s.blank && s.origin !== 'subagent'), S.archived);
     saveTitles();
     if (!S.searchMode) renderList();
     renderDashboard();
@@ -1959,6 +1970,9 @@ $('#menuBtn').onclick = () => {
     h('button', { class: 'menuitem', onclick: commandsSheet }, 'Commands', h('small', {}, 'Slash commands available here')),
     notifRow,
     h('button', { class: 'menuitem', onclick: renameSheet }, 'Rename'),
+    h('button', { class: 'menuitem', onclick: forkSession }, 'Fork', h('small', {}, 'Branch a new session from the last finished turn')),
+    h('button', { class: 'menuitem', onclick: exportSheet }, 'Export log', h('small', {}, 'Download this session as a ZIP')),
+    h('button', { class: 'menuitem', onclick: archiveSheet }, 'Archive', h('small', {}, 'Hide it from the session list')),
     h('button', { class: 'menuitem', onclick: pluginsSheet }, 'Plugins & connectors', h('small', {}, 'What this dsh has loaded')),
     h('button', { class: 'menuitem', onclick: () => { closeSheet(); loadHistory(); } }, 'Refresh'),
     h('a', { class: 'menuitem', href: '/', style: 'color:inherit;text-decoration:none' }, 'Open full dsh web UI'));
@@ -2075,6 +2089,63 @@ function renameSheet() {
   };
   openSheet(h('h3', {}, 'Rename'), inp, go);
   setTimeout(() => inp.focus(), 100);
+}
+
+// ---------- Fork, export, archive ----------
+async function forkSession() {
+  const cur = S.cur;
+  closeSheet();
+  toast('Forking…');
+  try {
+    const r = await rpc('session.fork', { sessionId: cur.id });
+    const title = S.titles.get(cur.id);
+    if (title) setTitle(r.sessionId, title);
+    const m = sessionMeta(cur.id);
+    S.sessions.unshift({ sessionId: r.sessionId, cwd: m.cwd, agentPreset: m.agentPreset, updatedAt: Date.now() });
+    toast('Forked. You are in the new session.');
+    openSession(r.sessionId);
+  } catch (e) { toast(window.dshActions.forkFailure(e), 5000); }
+}
+function exportSheet() {
+  const cur = S.cur;
+  const withSub = h('input', { type: 'checkbox', id: 'expSub' });
+  const go = h('button', { type: 'button', class: 'go' }, 'Download ZIP');
+  go.onclick = async () => {
+    const url = window.dshActions.exportUrl(cur.id, { includeDescendants: withSub.checked });
+    go.disabled = true; go.textContent = 'Preparing…';
+    try {
+      // HEAD first, so a failure is a message here rather than a dead download page.
+      const r = await fetch(url, { method: 'HEAD' });
+      checkLogin(r);
+      if (!r.ok) throw new Error(r.status === 404 ? 'session not found' : 'HTTP ' + r.status);
+      const a = h('a', { href: url, download: window.dshActions.exportFilename(r.headers.get('content-disposition'), cur.id) });
+      document.body.append(a); a.click(); a.remove();
+      closeSheet();
+    } catch (e) { toast('Export failed: ' + e.message, 4000); go.disabled = false; go.textContent = 'Download ZIP'; }
+  };
+  openSheet(h('h3', {}, 'Export log'),
+    h('div', { class: 'note' }, 'The stored log of this session as a ZIP.'),
+    h('label', { for: 'expSub', style: 'display:flex;gap:10px;align-items:center;text-transform:none;letter-spacing:0;font-size:15px;color:inherit' },
+      withSub, 'Include subagent logs'),
+    go);
+}
+function archiveSheet() {
+  const cur = S.cur;
+  const go = h('button', { type: 'button', class: 'go' }, 'Archive session');
+  go.onclick = async () => {
+    go.disabled = true; go.textContent = 'Archiving…';
+    try {
+      const r = await rpc('workspace.archiveSession', { sessionId: cur.id });
+      S.archived = window.dshActions.archiveSet(r.archivedSessionIds);
+      S.sessions = window.dshActions.visibleSessions(S.sessions, S.archived);
+      closeSheet(); toast('Archived');
+      showList();
+    } catch (e) { toast('Archive failed: ' + e.message, 4000); go.disabled = false; go.textContent = 'Archive session'; }
+  };
+  openSheet(h('h3', {}, 'Archive this session?'),
+    h('div', { class: 'note' }, 'It leaves the session list, but its log is kept. dsh has no unarchive action, so this cannot be undone from here.'),
+    go,
+    h('button', { type: 'button', class: 'menuitem', onclick: closeSheet }, 'Cancel'));
 }
 
 // ---------- Notifications (Web Push) ----------
