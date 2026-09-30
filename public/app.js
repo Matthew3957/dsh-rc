@@ -150,6 +150,8 @@ const S = {
   queues: new Map(),      // sessionId -> items
   projections: new Map(), // sessionId -> Map(key -> {seq, value})
   jobs: new Map(),        // sessionId -> JobView[] (the session/jobs snapshot)
+  jobOut: new Map(),      // jobId -> {text, gap, streaming, error} while its output is observed
+  jobOpen: new Set(),     // jobIds whose output pane is expanded
   subagents: new Map(),   // parentId -> {entries, parentAvailable, at}
   agentsLoading: new Set(), // parentIds whose subagent.list call is in flight
   dashOpen: new Set(),    // sessionIds whose dashboard card is expanded
@@ -434,7 +436,12 @@ function onMux(p, env) {
       // arrives as [] because absence cannot express "just finished".
       if (Array.isArray(p.jobs) && p.jobs.length) S.jobs.set(p.sessionId, p.jobs);
       else S.jobs.delete(p.sessionId);
+      pruneJobOutput();
       scheduleDashboard();
+      break;
+    case 'job/output':
+      // One observed job's live output and terminal status (dsh 0.2, on demand).
+      handleJobOutput(p);
       break;
     case 'session/projection': {
       if (p.key === 'title') setTitle(p.sessionId, titleFromProjection(p.value));
@@ -472,6 +479,7 @@ function onHost(p) {
       break;
     case 'host/session-removed':
       S.jobs.delete(p.sessionId); S.subagents.delete(p.sessionId); S.dashOpen.delete(p.sessionId);
+      pruneJobOutput();
       scheduleDashboard();
       break;
     case 'host/archived-sessions-changed':
@@ -509,6 +517,7 @@ async function loadSessions() {
     }
     const listed = items.filter((s) => !s.blank && s.origin !== 'subagent');
     S.sessions = acts ? acts.visibleSessions(listed, S.archived) : listed;
+    watchDashJobs();
     saveTitles();
     if (!readState.seeded) {
       // First run on this device: everything so far counts as read.
@@ -1699,15 +1708,151 @@ function agentTiming(e) {
   if (typeof t.settledMs === 'number' && t.settledMs > 0) return { settledMs: t.settledMs, live: false };
   return null;
 }
-function jobRow(j) {
+// ----- background jobs -----
+// dsh 0.1 pushes a `session/jobs` frame per session. dsh 0.2 has no host-wide jobs feed, so
+// public/dsh02.js opens one `job/list` stream per session the page wants watched and maps its
+// rows onto the same frame. `job/follow` is opened only while a row's output is expanded;
+// `job/kill` is 0.2-only, so the stop control appears there and never on the older API.
+const JOB_OUT_MAX = 4096;       // render tail for one job's output, in UTF-16 units
+const JOB_WATCH_MAX = 64;       // job/list streams one page will open (list is activity-ordered)
+const jobPanels = new Map();    // jobId -> the rendered <pre> of an expanded row
+function watchDashJobs() {
+  if (!dsh2 || typeof dsh2.watchJobs !== 'function') return;
+  const ids = [];
+  const seen = new Set();
+  for (const s of S.sessions) {
+    if (ids.length >= JOB_WATCH_MAX) break;
+    if (seen.has(s.sessionId)) continue;
+    seen.add(s.sessionId); ids.push(s.sessionId);
+  }
+  // Keep watching a session whose jobs are already known even after it falls out of the cap.
+  for (const id of S.jobs.keys()) if (!seen.has(id)) { seen.add(id); ids.push(id); }
+  dsh2.watchJobs(ids);
+}
+function dropJobOutput(jobId) {
+  S.jobOut.delete(jobId);
+  S.jobOpen.delete(jobId);
+  jobPanels.delete(jobId);
+  if (dsh2 && typeof dsh2.stopObserve === 'function') dsh2.stopObserve(jobId);
+}
+// A roster frame is the whole set, so any observed job it no longer lists is gone.
+function pruneJobOutput() {
+  if (!S.jobOut.size && !S.jobOpen.size) return;
+  const present = new Set();
+  for (const list of S.jobs.values()) for (const j of list) if (j && j.id) present.add(j.id);
+  for (const jobId of [...S.jobOut.keys()]) if (!present.has(jobId)) dropJobOutput(jobId);
+  for (const jobId of [...S.jobOpen]) if (!present.has(jobId) && !S.jobOut.has(jobId)) S.jobOpen.delete(jobId);
+}
+// The terminal `job/follow` status carries the same JobView the roster will push, so merge it
+// into the row the page already has rather than resurrect a job the roster dropped.
+function mergeJob(sessionId, job) {
+  if (!job || job.id == null) return;
+  const list = S.jobs.get(sessionId);
+  if (!list) return;
+  const i = list.findIndex((x) => x && x.id === job.id);
+  if (i < 0) return;
+  const next = list.slice();
+  next[i] = { ...list[i], ...job };
+  S.jobs.set(sessionId, next);
+}
+function jobOutBody(out) {
+  if (!out) return '';
+  return out.text || (out.error ? out.error : '');
+}
+function updateJobOutputDom(jobId) {
+  const el = jobPanels.get(jobId);
+  if (el) el.textContent = jobOutBody(S.jobOut.get(jobId));
+}
+function handleJobOutput(p) {
+  const jobId = p.jobId;
+  if (!jobId) return;
+  const cur = S.jobOut.get(jobId) || { text: '', gap: false, streaming: true, error: null };
+  if (p.kind === 'opened') {
+    cur.text = ''; cur.gap = false; cur.error = null; cur.streaming = true;
+    mergeJob(p.sessionId, p.job);
+  } else if (p.kind === 'output') {
+    let text = cur.text;
+    for (const c of Array.isArray(p.chunks) ? p.chunks : []) {
+      if (c && c.gapBefore === true) cur.gap = true;
+      if (c && typeof c.text === 'string') text += c.text;
+    }
+    if (p.lossy === true) cur.gap = true;
+    if (text.length > JOB_OUT_MAX) { cur.gap = true; text = text.slice(text.length - JOB_OUT_MAX); }
+    cur.text = text;
+  } else if (p.kind === 'status') {
+    cur.streaming = false;
+    mergeJob(p.sessionId, p.job);
+  } else if (p.kind === 'error') {
+    cur.streaming = false;
+    cur.error = (p.error && p.error.message) || 'output unavailable';
+  } else if (p.kind === 'end') {
+    cur.streaming = false;
+  }
+  S.jobOut.set(jobId, cur);
+  updateJobOutputDom(jobId);
+  if (p.kind === 'status' || p.kind === 'error' || p.kind === 'end') { dashSig = null; scheduleDashboard(); }
+}
+function jobCanView(j) {
+  if (!dsh2 || typeof dsh2.observeJob !== 'function') return false;
+  return dashLive(j) || !!(j.output && j.output.total > 0) || S.jobOut.has(j.id);
+}
+function toggleJobOutput(sessionId, j) {
+  if (S.jobOpen.has(j.id)) { dropJobOutput(j.id); dashSig = null; renderDashboard(); return; }
+  S.jobOpen.add(j.id);
+  S.jobOut.set(j.id, { text: '', gap: false, streaming: true, error: null });
+  if (dsh2 && typeof dsh2.observeJob === 'function') dsh2.observeJob(sessionId, j.id);
+  dashSig = null;
+  renderDashboard();
+}
+// No prompt/confirm on a phone: the first tap arms, the second stops, a third-second pause disarms.
+function stopJobButton(sessionId, j) {
+  const label = j.label || j.kind || 'job';
+  const btn = h('button', { class: 'jstop', type: 'button', 'aria-label': 'Stop ' + label }, 'stop');
+  let armed = false;
+  let timer = null;
+  const reset = () => { armed = false; clearTimeout(timer); btn.textContent = 'stop'; btn.classList.remove('armed'); };
+  btn.onclick = async () => {
+    if (!armed) {
+      armed = true; btn.textContent = 'sure?'; btn.classList.add('armed');
+      timer = setTimeout(reset, 3000);
+      return;
+    }
+    reset();
+    btn.disabled = true; btn.textContent = '…';
+    try {
+      const v = await dsh2.killJob(sessionId, j.id);
+      toast(v && v.outcome === 'already-finished' ? 'That job already finished' : 'Stopping ' + label);
+    } catch (e) {
+      toast('Could not stop it: ' + ((e && e.message) || 'unknown error'));
+      btn.disabled = false; btn.textContent = 'stop';
+    }
+  };
+  return btn;
+}
+function jobRow(j, sessionId) {
   const live = dashLive(j);
+  const view = jobCanView(j);
+  const expanded = S.jobOpen.has(j.id);
+  const label = view
+    ? h('button', { class: 'jlabel jtoggle', type: 'button', title: j.label || '', 'aria-expanded': String(expanded), onclick: () => toggleJobOutput(sessionId, j) }, j.label || '')
+    : h('span', { class: 'jlabel', title: j.label || '' }, j.label || '');
   const row = h('div', { class: 'run-job' },
     h('span', { class: 'jdot ' + String(j.status || '') }),
     h('span', { class: 'jkind' }, j.kind || 'job'),
-    h('span', { class: 'jlabel', title: j.label || '' }, j.label || ''));
+    label);
   if (live && typeof j.startedAt === 'number') row.append(h('span', { class: 'jtime', 'data-since': String(j.startedAt) }, fmtElapsed(Date.now() - j.startedAt)));
   else row.append(h('span', { class: 'jtime' }, [j.status, j.detail].filter(Boolean).join(' · ')));
-  return row;
+  if (view) row.append(h('span', { class: 'jcaret', 'aria-hidden': 'true' }, expanded ? '▾' : '▸'));
+  if (dsh2 && typeof dsh2.killJob === 'function' && j.status === 'running') row.append(stopJobButton(sessionId, j));
+  const wrap = h('div', { class: 'run-jobwrap' }, row);
+  if (expanded) {
+    const pre = h('pre', { class: 'jout', 'data-job': j.id }, jobOutBody(S.jobOut.get(j.id)));
+    jobPanels.set(j.id, pre);
+    wrap.append(pre);
+  } else {
+    jobPanels.delete(j.id);
+  }
+  return wrap;
 }
 function agentRow({ e, depth }) {
   const row = h('div', { class: 'run-agent' });
@@ -1775,7 +1920,7 @@ function sessionCard(s) {
   if (jobs.length) {
     detail.append(h('div', { class: 'run-sec-title' }, 'Background jobs'));
     const ordered = jobs.slice().sort((a, b) => (dashLive(b) ? 1 : 0) - (dashLive(a) ? 1 : 0));
-    for (const j of ordered.slice(0, 8)) detail.append(jobRow(j));
+    for (const j of ordered.slice(0, 8)) detail.append(jobRow(j, id));
     if (ordered.length > 8) detail.append(h('div', { class: 'run-empty' }, `+${ordered.length - 8} more`));
   }
   if (agents.length) {

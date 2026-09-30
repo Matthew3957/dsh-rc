@@ -31,7 +31,7 @@ function stubEl(selector) {
     scrollWidth: 0,
     clientWidth: 0,
     classList: { toggle() {}, add() {}, remove() {}, contains: () => false },
-    addEventListener() {},
+    addEventListener(name, fn) { el['on' + name] = fn; },
     removeEventListener() {},
     setAttribute(name, value) { el[name] = value; },
     getAttribute: (name) => el[name],
@@ -126,7 +126,7 @@ function harness({ respond } = {}) {
   };
   context.globalThis = context;
   vm.createContext(context);
-  const epilogue = '\n;globalThis.__t = { S, renderDashboard, scheduleDashboard, onMux, onHost, loadSessions, fmtElapsed, activeSessions, liveJobs, toggleDashCard };';
+  const epilogue = '\n;globalThis.__t = { S, renderDashboard, scheduleDashboard, onMux, onHost, loadSessions, fmtElapsed, activeSessions, liveJobs, toggleDashCard, jobRow, handleJobOutput, mergeJob, watchDashJobs, post, get dsh2() { return dsh2; }, setDsh2(v) { dsh2 = v; } };';
   vm.runInContext(APP + epilogue, context, { filename: 'public/app.js' });
   const t = context.__t;
   t.el = (sel) => document.querySelector(sel);
@@ -401,4 +401,115 @@ test('archived sessions leave the list and a fork with lineage stays in it', asy
   assert.deepEqual(plain(t.S.sessions.map((s) => s.sessionId)), ['f1']);
   t.onHost({ type: 'host/archived-sessions-changed', archivedSessionIds: ['a1', 'f1'] });
   assert.equal(t.S.sessions.length, 0);
+});
+
+// --- dsh 0.2: the page watches the sessions it lists, shows their jobs from
+// public/dsh02.js's session/jobs frames, and offers the 0.2-only controls ---
+
+const fakeDsh2 = (t, over = {}) => ({
+  rpc: (method, payload, rpcId) => t.post(method, payload, rpcId),
+  connect() {},
+  isOpen: () => true,
+  watchJobs: () => {},
+  observeJob: () => {},
+  stopObserve: () => {},
+  killJob: async () => ({ outcome: 'requested' }),
+  ...over,
+});
+
+test('the 0.2 adapter is asked to watch exactly the sessions the page lists', async () => {
+  const t = harness({ respond: (m) => (m === 'session.list' ? { items: [summary()] } : undefined) });
+  const watched = [];
+  t.setDsh2(fakeDsh2(t, { watchJobs: (ids) => watched.push(ids) }));
+  await t.loadSessions();
+  assert.deepEqual(plain(watched.at(-1)), ['s1']);
+});
+
+test('a 0.2 job row shows elapsed time and stops on the second tap', async () => {
+  const t = harness({ respond: (m) => (m === 'session.list' ? { items: [summary()] } : undefined) });
+  const killed = [];
+  t.setDsh2(fakeDsh2(t, { killJob: async (sessionId, jobId) => { killed.push([sessionId, jobId]); return { outcome: 'requested' }; } }));
+  await t.loadSessions();
+  t.onMux(jobsFrame('s1', [runningJob()]), {});
+  t.renderDashboard();
+  t.toggleDashCard('s1');
+  const job = oneByClass(t.card('s1'), 'run-job');
+  assert.equal(oneByClass(job, 'jtime').getAttribute('data-since'), String(T0 - 5_000));
+  const stop = oneByClass(job, 'jstop');
+  assert.ok(stop, 'the running job carries a stop control on 0.2');
+  await stop.onclick();
+  assert.equal(stop.textContent, 'sure?');
+  assert.deepEqual(killed, [], 'the first tap only arms');
+  await stop.onclick();
+  assert.deepEqual(plain(killed), [['s1', 'bash-1']]);
+});
+
+test('tapping a 0.2 job row follows its output and the pane fills from the stream', async () => {
+  const t = harness({ respond: (m) => (m === 'session.list' ? { items: [summary()] } : undefined) });
+  const observed = [];
+  t.setDsh2(fakeDsh2(t, {
+    observeJob: (sessionId, jobId) => observed.push(['observe', sessionId, jobId]),
+    stopObserve: (jobId) => observed.push(['stop', jobId]),
+  }));
+  await t.loadSessions();
+  t.onMux(jobsFrame('s1', [runningJob()]), {});
+  t.renderDashboard();
+  t.toggleDashCard('s1');
+  oneByClass(t.card('s1'), 'jtoggle').onclick();
+  assert.deepEqual(observed, [['observe', 's1', 'bash-1']]);
+  assert.equal(t.S.jobOpen.has('bash-1'), true);
+  t.onMux({ type: 'job/output', sessionId: 's1', jobId: 'bash-1', kind: 'opened', job: runningJob() }, {});
+  t.onMux({ type: 'job/output', sessionId: 's1', jobId: 'bash-1', kind: 'output', chunks: [{ at: 0, text: 'line 1\n' }, { at: 7, text: 'line 2\n', gapBefore: true }], lossy: false }, {});
+  assert.equal(t.S.jobOut.get('bash-1').text, 'line 1\nline 2\n');
+  assert.equal(t.S.jobOut.get('bash-1').gap, true);
+  t.renderDashboard();
+  assert.equal(oneByClass(t.card('s1'), 'jout').textContent, 'line 1\nline 2\n');
+  // The terminal status settles the row with its exit status and ends the live clock.
+  t.onMux({ type: 'job/output', sessionId: 's1', jobId: 'bash-1', kind: 'status', job: { id: 'bash-1', kind: 'bash', label: 'sleep 180', status: 'completed', detail: 'exit code: 0', startedAt: T0 - 5_000, finishedAt: T0 } }, {});
+  assert.equal(t.S.jobOut.get('bash-1').streaming, false);
+  assert.equal(t.S.jobs.get('s1')[0].status, 'completed');
+  assert.equal(t.S.jobs.get('s1')[0].detail, 'exit code: 0');
+  t.renderDashboard();
+  assert.match(textOf(oneByClass(t.card('s1'), 'jtime')), /completed · exit code: 0/);
+  // Collapsing the pane stops the follow.
+  oneByClass(t.card('s1'), 'jtoggle').onclick();
+  assert.equal(t.S.jobOpen.has('bash-1'), false);
+  assert.deepEqual(observed.at(-1), ['stop', 'bash-1']);
+});
+
+test('without the 0.2 adapter a job row keeps its quiet 0.1 shape', async () => {
+  const t = harness({ respond: (m) => (m === 'session.list' ? { items: [summary()] } : undefined) });
+  await t.loadSessions();
+  t.onMux(jobsFrame('s1', [runningJob({ output: { total: 9, earliest: 0 } })]), {});
+  t.renderDashboard();
+  t.toggleDashCard('s1');
+  const job = oneByClass(t.card('s1'), 'run-job');
+  assert.equal(oneByClass(job, 'jstop'), undefined);
+  assert.equal(oneByClass(job, 'jtoggle'), undefined);
+  assert.equal(textOf(oneByClass(job, 'jlabel')), 'sleep 180');
+});
+
+test('a job the roster drops has its output read stopped and its pane forgotten', () => {
+  const t = harness();
+  const stopped = [];
+  t.setDsh2(fakeDsh2(t, { stopObserve: (jobId) => stopped.push(jobId) }));
+  t.S.jobs.set('s1', [{ id: 'bash-1', status: 'running' }]);
+  t.S.jobOut.set('bash-1', { text: 'x', streaming: true });
+  t.S.jobOpen.add('bash-1');
+  t.onMux(jobsFrame('s1', []), {});
+  assert.equal(t.S.jobs.has('s1'), false);
+  assert.equal(t.S.jobOut.has('bash-1'), false);
+  assert.equal(t.S.jobOpen.has('bash-1'), false);
+  assert.deepEqual(stopped, ['bash-1']);
+});
+
+test('a terminal output status never resurrects a job the roster no longer has', () => {
+  const t = harness();
+  t.mergeJob('s1', { id: 'bash-1', status: 'completed' });
+  assert.equal(t.S.jobs.has('s1'), false);
+  t.S.jobs.set('s1', [{ id: 'bash-1', status: 'running', label: 'x' }]);
+  t.mergeJob('s1', { id: 'bash-1', status: 'completed', detail: 'exit code: 0' });
+  assert.equal(t.S.jobs.get('s1')[0].status, 'completed');
+  assert.equal(t.S.jobs.get('s1')[0].detail, 'exit code: 0');
+  assert.equal(t.S.jobs.get('s1')[0].label, 'x', 'the roster row keeps its other fields');
 });

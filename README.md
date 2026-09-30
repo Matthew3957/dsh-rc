@@ -295,6 +295,11 @@ Everything below comes from the generated `typert.remote-client.d.ts` contracts 
 `dsh-commands`, `dsh-user-questions` and `dsh-host-plugin-inventory`, the framing in
 `dsh-api-gateway`'s stream protocol, and the `approval/request` and `user-questions/request`
 events in `dsh-user-approval` and `dsh-user-questions`, checked against a running 0.2.0-rc.2.
+`dsh-api-session-controller`, `dsh-api-workspace-controller`, `dsh-api-job-controller`,
+`dsh-agent-preset-registry`, `dsh-commands` and `dsh-user-questions`, the framing in
+`dsh-api-gateway`'s stream protocol, and
+the `approval/request` and `user-questions/request` events in `dsh-user-approval` and
+`dsh-user-questions`, checked against a running 0.2.0-rc.2.
 
 - **Calls.** `POST /api/<namespace>/<method>`, `payload: {args}`, every parameter under its declared
   name (`session/list` wants `{_request: {}}`, `session/prompt` wants `{request: {...}}`).
@@ -327,14 +332,19 @@ events in `dsh-user-approval` and `dsh-user-questions`, checked against a runnin
   `[exit code: N]` marker dsh-shell appends (the persistent shell's `[Command finished with exit
   code N]`). The diff rows, the turn summary card and the verdict then work as on 0.1.
 
+**Background jobs.** 0.2 has no host-wide jobs feed, so `public/dsh02.js` opens one `job/list`
+stream per listed session (the first 64, since the list is activity-ordered; its own jobs plus
+every unowned job), maps each whole-set `rows` frame onto the page's `session/jobs` frame, and
+keeps the streams across reconnects; a stream failure clears only that session. Tapping a job row
+opens a `job/follow` stream for its retained output, and a running job carries a two-tap stop that
+calls `job/kill`. There is no `job/kill` in the older API, so the stop control is absent there.
+
 ### Not ported yet (dsh 0.2)
 
 - **Other tool cards** (read, grep and glob, web search and fetch, todos) stay generic rows: name,
   arguments and result text. A `str_replace_editor` edit shows its diff while it runs and a plain
   row once settled, as in dsh's web client, so it is not counted in the turn summary. A command
   whose output was spilled to a file has no exit code to show.
-- **Background jobs** in Running now (`session/jobs` frames): 0.2 has `job/list` and `job/follow`
-  streams, not wired.
 - **Subagent tree** is built from the `subagentCatalog` projection: no grandchildren, and a child's
   activity is only as fresh as the last status event.
 - **A question dsh already moved on from** (its timed wait ran out and the agent continued) is not
@@ -427,13 +437,16 @@ open. Each card carries:
 - **context fill** from the `contextPressure` projection, the same provider-anchored figure as
   the per-session status line.
 - **background jobs** from the `session/jobs` mux frame: kind, label, state and elapsed time for
-  each `JobView`.
+  each `JobView`. On dsh 0.2 the same rows arrive from one `job/list` stream per listed session; a
+  tap on a job row opens its retained output (`job/follow`), and a running job carries a two-tap
+  **stop** that calls `job/kill` (the older API has no kill, so there is no stop there).
 - **the subagent tree** from `subagent.list`, one direct-child catalog per parent, with each
   child's `subagentTiming` projection giving its active or settled time.
 
-Everything there is read-only. Tapping a card's title opens that session; tapping its summary row
-expands the jobs and subagent tree. The section follows the projection and jobs pushes, refetches
-a subagent catalog only when it is stale, and stops while a chat is open.
+Everything there is read-only except the 0.2 stop. Tapping a card's title opens that session;
+tapping its summary row expands the jobs and subagent tree, and tapping a 0.2 job row expands its
+output. The section follows the projection and jobs pushes, refetches a subagent catalog only when
+it is stale, and stops while a chat is open.
 
 ## Regenerating the screenshots
 

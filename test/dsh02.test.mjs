@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { bareCode, createClient, fromControl, fromEvents, fromFollow, fromPluginInventory, fromWorkspace, goalOf, goalStatus, inboxToQueue, liveChunksOf, localizedText, toolCallView, toolResultView } from '../public/dsh02.js';
+import { bareCode, createClient, fromControl, fromEvents, fromFollow, fromPluginInventory, fromWorkspace, goalOf, goalStatus, inboxToQueue, liveChunksOf, localizedText, toolCallView, toolResultView, fromJobFollow, fromJobs } from '../public/dsh02.js';
 import { createNotifier } from '../server/notify.mjs';
 
 test('api-session emits become the host frames the page reads', () => {
@@ -130,6 +130,31 @@ test('the reply mid-stream at a snapshot is replayed as chunks', () => {
   assert.deepEqual(out.map((o) => o.event.data.chunk.text), ['hi', 'yo']);
   assert.equal(out[0].event.data.step, 2);
   assert.deepEqual(liveChunksOf({}, 's1'), []);
+});
+
+test('job/list rows become the session/jobs frame with just the 0.1 view fields', () => {
+  const frame = fromJobs({ type: 'rows', jobs: [
+    { id: 'bash-1', kind: 'bash', label: 'sleep 180', owner: 's1', outputLimitBytes: 999, status: 'running', progress: '3/10', startedAt: 5, output: { total: 12, earliest: 0, spillPaths: ['/tmp/spill'] } },
+    { id: 'bash-2', kind: 'bash', label: 'make', status: 'completed', detail: 'exit code: 0', startedAt: 1, finishedAt: 9, output: { total: 4, earliest: 2 } },
+  ] }, 's1');
+  assert.equal(frame.length, 1);
+  assert.deepEqual(frame[0].payload, { type: 'session/jobs', sessionId: 's1', jobs: [
+    { id: 'bash-1', kind: 'bash', label: 'sleep 180', status: 'running', startedAt: 5, output: { total: 12, earliest: 0 } },
+    { id: 'bash-2', kind: 'bash', label: 'make', status: 'completed', detail: 'exit code: 0', startedAt: 1, finishedAt: 9, output: { total: 4, earliest: 2 } },
+  ] });
+  // The empty whole-set frame still reaches the page, so "the last job finished" is expressible.
+  assert.deepEqual(fromJobs({ type: 'rows', jobs: [] }, 's1')[0].payload.jobs, []);
+  assert.deepEqual(fromJobs({ type: 'rows' }, 's1')[0].payload.jobs, []);
+  assert.deepEqual(fromJobs({ type: 'other' }, 's1'), []);
+});
+
+test('job/follow frames become transient job/output frames', () => {
+  const job = { id: 'bash-1', kind: 'bash', label: 'sleep 180', status: 'running', startedAt: 1, output: { total: 0, earliest: 0 } };
+  assert.deepEqual(fromJobFollow({ type: 'opened', job, from: 0 }, 's1', 'bash-1')[0].payload, { type: 'job/output', sessionId: 's1', jobId: 'bash-1', kind: 'opened', job });
+  assert.deepEqual(fromJobFollow({ type: 'output', chunks: [{ at: 0, text: 'hi' }], next: 2 }, 's1', 'bash-1')[0].payload, { type: 'job/output', sessionId: 's1', jobId: 'bash-1', kind: 'output', chunks: [{ at: 0, text: 'hi' }], lossy: false });
+  assert.deepEqual(fromJobFollow({ type: 'output', chunks: [], next: 2, lossy: true }, 's1', 'bash-1')[0].payload.lossy, true);
+  assert.deepEqual(fromJobFollow({ type: 'status', job: { id: 'bash-1', status: 'completed', detail: 'exit code: 0' } }, 's1', 'bash-1')[0].payload.job.detail, 'exit code: 0');
+  assert.deepEqual(fromJobFollow({ type: 'nope' }, 's1', 'bash-1'), []);
 });
 
 test('bareCode drops the namespace dsh 0.2 puts on error codes', () => {
@@ -371,4 +396,86 @@ test('tool result views read dsh-shell\'s exit markers and dsh-tool-fs\'s applie
   assert.deepEqual(toolResultView('str_replace_editor', { command: 'create', path: 'c', file_text: '' }, { content: text('ok') }), { card: 'generic' });
   assert.equal(toolResultView('read', { file_path: 'a.js' }, { content: text('...') }), null);
   assert.equal(toolResultView(undefined, undefined, { content: text('orphan') }), null);
+});
+
+test('watchJobs opens one job/list stream per session and reconciles the set', () => {
+  const { client } = harness();
+  client.connect();
+  const ws = FakeSocket.last;
+  ws.open();
+  client.watchJobs(['s1', 's2']);
+  const opens = ws.sent.filter((m) => m.endpoint === 'job/list');
+  assert.deepEqual(opens.map((m) => m.payload.args), [{ request: { sessionId: 's1' } }, { request: { sessionId: 's2' } }]);
+  client.watchJobs(['s2', 's3']);
+  const cancelled = ws.sent.filter((m) => m.type === 'cancel');
+  assert.equal(cancelled.length, 1);
+  assert.equal(cancelled[0].streamId, opens.find((m) => m.payload.args.request.sessionId === 's1').streamId);
+  assert.equal(ws.sent.filter((m) => m.endpoint === 'job/list' && m.payload.args.request.sessionId === 's3').length, 1);
+  // Watching the same set again is a no-op.
+  client.watchJobs(['s2', 's3']);
+  assert.equal(ws.sent.filter((m) => m.endpoint === 'job/list').length, 3);
+});
+
+test('a job/list frame reaches the page as session/jobs and a failure only clears that session', () => {
+  const { client, frames, state } = harness();
+  client.connect();
+  const ws = FakeSocket.last;
+  ws.open();
+  client.watchJobs(['s1']);
+  const jl = ws.sent.find((m) => m.endpoint === 'job/list');
+  ws.push({ type: 'item', streamId: jl.streamId, value: { type: 'rows', jobs: [{ id: 'bash-1', kind: 'bash', label: 'run', status: 'running', startedAt: 1, output: { total: 0, earliest: 0 } }] } });
+  assert.deepEqual(frames.at(-1).payload, { type: 'session/jobs', sessionId: 's1', jobs: [{ id: 'bash-1', kind: 'bash', label: 'run', status: 'running', startedAt: 1, output: { total: 0, earliest: 0 } }] });
+  ws.readyState = 1;
+  ws.push({ type: 'error', streamId: jl.streamId, error: { code: 'gateway/internal', message: 'gone' } });
+  assert.deepEqual(frames.at(-1).payload, { type: 'session/jobs', sessionId: 's1', jobs: [] });
+  assert.equal(state.down, 0, 'a job stream failing does not take the feed down');
+  // A later watch retries the roster on the same socket.
+  client.watchJobs(['s1']);
+  assert.equal(ws.sent.filter((m) => m.endpoint === 'job/list').length, 2);
+});
+
+test('killJob posts job/kill for a session that can see the job', async () => {
+  const { client, calls } = harness();
+  const v = await client.killJob('s1', 'bash-1');
+  assert.deepEqual(v, { echoed: 'job/kill' });
+  assert.deepEqual(calls.at(-1), { endpoint: 'job/kill', payload: { args: { request: { sessionId: 's1', jobId: 'bash-1' } } }, rpcId: undefined });
+});
+
+test('observeJob follows one job on demand, cancels on collapse, and reopens after a reconnect', () => {
+  const { client, frames } = harness();
+  client.connect();
+  const ws = FakeSocket.last;
+  ws.open();
+  client.observeJob('s1', 'bash-1');
+  const open = ws.sent.find((m) => m.endpoint === 'job/follow');
+  assert.deepEqual(open.payload.args, { request: { sessionId: 's1', jobId: 'bash-1' } });
+  ws.push({ type: 'item', streamId: open.streamId, value: { type: 'opened', job: { id: 'bash-1', status: 'running' }, from: 0 } });
+  ws.push({ type: 'item', streamId: open.streamId, value: { type: 'output', chunks: [{ at: 0, text: 'hi' }], next: 2 } });
+  ws.push({ type: 'item', streamId: open.streamId, value: { type: 'status', job: { id: 'bash-1', status: 'completed', detail: 'exit code: 0' } } });
+  assert.deepEqual(frames.filter((f) => f.payload.type === 'job/output').map((f) => f.payload.kind), ['opened', 'output', 'status']);
+  client.observeJob('s1', 'bash-1');
+  assert.equal(ws.sent.filter((m) => m.endpoint === 'job/follow').length, 1, 'the same job is followed once');
+  client.stopObserve('bash-1');
+  assert.ok(ws.sent.some((m) => m.type === 'cancel' && m.streamId === open.streamId));
+  // A new socket restores the rosters and the output reads the page still wants.
+  client.watchJobs(['s1']);
+  client.observeJob('s1', 'bash-2');
+  ws.close();
+  client.connect();
+  const ws2 = FakeSocket.last;
+  ws2.open();
+  assert.ok(ws2.sent.some((m) => m.endpoint === 'job/list' && m.payload.args.request.sessionId === 's1'));
+  assert.ok(ws2.sent.some((m) => m.endpoint === 'job/follow' && m.payload.args.request.jobId === 'bash-2'));
+  assert.equal(ws2.sent.some((m) => m.endpoint === 'job/follow' && m.payload.args.request.jobId === 'bash-1'), false, 'a collapsed read is not restored');
+});
+
+test('a job/follow end closes the output after an early stream end', () => {
+  const { client, frames } = harness();
+  client.connect();
+  const ws = FakeSocket.last;
+  ws.open();
+  client.observeJob('s1', 'bash-1');
+  const open = ws.sent.find((m) => m.endpoint === 'job/follow');
+  ws.push({ type: 'end', streamId: open.streamId });
+  assert.deepEqual(frames.at(-1).payload, { type: 'job/output', sessionId: 's1', jobId: 'bash-1', kind: 'end' });
 });

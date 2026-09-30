@@ -18,6 +18,10 @@
 //   - `session/control` is the host-wide projection feed, `workspace/follow` the workspace and
 //     archive feed, `session/follow` one session's snapshot, durable events and live assistant
 //     chunks.
+//   - `job/list` is one session's background-job roster (its own plus every unowned job),
+//     replaced whole on each lifecycle change; `job/follow` one job's retained output and its
+//     terminal status; `job/kill` stops a running job on a person's behalf. There is no
+//     host-wide jobs feed, so the adapter opens one `job/list` stream per watched session.
 //
 // The page's renderer and the watcher's notifier already read dsh 0.1's frames
 // (`session/event`, `approval/requested`, `host/session-status`, ...). The `from*` functions here
@@ -182,6 +186,43 @@ export function fromWorkspace(item) {
   const v = obj(item);
   if (v.type === 'baseline') return [{ kind: 'host', payload: { type: 'host/archived-sessions-changed', archivedSessionIds: obj(v.value).archivedSessionIds || [] } }];
   if (v.type === 'archived') return [{ kind: 'host', payload: { type: 'host/archived-sessions-changed', archivedSessionIds: v.archivedSessionIds || [] } }];
+  return [];
+}
+
+/**
+ * One `job/list` frame (`{type:'rows', jobs}`) as the `session/jobs` frame the page has
+ * always read: the complete set for one session, so an empty set still reaches the page as
+ * `[]` and can express "the last job just went away". The 0.2 `JobView` is a superset of
+ * the 0.1 one, so only the fields the page uses are carried over (`output` stays just the
+ * byte coordinates, not the retained bytes or spill paths).
+ */
+export function fromJobs(item, sessionId) {
+  const v = obj(item);
+  if (v.type !== 'rows') return [];
+  const jobs = (Array.isArray(v.jobs) ? v.jobs : []).map((j) => {
+    const s = obj(j);
+    const out = { id: s.id, kind: s.kind, label: s.label, status: s.status, startedAt: s.startedAt };
+    if (s.detail !== undefined) out.detail = s.detail;
+    if (s.finishedAt !== undefined) out.finishedAt = s.finishedAt;
+    const o = obj(s.output);
+    if (typeof o.total === 'number') out.output = { total: o.total, earliest: typeof o.earliest === 'number' ? o.earliest : 0 };
+    return out;
+  });
+  return [{ kind: 'mux', payload: { type: 'session/jobs', sessionId, jobs } }];
+}
+
+/**
+ * One `job/follow` frame as a transient `job/output` frame for the page: `opened` anchors a
+ * fresh read, `output` carries retained or live chunks, and the terminal `status` carries the
+ * settled `JobView` (its `detail` is the exit status). `sessionId` is the job's owner, or
+ * undefined for an unowned job, which is what `job/list` reported for it.
+ */
+export function fromJobFollow(item, sessionId, jobId) {
+  const v = obj(item);
+  const base = { type: 'job/output', sessionId, jobId };
+  if (v.type === 'opened') return [{ kind: 'mux', payload: { ...base, kind: 'opened', job: v.job } }];
+  if (v.type === 'output') return [{ kind: 'mux', payload: { ...base, kind: 'output', chunks: Array.isArray(v.chunks) ? v.chunks : [], lossy: v.lossy === true } }];
+  if (v.type === 'status') return [{ kind: 'mux', payload: { ...base, kind: 'status', job: v.job } }];
   return [];
 }
 
@@ -406,6 +447,12 @@ export function createClient({ transport, wsUrl, WebSocketImpl = globalThis.WebS
   const cursors = new Map(); // sessionId -> the follow cursor, for session/page
   let workspace = null; // the last workspace baseline
   let workspaceWaiters = [];
+  const wanted = new Set(); // sessions whose job/list roster the page wants watched
+  const jobWatch = new Map(); // sessionId -> the open job/list streamId
+  const jobStream = new Map(); // job/list streamId -> sessionId
+  const obsWanted = new Map(); // jobId -> owning sessionId, for open job/follow streams
+  const obs = new Map(); // jobId -> {sessionId, streamId}
+  const obsStream = new Map(); // job/follow streamId -> jobId
 
   const call = (endpoint, args, rpcId) => transport(endpoint, { args }, rpcId);
   const emit = (frames) => {
@@ -416,6 +463,59 @@ export function createClient({ transport, wsUrl, WebSocketImpl = globalThis.WebS
   };
   const send = (m) => { if (ws && ws.readyState === 1) ws.send(JSON.stringify(m)); };
   const open = (streamId, endpoint, args) => send({ type: 'open', streamId, endpoint, payload: { args } });
+  const connected = () => !!ws && ws.readyState === 1;
+
+  // One job/list stream per watched session. The roster is the only 0.2 surface that says
+  // which jobs a session has, and it replaces the whole set on every lifecycle change.
+  function openJobList(sessionId) {
+    const streamId = `j${++seqNo}`;
+    jobWatch.set(sessionId, streamId);
+    jobStream.set(streamId, sessionId);
+    open(streamId, 'job/list', { request: { sessionId } });
+  }
+  function closeJobList(sessionId) {
+    const streamId = jobWatch.get(sessionId);
+    if (streamId === undefined) return;
+    send({ type: 'cancel', streamId });
+    jobWatch.delete(sessionId);
+    jobStream.delete(streamId);
+  }
+  // One job/follow stream per job the page is looking at. `from` is omitted, so the host
+  // starts at the oldest retained byte; the stream ends by itself after the terminal status.
+  function openObs(jobId, sessionId) {
+    const streamId = `o${++seqNo}`;
+    obs.set(jobId, { sessionId, streamId });
+    obsStream.set(streamId, jobId);
+    open(streamId, 'job/follow', { request: { sessionId, jobId } });
+  }
+  function dropObs(jobId) {
+    const e = obs.get(jobId);
+    if (!e) return;
+    obs.delete(jobId);
+    obsStream.delete(e.streamId);
+  }
+  function failJobList(streamId) {
+    const sessionId = jobStream.get(streamId);
+    if (sessionId === undefined) return;
+    jobStream.delete(streamId);
+    if (jobWatch.get(sessionId) === streamId) jobWatch.delete(sessionId);
+    // Drop the session's roster rather than keep a stale one; a later watchJobs retries.
+    emit([{ kind: 'mux', payload: { type: 'session/jobs', sessionId, jobs: [] } }]);
+  }
+  function failObs(streamId, error) {
+    const jobId = obsStream.get(streamId);
+    if (jobId === undefined) return;
+    const sessionId = (obs.get(jobId) || {}).sessionId;
+    dropObs(jobId);
+    emit([{ kind: 'mux', payload: { type: 'job/output', sessionId, jobId, kind: 'error', error: { message: (error && error.message) || 'job output failed' } } }]);
+  }
+  function endObs(streamId) {
+    const jobId = obsStream.get(streamId);
+    if (jobId === undefined) return;
+    const sessionId = (obs.get(jobId) || {}).sessionId;
+    dropObs(jobId);
+    emit([{ kind: 'mux', payload: { type: 'job/output', sessionId, jobId, kind: 'end' } }]);
+  }
 
   function onItem(streamId, value) {
     if (streamId === 'ev') {
@@ -435,6 +535,11 @@ export function createClient({ transport, wsUrl, WebSocketImpl = globalThis.WebS
         for (const w of waiters) w(workspace);
       } else if (workspace && value && value.type === 'archived') workspace = { ...workspace, archivedSessionIds: value.archivedSessionIds };
       emit(fromWorkspace(value));
+    } else if (jobStream.has(streamId)) {
+      emit(fromJobs(value, jobStream.get(streamId)));
+    } else if (obsStream.has(streamId)) {
+      const jobId = obsStream.get(streamId);
+      emit(fromJobFollow(value, (obs.get(jobId) || {}).sessionId, jobId));
     } else if (follow && streamId === follow.streamId) {
       if (value && value.type === 'snapshot') {
         cursors.set(follow.sessionId, value.cursor);
@@ -451,6 +556,10 @@ export function createClient({ transport, wsUrl, WebSocketImpl = globalThis.WebS
       s.reject(Object.assign(new Error(error && error.message || 'follow failed'), { code: bareCode(error && error.code) }));
       return;
     }
+    // A job stream failing is local to that session (or that job); it must not take the
+    // whole feed down the way a failed $events/session/control/workspace stream does.
+    if (obsStream.has(streamId)) { failObs(streamId, error); return; }
+    if (jobStream.has(streamId)) { failJobList(streamId); return; }
     if (streamId === 'ev' || streamId === 'ctl' || streamId === 'ws') {
       emit([{ kind: 'mux', payload: { type: 'stream/error', error: { message: (error && error.message) || `${streamId} stream failed` } } }]);
       try { ws.close(); } catch { /* already closed */ }
@@ -466,6 +575,12 @@ export function createClient({ transport, wsUrl, WebSocketImpl = globalThis.WebS
       open('ctl', 'session/control', {});
       open('ws', 'workspace/follow', {});
       if (follow) open(follow.streamId, 'session/follow', { request: { address: { kind: 'session', sessionId: follow.sessionId }, assistantStream: true, maxMessages: 24 } });
+      // The streams below belong to the socket that closed; their wanted sets survive, so
+      // every reconnect restores the rosters and the open output reads on the new socket.
+      jobWatch.clear(); jobStream.clear();
+      obs.clear(); obsStream.clear();
+      for (const sessionId of wanted) openJobList(sessionId);
+      for (const [jobId, sessionId] of obsWanted) openObs(jobId, sessionId);
     };
     sock.onmessage = (e) => {
       let m;
@@ -473,11 +588,14 @@ export function createClient({ transport, wsUrl, WebSocketImpl = globalThis.WebS
       if (!m || typeof m !== 'object') return;
       if (m.type === 'item') onItem(m.streamId, m.value);
       else if (m.type === 'error') fail(m.streamId, m.error);
+      else if (m.type === 'end') endObs(m.streamId);
     };
     sock.onerror = () => {};
     sock.onclose = () => {
       if (ws !== sock) return;
       ws = null; clientId = null; pending.clear();
+      jobWatch.clear(); jobStream.clear();
+      obs.clear(); obsStream.clear();
       onDown();
     };
   }
@@ -485,6 +603,8 @@ export function createClient({ transport, wsUrl, WebSocketImpl = globalThis.WebS
   function close() {
     if (!ws) return;
     const sock = ws; ws = null; clientId = null; pending.clear();
+    jobWatch.clear(); jobStream.clear();
+    obs.clear(); obsStream.clear();
     sock.onclose = null;
     try { sock.close(); } catch { /* already closed */ }
   }
@@ -577,6 +697,35 @@ export function createClient({ transport, wsUrl, WebSocketImpl = globalThis.WebS
     close,
     isOpen: () => !!ws && ws.readyState === 1,
     clientId: () => clientId,
+    /**
+     * Reconcile the `job/list` rosters the page wants watched: open one for each new
+     * session, cancel the ones that left the list. The wanted set survives a dropped
+     * socket, so a reconnect restores every roster without the page asking again.
+     */
+    watchJobs(ids) {
+      const want = new Set((Array.isArray(ids) ? ids : []).map(String));
+      for (const sessionId of [...wanted]) if (!want.has(sessionId)) { closeJobList(sessionId); wanted.delete(sessionId); }
+      for (const sessionId of want) {
+        wanted.add(sessionId);
+        if (!jobWatch.has(sessionId) && connected()) openJobList(sessionId);
+      }
+    },
+    /** Follow one job's retained output and terminal status, once per job id. */
+    observeJob(sessionId, jobId) {
+      const id = String(jobId);
+      if (obsWanted.has(id)) return;
+      obsWanted.set(id, sessionId);
+      if (connected()) openObs(id, sessionId);
+    },
+    /** Stop following a job's output; the page calls this when it collapses the row. */
+    stopObserve(jobId) {
+      const id = String(jobId);
+      obsWanted.delete(id);
+      const e = obs.get(id);
+      if (e) { send({ type: 'cancel', streamId: e.streamId }); dropObs(id); }
+    },
+    /** Kill one running job on the user's behalf; resolves with `{outcome}`. 0.2 only. */
+    killJob: (sessionId, jobId) => call('job/kill', { request: { sessionId, jobId } }),
     /** A 0.1 method by name, or null when this adapter has no equivalent. */
     has: (method) => Object.hasOwn(methods, method),
     rpc: (method, payload, rpcId) => {
