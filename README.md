@@ -318,12 +318,21 @@ events in `dsh-user-approval` and `dsh-user-questions`, checked against a runnin
   entries first, then presets (a broken or failing composition first), then every plugin.
   `dsh-plugin-manager` does offer per-entry `setPluginEnabled`, but the sheet stays read-only: the
   proxy refuses the whole `pluginManager` namespace, so a phone cannot change the profile.
+- **Tool cards.** 0.1 attached each tool's presentation view to its events. 0.2 sends none:
+  `tool/call` carries the raw arguments and `tool/result` the result text plus the tool's private
+  `meta` (dsh-session's event map). Like dsh's own web client (dsh-client-ui-tool's diff and
+  terminal card models), `public/dsh02.js` rebuilds the 0.1 views from those: `write`, `edit` and
+  `str_replace_editor` become diff cards (the applied hunks from `meta` once settled), and
+  foreground `bash` and `pwsh` calls become commands whose exit code or signal comes from the
+  `[exit code: N]` marker dsh-shell appends (the persistent shell's `[Command finished with exit
+  code N]`). The diff rows, the turn summary card and the verdict then work as on 0.1.
 
 ### Not ported yet (dsh 0.2)
 
-- **Tool cards lose their rich view.** 0.1 attached a presentation view to tool events (the diff
-  cards and review summary read it). 0.2 events carry none, so tools show their name, arguments and
-  result text only; the turn summary's file and command counts are therefore thinner.
+- **Other tool cards** (read, grep and glob, web search and fetch, todos) stay generic rows: name,
+  arguments and result text. A `str_replace_editor` edit shows its diff while it runs and a plain
+  row once settled, as in dsh's web client, so it is not counted in the turn summary. A command
+  whose output was spilled to a file has no exit code to show.
 - **Background jobs** in Running now (`session/jobs` frames): 0.2 has `job/list` and `job/follow`
   streams, not wired.
 - **Subagent tree** is built from the `subagentCatalog` projection: no grandchildren, and a child's

@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { bareCode, createClient, fromControl, fromEvents, fromFollow, fromPluginInventory, fromWorkspace, goalOf, goalStatus, inboxToQueue, liveChunksOf, localizedText } from '../public/dsh02.js';
+import { bareCode, createClient, fromControl, fromEvents, fromFollow, fromPluginInventory, fromWorkspace, goalOf, goalStatus, inboxToQueue, liveChunksOf, localizedText, toolCallView, toolResultView } from '../public/dsh02.js';
 import { createNotifier } from '../server/notify.mjs';
 
 test('api-session emits become the host frames the page reads', () => {
@@ -324,4 +324,47 @@ test('goal calls pass their arguments by declared name', async () => {
     ['goals/edit', { agentId: 's', ref, request: { objective: 'y' } }],
     ['goals/pause', { agentId: 's', ref }],
   ]);
+});
+
+test('tool call views are rebuilt from the arguments, as dsh 0.2\'s web client does', () => {
+  assert.deepEqual(toolCallView('bash', JSON.stringify({ command: 'npm test', description: 'Run tests', workdir: 'pkg' })),
+    { card: 'terminal', title: 'npm test', description: 'Run tests', cwd: 'pkg' });
+  assert.deepEqual(toolCallView('bash', { command: 'ls' }), { card: 'terminal', title: 'ls' }); // the persistent shell
+  assert.equal(toolCallView('bash', { command: 'sleep 9', description: 'd', run_in_background: true }), null);
+  assert.deepEqual(toolCallView('edit', JSON.stringify({ file_path: 'a.js', old_string: 'x', new_string: 'y' })),
+    { card: 'diff', title: 'Edit a.js', diffs: [{ path: 'a.js', oldText: 'x', newText: 'y' }] });
+  assert.deepEqual(toolCallView('write', { file_path: 'b.txt', content: 'hi' }),
+    { card: 'diff', title: 'Write b.txt', diffs: [{ path: 'b.txt', oldText: null, newText: 'hi' }] });
+  assert.deepEqual(toolCallView('str_replace_editor', { command: 'create', path: 'c.md', file_text: '# c' }).diffs, [{ path: 'c.md', oldText: null, newText: '# c' }]);
+  assert.equal(toolCallView('read', { file_path: 'a.js' }), null);
+  assert.equal(toolCallView('edit', '{not json'), null);
+  assert.equal(toolCallView('write', { file_path: '', content: 'x' }), null);
+});
+
+test('tool result views read dsh-shell\'s exit markers and dsh-tool-fs\'s applied hunks', () => {
+  const text = (t) => [{ type: 'text', text: t }];
+  const sh = { command: 'make', description: 'Build' };
+  assert.deepEqual(toolResultView('bash', sh, { content: text('built') }), { card: 'terminal', output: 'built', exitCode: 0 });
+  assert.deepEqual(toolResultView('bash', sh, { content: text('oops\n[exit code: 2]') }), { card: 'terminal', output: 'oops', exitCode: 2 });
+  assert.deepEqual(toolResultView('pwsh', sh, { content: text('x\n[killed by signal: SIGTERM]') }), { card: 'terminal', output: 'x', signal: 'SIGTERM' });
+  // A spilled result can hide the marker: no exit status is inferred.
+  const spill = 'head\n\n(Omitted 10 bytes. Full formatted result stored at: /tmp/x. Read it.)';
+  assert.deepEqual(toolResultView('bash', sh, { content: text(spill) }), { card: 'terminal', output: spill });
+  // The persistent shell's own marker.
+  assert.deepEqual(toolResultView('bash', { command: 'ls' }, { content: text('a\n[Command finished with exit code 1]') }), { card: 'terminal', output: 'a', exitCode: 1 });
+  assert.deepEqual(toolResultView('bash', { command: 'ls' }, { content: text('a') }), { card: 'terminal', output: 'a' });
+  assert.equal(toolResultView('bash', sh, { content: text('denied'), isError: true }), null);
+  assert.equal(toolResultView('bash', sh, { content: [] }), null);
+
+  const hunk = { path: 'a.js', oldText: 'x\n', newText: 'y\n' };
+  const edit = { file_path: 'a.js', old_string: 'x', new_string: 'y' };
+  assert.deepEqual(toolResultView('edit', edit, { content: text('ok'), meta: { diffs: [hunk] } }), { card: 'diff', diffs: [hunk] });
+  assert.deepEqual(toolResultView('edit', edit, { content: text('ok') }), { card: 'generic' });
+  assert.deepEqual(toolResultView('edit', edit, { content: text('ok'), meta: { diffs: [{ path: 1 }] } }), { card: 'generic' });
+  assert.equal(toolResultView('edit', edit, { content: text('no match'), isError: true, meta: { diffs: [hunk] } }), null);
+  const write = { file_path: 'b.txt', content: 'hi' };
+  assert.deepEqual(toolResultView('write', write, { content: text('ok'), meta: { diffs: [], operation: 'create' } }), { card: 'diff', diffs: [{ path: 'b.txt', oldText: null, newText: 'hi' }] });
+  assert.deepEqual(toolResultView('str_replace_editor', { command: 'create', path: 'c', file_text: '' }, { content: text('ok') }), { card: 'generic' });
+  assert.equal(toolResultView('read', { file_path: 'a.js' }, { content: text('...') }), null);
+  assert.equal(toolResultView(undefined, undefined, { content: text('orphan') }), null);
 });
