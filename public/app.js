@@ -685,19 +685,22 @@ let queueEditing = null; // {sessionId, id} of the item being edited, so a queue
 let queueDraft = '';      // its unsaved text, which survives those re-renders
 function renderQueue() {
   const cur = S.cur; if (!cur) return;
-  const items = (S.queues.get(cur.id) || []).filter((i) => i.placement !== 'context');
+  const all = S.queues.get(cur.id) || [];
+  const items = all.filter((i) => i.placement !== 'context');
   const el = $('#queueLine');
   el.hidden = !items.length;
   if (queueEditing && queueEditing.sessionId !== cur.id) queueEditing = null; // another session: drop quietly
-  if (queueEditing && !items.some((it) => it.id === queueEditing.id)) { queueEditing = null; toast('That message was already sent'); }
-  // A re-render replaces the editor's textarea: carry focus and caret over to the new one.
-  const old = document.activeElement && document.activeElement.classList.contains('qedit') ? document.activeElement : null;
-  const sel = old ? [old.selectionStart, old.selectionEnd] : null;
+  if (queueEditing && !items.some((it) => it.id === queueEditing.id)) {
+    // Only "sent" if it left the queue; an item that moved into context was not sent.
+    if (!all.some((it) => it.id === queueEditing.id)) toast('That message was already sent');
+    queueEditing = null;
+  }
   if (!items.length) { el.replaceChildren(); return; }
+  // Keep the open editor's node rather than rebuilding it: re-focusing a new textarea
+  // outside a tap would drop the iOS keyboard and the caret.
+  const keep = queueEditing && el.querySelector(`.qitem.editing[data-id="${CSS.escape(queueEditing.id)}"]`);
   el.replaceChildren(h('div', { class: 'qcount' }, `${items.length} message${items.length > 1 ? 's' : ''} queued`),
-    ...items.map((it) => (queueEditing && it.id === queueEditing.id ? queueEditor(cur.id, it) : queueRow(cur.id, it))));
-  const box = el.querySelector('.qedit');
-  if (box && sel) { box.focus(); box.setSelectionRange(sel[0], sel[1]); }
+    ...items.map((it) => (queueEditing && it.id === queueEditing.id ? (keep || queueEditor(cur.id, it)) : queueRow(cur.id, it))));
 }
 function queueText(it) { return textOf((it.message && it.message.content) || []); }
 function queueRow(sessionId, it) {
@@ -718,14 +721,19 @@ function queueEditor(sessionId, it) {
   box.oninput = () => { queueDraft = box.value; };
   const save = h('button', { type: 'button', class: 'qact wide accent' }, 'Save');
   const cancel = h('button', { type: 'button', class: 'qact wide' }, 'Cancel');
-  const row = h('div', { class: 'qitem editing' }, box, h('div', { class: 'row' }, cancel, save));
+  const row = h('div', { class: 'qitem editing', 'data-id': it.id }, box, h('div', { class: 'row' }, cancel, save));
   cancel.onclick = () => { queueEditing = null; renderQueue(); };
   save.onclick = async () => {
     const text = box.value;
     const others = ((it.message && it.message.content) || []).filter((b) => b.type !== 'text');
     const content = text.trim() ? [{ type: 'text', text }, ...others] : others;
     if (!content.length) { toast('Nothing left to send: use ✕ to remove it'); return; }
-    if (await updateQueued(sessionId, it.id, { kind: 'edit', content }, row)) { queueEditing = null; renderQueue(); }
+    if (await updateQueued(sessionId, it.id, { kind: 'edit', content }, row)) {
+      // Show the saved text now; the next session/queue event replaces this copy anyway.
+      const list = S.queues.get(sessionId) || [];
+      S.queues.set(sessionId, list.map((q) => (q.id === it.id ? { ...q, message: { ...q.message, content } } : q)));
+      queueEditing = null; renderQueue();
+    }
   };
   return row;
 }
@@ -734,13 +742,14 @@ async function updateQueued(sessionId, itemId, action, row) {
   btns.forEach((b) => { b.disabled = true; });
   try {
     await rpc('session.updateQueue', { sessionId, itemId, action });
+    // Buttons stay disabled on success: the row is stale until the session/queue event
+    // replaces it, and a second tap would act on an item dsh no longer has.
     return true;
   } catch (e) {
     // Most often the item was already sent: the turn started before the tap landed.
     toast((action.kind === 'remove' ? 'Remove' : 'Edit') + ' failed: ' + e.message, 4000);
-    return false;
-  } finally {
     btns.forEach((b) => { b.disabled = false; });
+    return false;
   }
 }
 $('#stopBtn').onclick = async () => {
