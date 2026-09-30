@@ -26,6 +26,48 @@ function toast(msg, ms = 2600) {
   clearTimeout(toast._t); toast._t = setTimeout(() => { t.hidden = true; }, ms);
 }
 
+/* ---------- API errors ---------- */
+let api403Shown = false;
+function copyText(text, btn) {
+  const restore = btn.textContent;
+  const done = () => {
+    btn.textContent = 'Copied';
+    setTimeout(() => { btn.textContent = restore; }, 1400);
+  };
+  const fallback = () => {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.cssText = 'position:fixed;opacity:0;';
+    document.body.appendChild(ta);
+    ta.focus(); ta.select();
+    let success = false;
+    try { success = document.execCommand('copy'); } catch (e) {}
+    document.body.removeChild(ta);
+    if (success) done(); else toast('Copy failed');
+  };
+  if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(done, fallback);
+  else fallback();
+}
+function showApi403() {
+  if (api403Shown) return;
+  api403Shown = true;
+  const host = location.hostname;
+  const cmd = 'dsh --profile <profile> --no-open --trusted-host ' + host;
+  const close = h('button', { type: 'button', class: 'close', 'aria-label': 'Dismiss' }, '✕');
+  close.onclick = () => $('#api403').replaceChildren();
+  const copy = h('button', { type: 'button', class: 'copy' }, 'Copy command');
+  copy.onclick = () => copyText(cmd, copy);
+  const card = h('div', { class: 'card api403' },
+    close,
+    h('h4', {}, '403 — dsh does not trust this host'),
+    h('div', { class: 'why' },
+      'This page reached dsh from a host it does not trust. Start dsh with --trusted-host ' + host + ' (the current hostname, filled in below) ' +
+      'and make sure this page is served from the same origin as dsh web.'),
+    h('pre', {}, cmd),
+    h('div', { class: 'row' }, copy));
+  $('#api403').replaceChildren(card);
+}
+
 // ---------- RPC ----------
 async function rpc(method, payload = {}, rpcId = rid()) {
   const r = await fetch('/api/' + method, {
@@ -33,7 +75,10 @@ async function rpc(method, payload = {}, rpcId = rid()) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ type: 'client-request', rpcId, method, payload }),
   });
-  if (!r.ok) throw Object.assign(new Error(`${method}: HTTP ${r.status}`), { code: 'http-' + r.status });
+  if (!r.ok) {
+    if (r.status === 403) showApi403();
+    throw Object.assign(new Error(`${method}: HTTP ${r.status}`), { code: 'http-' + r.status });
+  }
   const j = await r.json();
   if (!j.result || !j.result.ok) {
     const e = j.result && j.result.error || {};
