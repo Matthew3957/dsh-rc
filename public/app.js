@@ -1471,7 +1471,13 @@ $('#statusLine').onclick = () => {
 // line never shows and the menu entry is not offered there.
 // The verb is joined to its namespace here, so scripts/smoke.mjs (which probes each literal
 // method the page calls on an older dsh) does not go looking for `goals` there.
-const goalRemote = (verb, args) => remote(`goals/${verb}`, args);
+// Literal method names, so scripts/smoke.mjs sees every dsh call the page makes.
+const GOAL_CALLS = {
+  get: (a) => remote('goals/get', a), create: (a) => remote('goals/create', a), edit: (a) => remote('goals/edit', a),
+  pause: (a) => remote('goals/pause', a), resume: (a) => remote('goals/resume', a),
+  complete: (a) => remote('goals/complete', a), clear: (a) => remote('goals/clear', a),
+};
+const goalRemote = (verb, args) => GOAL_CALLS[verb](args);
 function goalFor(id) {
   if (!dsh2) return null;
   const g = window.dsh02.goalOf(projectionValue(id, 'goal'));

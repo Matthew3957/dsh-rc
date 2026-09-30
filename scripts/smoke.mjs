@@ -61,6 +61,10 @@ const PROBE_ORDER = Object.freeze({
   fileReferences: ['fileReferences/list'],
 });
 
+// Namespaces the page only calls on the newer dsh API (0.1.7 and later), after it has detected
+// one: listed, never probed, since an older dsh rightly answers 404 for them.
+export const NEWER_API_ONLY = new Set(['goals']);
+
 // Read-only methods the app calls that are deliberately not probed: one harmless read
 // per namespace is enough for the smoke, and these need an existing session or path.
 const READ_ONLY = new Set([
@@ -98,7 +102,7 @@ export function planChecks(methods) {
   const probes = [];
   const unchecked = [];
   for (const [namespace, list] of byNamespace) {
-    const preferred = PROBE_ORDER[namespace] || [];
+    const preferred = NEWER_API_ONLY.has(namespace) ? [] : (PROBE_ORDER[namespace] || []);
     const probe = preferred.find((m) => list.includes(m));
     if (probe) probes.push({ namespace, method: probe });
     for (const method of list) {
@@ -109,7 +113,7 @@ export function planChecks(methods) {
   }
   probes.sort((a, b) => a.method.localeCompare(b.method));
   unchecked.sort((a, b) => a.method.localeCompare(b.method));
-  return { probes, unchecked, namespaces: [...byNamespace.keys()].sort() };
+  return { probes, unchecked, namespaces: [...byNamespace.keys()].filter((n) => !NEWER_API_ONLY.has(n)).sort() };
 }
 
 export async function callRpc(base, method, payload) {
