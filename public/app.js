@@ -550,7 +550,7 @@ function sessionMeta(id) { return S.sessions.find((s) => s.sessionId === id) || 
 async function openSession(id, { push = true } = {}) {
   if (push && location.hash !== '#s/' + id) history.pushState(null, '', '#s/' + id);
   S.cur = { id, events: [], lastSeq: -1, loading: false, buffer: [], hasMore: false, gen: 0 };
-  S.images = []; renderAttachments(); S.steer = false;
+  S.images = []; renderAttachments(); S.steer = false; queueEditing = null;
   $('#listView').hidden = true; $('#chatView').hidden = false;
   const m = sessionMeta(id);
   $('#title').textContent = S.titles.get(id) || basename(m.cwd) || 'Session';
@@ -681,17 +681,23 @@ function renderRunning() {
 // item by id; an edit replaces the message's content blocks, so images are kept and
 // only the text is swapped. The list is never changed locally: the next
 // session/queue event re-renders it.
-let queueEditing = null; // id of the item being edited, so a queue event mid-edit keeps the editor
+let queueEditing = null; // {sessionId, id} of the item being edited, so a queue event mid-edit keeps the editor
 let queueDraft = '';      // its unsaved text, which survives those re-renders
 function renderQueue() {
   const cur = S.cur; if (!cur) return;
   const items = (S.queues.get(cur.id) || []).filter((i) => i.placement !== 'context');
   const el = $('#queueLine');
   el.hidden = !items.length;
-  if (!items.length) { el.replaceChildren(); if (queueEditing) toast('That message was already sent'); queueEditing = null; return; }
-  if (queueEditing && !items.some((it) => it.id === queueEditing)) { queueEditing = null; toast('That message was already sent'); }
+  if (queueEditing && queueEditing.sessionId !== cur.id) queueEditing = null; // another session: drop quietly
+  if (queueEditing && !items.some((it) => it.id === queueEditing.id)) { queueEditing = null; toast('That message was already sent'); }
+  // A re-render replaces the editor's textarea: carry focus and caret over to the new one.
+  const old = document.activeElement && document.activeElement.classList.contains('qedit') ? document.activeElement : null;
+  const sel = old ? [old.selectionStart, old.selectionEnd] : null;
+  if (!items.length) { el.replaceChildren(); return; }
   el.replaceChildren(h('div', { class: 'qcount' }, `${items.length} message${items.length > 1 ? 's' : ''} queued`),
-    ...items.map((it) => (it.id === queueEditing ? queueEditor(cur.id, it) : queueRow(cur.id, it))));
+    ...items.map((it) => (queueEditing && it.id === queueEditing.id ? queueEditor(cur.id, it) : queueRow(cur.id, it))));
+  const box = el.querySelector('.qedit');
+  if (box && sel) { box.focus(); box.setSelectionRange(sel[0], sel[1]); }
 }
 function queueText(it) { return textOf((it.message && it.message.content) || []); }
 function queueRow(sessionId, it) {
@@ -700,7 +706,8 @@ function queueRow(sessionId, it) {
     h('div', { class: 'qtext' }, queueText(it) || (imgs ? '' : '(empty)'), imgs ? ` 🖼 ${imgs}` : null));
   const edit = h('button', { type: 'button', class: 'qact', 'aria-label': 'Edit queued message' }, '✎');
   const rm = h('button', { type: 'button', class: 'qact', 'aria-label': 'Remove queued message' }, '✕');
-  edit.onclick = () => { queueEditing = it.id; queueDraft = queueText(it); renderQueue(); };
+  // Focus inside the tap itself: iOS only raises the keyboard for focus during a user gesture.
+  edit.onclick = () => { queueEditing = { sessionId, id: it.id }; queueDraft = queueText(it); renderQueue(); const b = $('#queueLine .qedit'); if (b) b.focus(); };
   rm.onclick = () => updateQueued(sessionId, it.id, { kind: 'remove' }, row);
   row.append(edit, rm);
   return row;
@@ -718,9 +725,8 @@ function queueEditor(sessionId, it) {
     const others = ((it.message && it.message.content) || []).filter((b) => b.type !== 'text');
     const content = text.trim() ? [{ type: 'text', text }, ...others] : others;
     if (!content.length) { toast('Nothing left to send: use ✕ to remove it'); return; }
-    if (await updateQueued(sessionId, it.id, { kind: 'edit', content }, row)) queueEditing = null;
+    if (await updateQueued(sessionId, it.id, { kind: 'edit', content }, row)) { queueEditing = null; renderQueue(); }
   };
-  if (document.activeElement === document.body || !document.activeElement || document.activeElement.classList.contains('qact')) setTimeout(() => box.focus(), 0);
   return row;
 }
 async function updateQueued(sessionId, itemId, action, row) {
