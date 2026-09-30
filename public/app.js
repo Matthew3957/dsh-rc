@@ -319,6 +319,7 @@ function openWS(path, onFrame) {
 function connect() {
   const c = S.conn;
   clearTimeout(c.timer);
+  c.timer = null; // a stale id would make the next onDown think a reconnect is already scheduled
   if (dsh2) {
     S.approvals.clear(); S.questions.clear(); renderPending();
     dsh2.connect();

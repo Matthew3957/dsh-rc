@@ -142,6 +142,11 @@ export function startWatcher({
     }
   }
 
+  // Across reconnects, not per socket: a reconnect replays still-pending waterfalls, and the
+  // phone should hear about each request once. Bounded so a long-lived watcher stays small.
+  const pending = new Map(); // waterfall eventId -> kind, for the cancel items
+  const notified = new Set();
+  const remember = (id) => { notified.add(id); if (notified.size > 2000) notified.delete(notified.values().next().value); };
   function watch02(cookie) {
     let ws;
     try {
@@ -151,8 +156,6 @@ export function startWatcher({
       return retry();
     }
     sockets.push(ws);
-    const pending = new Map(); // waterfall eventId -> kind, for the cancel items
-    const notified = new Set(); // a reconnect replays pending waterfalls; tell the phone once
     ws.onopen = () => {
       attempts = 0;
       logger.log('[dsh-rc] remote.mux connected');
@@ -173,7 +176,7 @@ export function startWatcher({
         if (p.type === 'approval/requested' || p.type === 'question/requested') {
           const id = f.env && f.env.rpcId;
           if (notified.has(id)) continue;
-          notified.add(id);
+          remember(id);
         }
         deliver({ payload: p });
       }
