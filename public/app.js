@@ -516,7 +516,7 @@ function showList({ push = true } = {}) {
 }
 window.addEventListener('popstate', route);
 function route() {
-  const m = /^#s\/(.+)$/.exec(location.hash);
+  const m = /^#s[=/](.+)$/.exec(location.hash);
   if (m) openSession(decodeURIComponent(m[1]), { push: false });
   else showList({ push: false });
 }
@@ -889,9 +889,13 @@ $('#newBtn').onclick = async () => {
 
 $('#menuBtn').onclick = () => {
   const cur = S.cur; if (!cur) return;
+  const notifState = h('small', {}, 'Approvals, questions, finished turns');
+  const notifRow = h('button', { class: 'menuitem', onclick: () => notificationsSheet() }, 'Notifications', notifState);
+  refreshPushState().then((st) => { notifState.textContent = pushStateLabel(st); });
   openSheet(h('h3', {}, $('#title').textContent),
     h('button', { class: 'menuitem', onclick: modelSheet }, 'Model', h('small', {}, 'Switch the model for this session')),
     h('button', { class: 'menuitem', onclick: commandsSheet }, 'Commands', h('small', {}, 'Slash commands available here')),
+    notifRow,
     h('button', { class: 'menuitem', onclick: renameSheet }, 'Rename'),
     h('button', { class: 'menuitem', onclick: pluginsSheet }, 'Plugins & connectors', h('small', {}, 'What this dsh has loaded')),
     h('button', { class: 'menuitem', onclick: () => { closeSheet(); loadHistory(); } }, 'Refresh'),
@@ -981,6 +985,107 @@ function renameSheet() {
   setTimeout(() => inp.focus(), 100);
 }
 
+// ---------- Notifications (Web Push) ----------
+// The push API lives on the same origin under ./push/. Turning on must run
+// inside the tap: iOS only grants Notification permission from a user gesture,
+// and only when the page is installed to the Home Screen (iOS 16.4+).
+let pushStateNow = 'off';
+function pushSupported() {
+  return 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
+}
+function isIOS() {
+  return /iP(hone|ad|od)/.test(navigator.userAgent || '') || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+}
+function isStandalone() {
+  return navigator.standalone === true || (window.matchMedia && matchMedia('(display-mode: standalone)').matches);
+}
+function pushStateLabel(state) {
+  if (state === 'on') return 'On for this device';
+  if (state === 'unsupported') return 'Not supported in this browser';
+  return 'Off for this device';
+}
+function b64uToBytes(base64url) {
+  const pad = '='.repeat((4 - (base64url.length % 4)) % 4);
+  const raw = atob((base64url + pad).replace(/-/g, '+').replace(/_/g, '/'));
+  return Uint8Array.from(raw, (c) => c.charCodeAt(0));
+}
+async function ensureSW() {
+  if (!('serviceWorker' in navigator)) throw new Error('no service worker support');
+  await navigator.serviceWorker.register('./sw.js', { scope: './' });
+  return swReady();
+}
+function swReady(timeoutMs = 3000) {
+  return Promise.race([
+    navigator.serviceWorker.ready,
+    new Promise((_, reject) => setTimeout(() => reject(new Error('service worker not ready')), timeoutMs)),
+  ]);
+}
+async function refreshPushState() {
+  if (!pushSupported()) { pushStateNow = 'unsupported'; return pushStateNow; }
+  if (Notification.permission !== 'granted') { pushStateNow = 'off'; return pushStateNow; }
+  try {
+    const reg = await swReady();
+    const sub = await reg.pushManager.getSubscription();
+    pushStateNow = sub ? 'on' : 'off';
+  } catch { pushStateNow = 'off'; }
+  return pushStateNow;
+}
+async function enablePush() {
+  if (!pushSupported()) throw new Error('push is not supported here');
+  const perm = await Notification.requestPermission();
+  if (perm !== 'granted') throw new Error('permission was not granted');
+  const reg = await ensureSW();
+  const keyRes = await fetch('./push/key');
+  if (!keyRes.ok) throw new Error('key HTTP ' + keyRes.status);
+  const { key } = await keyRes.json();
+  let sub = await reg.pushManager.getSubscription();
+  if (!sub) sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64uToBytes(key) });
+  const res = await fetch('./push/subscribe', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(sub) });
+  if (!res.ok) throw new Error('subscribe HTTP ' + res.status);
+  pushStateNow = 'on';
+}
+async function disablePush() {
+  const reg = await swReady();
+  const sub = await reg.pushManager.getSubscription();
+  if (sub) {
+    try { await fetch('./push/unsubscribe', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ endpoint: sub.endpoint }) }); } catch {}
+    await sub.unsubscribe();
+  }
+  pushStateNow = 'off';
+}
+async function sendTestPush() {
+  const res = await fetch('./push/test', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+  if (!res.ok) throw new Error('test HTTP ' + res.status);
+}
+async function notificationsSheet() {
+  openSheet(h('h3', {}, 'Notifications'), h('div', { class: 'note' }, 'Checking…'));
+  const state = await refreshPushState();
+  const kids = [h('h3', {}, 'Notifications')];
+  if (state === 'unsupported') {
+    kids.push(h('div', { class: 'note' }, 'Push notifications are not supported in this browser.'));
+    if (isIOS() && !isStandalone()) kids.push(h('div', { class: 'note' }, 'Add to Home Screen first (iOS 16.4+).'));
+    openSheet(...kids);
+    return;
+  }
+  kids.push(h('div', { class: 'note' }, pushStateLabel(state) + '.'));
+  if (state === 'on') {
+    kids.push(h('button', { class: 'menuitem', onclick: async () => {
+      try { await sendTestPush(); toast('Test notification sent'); closeSheet(); }
+      catch (e) { toast('Test failed: ' + e.message, 4000); }
+    } }, 'Send test', h('small', {}, 'Notify every subscribed device')));
+    kids.push(h('button', { class: 'menuitem', onclick: async () => {
+      try { await disablePush(); toast('Notifications off'); } catch (e) { toast('Could not turn off: ' + e.message, 4000); }
+      notificationsSheet();
+    } }, 'Turn off'));
+  } else {
+    kids.push(h('button', { class: 'menuitem', onclick: async () => {
+      try { await enablePush(); toast('Notifications on'); } catch (e) { toast('Could not turn on: ' + e.message, 4000); }
+      notificationsSheet();
+    } }, 'Turn on', h('small', {}, 'From this tap, then approve the browser prompt')));
+  }
+  openSheet(...kids);
+}
+
 // ---------- Viewport (iOS keyboard) ----------
 function fitViewport() {
   const vv = window.visualViewport;
@@ -995,6 +1100,15 @@ fitViewport();
 (async function boot() {
   linkTargets();
   window.addEventListener('load', linkTargets);
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.register('./sw.js', { scope: './' }).catch(() => {});
+    navigator.serviceWorker.addEventListener('message', (e) => {
+      const d = e.data || {};
+      if (d.type !== 'open-session') return;
+      if (d.sessionId) openSession(d.sessionId);
+      else showList();
+    });
+  }
   try { S.describe = await rpc('host.describe', {}); } catch (e) { toast('dsh not reachable: ' + e.message, 6000); }
   connect();
   await loadSessions();
