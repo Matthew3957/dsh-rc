@@ -1,0 +1,14 @@
+# User unit for dsh web. Replace <profile> and <machine>.<tailnet>.ts.net, and the node path.
+[Unit]
+Description=dsh web
+After=network-online.target
+
+[Service]
+WorkingDirectory=%h
+Environment=PATH=%h/.nvm/versions/node/v22.22.1/bin:%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=%h/.nvm/versions/node/v22.22.1/bin/dsh --profile <profile> --no-open --trusted-host <machine>.<tailnet>.ts.net
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

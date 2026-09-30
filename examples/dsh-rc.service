@@ -1,0 +1,12 @@
+# User unit for the dsh-rc static server. Install:
+#   cp examples/dsh-rc.service ~/.config/systemd/user/ && edit the path below
+#   systemctl --user daemon-reload && systemctl --user enable --now dsh-rc
+[Unit]
+Description=dsh-rc phone UI static server
+
+[Service]
+ExecStart=/usr/bin/python3 %h/dsh-rc/serve.py
+Restart=on-failure
+
+[Install]
+WantedBy=default.target

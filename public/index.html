@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
+<meta name="theme-color" content="#111416" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#f6f7f8" media="(prefers-color-scheme: light)">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="dsh">
+<title>dsh-rc</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icon-180.png">
+<link rel="stylesheet" href="style.css">
+<script src="vendor/marked.min.js" defer></script>
+<script src="vendor/purify.min.js" defer></script>
+<script src="app.js" defer></script>
+</head>
+<body>
+<div id="app">
+
+  <!-- Session list -->
+  <section id="listView" class="view">
+    <header class="bar">
+      <div class="brand"><span class="mark">›_</span> dsh</div>
+      <span class="conn dot" title="connection"></span>
+      <div class="spacer"></div>
+      <button id="plugBtn" class="icon" aria-label="Plugins and connectors" title="Plugins and connectors">⧉</button>
+      <button id="newBtn" class="pill accent">New session</button>
+    </header>
+    <div class="searchwrap"><input id="q" type="search" placeholder="Search sessions" autocomplete="off" enterkeyhint="search"></div>
+    <div id="pendingGlobal"></div>
+    <ul id="sessions" class="sessions"></ul>
+    <button id="moreBtn" class="ghost wide" hidden>Show more</button>
+  </section>
+
+  <!-- Chat -->
+  <section id="chatView" class="view" hidden>
+    <header class="bar">
+      <button id="backBtn" class="icon" aria-label="Back">‹</button>
+      <div class="titles">
+        <div id="title" class="title">Session</div>
+        <div id="subtitle" class="subtitle"></div>
+      </div>
+      <span class="conn dot" title="connection"></span>
+      <button id="menuBtn" class="icon" aria-label="Menu">⋯</button>
+    </header>
+    <div id="feed">
+      <button id="olderBtn" class="ghost wide" hidden>Load earlier</button>
+      <div id="msgs"></div>
+      <div id="working" hidden><span class="spin">▍</span> <span id="workingText">Working…</span></div>
+    </div>
+    <button id="jumpBtn" class="jump" hidden aria-label="Scroll to bottom">↓</button>
+    <div id="dock">
+      <div id="pending"></div>
+      <div id="queueLine" hidden></div>
+      <div id="cmdpop" hidden></div>
+      <div id="attachments" hidden></div>
+      <form id="composer" autocomplete="off">
+        <button type="button" id="attachBtn" class="icon round" aria-label="Attach image">+</button>
+        <input type="file" id="fileInput" accept="image/*" multiple hidden>
+        <textarea id="input" rows="1" placeholder="Message dsh" enterkeyhint="send"></textarea>
+        <button type="button" id="steerBtn" class="chip" hidden title="Send into the running turn instead of queueing">queue</button>
+        <button type="submit" id="sendBtn" class="icon round accent" aria-label="Send">↑</button>
+        <button type="button" id="stopBtn" class="icon round stop" aria-label="Stop" hidden>■</button>
+      </form>
+    </div>
+  </section>
+
+  <!-- Bottom sheet -->
+  <div id="scrim" hidden></div>
+  <div id="sheet" hidden><div class="sheethead"><div class="grab"></div><button id="sheetClose" class="icon" aria-label="Close">✕</button></div><div id="sheetBody"></div></div>
+  <div id="toast" hidden></div>
+</div>
+</body>
+</html>
