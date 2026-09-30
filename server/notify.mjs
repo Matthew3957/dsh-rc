@@ -23,6 +23,16 @@ function firstQuestionText(questions) {
   return typeof text === 'string' ? text : '';
 }
 
+// A plan-mode review (a question tagged `intent.kind: 'plan-review'`, the plan
+// markdown in `detail`): the plan's first heading, '' when it has none, or null
+// when this is an ordinary question.
+function planHeading(questions) {
+  const first = Array.isArray(questions) && questions.length === 1 ? questions[0] : null;
+  if (!first || !first.intent || first.intent.kind !== 'plan-review' || typeof first.detail !== 'string') return null;
+  const m = /^#{1,6}\s+(.+?)\s*$/m.exec(first.detail);
+  return m ? m[1] : '';
+}
+
 function notification(kind, title, detail, sessionId, sessionTitle) {
   const body = [sessionTitle, detail].filter((s) => typeof s === 'string' && s.trim()).join(' · ');
   const sid = typeof sessionId === 'string' && sessionId ? sessionId : null;
@@ -50,8 +60,11 @@ export function mapFrame(frame, ctx = {}) {
         .join(': ');
       return notification('approval', 'Approval needed', detail, p.sessionId, sessionTitle);
     }
-    case 'question/requested':
+    case 'question/requested': {
+      const plan = planHeading(p.questions);
+      if (plan !== null) return notification('question', 'Plan ready for review', plan, p.sessionId, sessionTitle);
       return notification('question', 'Question waiting', firstQuestionText(p.questions), p.sessionId, sessionTitle);
+    }
     case 'host/session-status':
       if (p.running === false && ctx.runningBefore === true) {
         return notification('finished', 'Turn finished', '', p.sessionId, sessionTitle);
