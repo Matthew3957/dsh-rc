@@ -12,6 +12,8 @@ jobs:
         with:
           fetch-depth: 0
       - name: Conventional Commits on every commit and the PR title
+        # Both values go through env, never spliced into the shell command.
         env:
           PR_TITLE: ${{ github.event.pull_request.title }}
-        run: scripts/commit-check.sh "origin/${{ github.base_ref }}"
+          BASE_REF: ${{ github.base_ref }}
+        run: scripts/commit-check.sh "origin/$BASE_REF"

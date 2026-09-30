@@ -8,15 +8,17 @@ RE="^($TYPES)(\([a-z0-9._/-]+\))?!?: [^ ].{0,98}$"   # summary under 100 charact
 # Resolve the range first: a failed git log must fail the check, not pass it with nothing checked.
 git rev-parse --verify --quiet "$base" >/dev/null || { echo "commit-check: cannot resolve $base"; exit 1; }
 commits=$(git log --format='%h %s' "$base"..HEAD) || { echo "commit-check: git log failed for $base..HEAD"; exit 1; }
+# Subjects and titles are untrusted: break up "::" so the Actions runner can't read them as workflow commands.
+show() { local t="${1//::/: :}"; printf '"%s"' "$t"; }
 bad=0
 while IFS= read -r line; do
   [ -n "$line" ] || continue
   sha="${line%% *}"; subject="${line#* }"
   # Merge commits and GitHub's own revert subjects are left alone.
   [[ "$subject" =~ ^(Merge|Revert\ \") ]] && continue
-  if ! [[ "$subject" =~ $RE ]]; then echo "commit-check: $sha: \"$subject\""; bad=1; fi
+  if ! [[ "$subject" =~ $RE ]]; then echo "commit-check: $sha: $(show "$subject")"; bad=1; fi
 done <<< "$commits"
-if [ -n "${PR_TITLE:-}" ] && ! [[ "$PR_TITLE" =~ $RE ]]; then echo "commit-check: PR title: \"$PR_TITLE\""; bad=1; fi
+if [ -n "${PR_TITLE:-}" ] && ! [[ "$PR_TITLE" =~ $RE ]]; then echo "commit-check: PR title: $(show "$PR_TITLE")"; bad=1; fi
 if [ $bad -ne 0 ]; then
   echo "Use <type>(<optional scope>)!: <summary>, types: ${TYPES//|/, }. See AGENTS.md."
   exit 1
