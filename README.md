@@ -3,8 +3,10 @@
 A phone-first remote control for a running `dsh web` server (compatible with DeepSeek Harness).
 Independent project, not affiliated with or endorsed by DeepSeek.
 
-Session list, chat with streaming replies, compact tool rows you tap to expand, approval and
-question cards above the composer, stop / steer / queue, slash commands, model switching,
+Session list, chat with streaming replies, compact tool rows you tap to expand (file edits open
+as line diffs), a summary card at the end of each turn (files changed, commands run, passed or
+failed), approval and question cards above the composer, plan-mode plans as approve / keep
+planning cards, stop / steer / queue, slash commands, model switching,
 image attachments, a read-only plugins and connectors screen, a per-session status line
 (model and route, context fill, session tokens, estimated cost), a Running now dashboard for
 every active session, and Web Push notifications for approvals, questions, finished turns and
@@ -232,6 +234,23 @@ applies to it; the tailnet is the boundary there.
 - Slash commands go through `commands/execute`, not `session.prompt`.
 - Tested against dsh 0.1.1-rc.2. Not yet tested against 0.2.x.
 
+## Reviewing the work
+
+- **Diffs.** A write or edit row shows `+added −removed` and opens as a line diff, with long
+  unchanged stretches folded. It draws the hunk dsh reports once the call has finished (the
+  change as applied) and the intended change while it runs. dsh sends hunks without line
+  numbers, so none are shown, and a new file or an overwrite reads as all additions.
+- **Turn summary.** A turn that changed files or ran commands ends with a card listing both;
+  tap a row to open that tool call. The verdict is **failed** when the turn errored or was
+  blocked, or when its last command exited non-zero, **stopped** when it was interrupted or hit
+  the output limit, and **passed** otherwise. Only the last command decides, so a test that
+  failed and then passed within the turn reads as passed. When the loaded history starts
+  mid-turn the card says so.
+- **Plan review.** When plan mode presents a plan, it appears above the composer as the plan
+  itself with **Approve**, **Keep planning** (optional feedback goes back to the model) and
+  **Reply instead** (closes the review, stays in plan mode and waits for your message). The push
+  notification reads "Plan ready for review".
+
 ## Estimated cost
 
 The status line shows what a session has cost, but dsh reports tokens and never dollars, so the page
@@ -280,16 +299,14 @@ a subagent catalog only when it is stale, and stops while a chat is open.
 
 Next, in priority order:
 
-1. **Review the work**: render `diff` view cards as real diffs, a per-turn summary card
-   (files changed, commands run, pass or fail), and plan-mode plans as approve / reject cards.
+1. **@-mention files** in the composer (`fileReferences/list`).
+2. **Fork, archive and export sessions** (`session.fork`, `session.export`).
 
 Later:
 
-- Edit or remove queued messages (`session.updateQueue`).
-- @-mention files (`fileReferences/list`), a dictation button, saved prompt templates.
-- Fork, archive and export sessions (`session.fork`, `session.export`).
-- A setup helper when dsh answers 403 (explain `--trusted-host`).
-- Screenshots from a clean demo instance, test on dsh 0.2.x.
+- A smoke test that every RPC method the page calls still exists in dsh.
+- Test on dsh 0.2.x, and screenshots from a clean demo instance.
+- A dictation button.
 - A QR code for the tunnel URL in the terminal and the page, if a no-dependency way to draw one
   turns up.
 
