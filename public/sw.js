@@ -42,7 +42,8 @@ self.addEventListener('notificationclick', (event) => {
       } catch {
         continue;
       }
-      if (parsed.origin !== self.location.origin) continue;
+      // Only reuse our own pages (under the worker's scope), never another app on this origin.
+      if (parsed.origin !== self.location.origin || !client.url.startsWith(self.registration.scope)) continue;
       await client.focus();
       let navigated = false;
       if ('navigate' in client) {
