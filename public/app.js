@@ -549,6 +549,7 @@ $('#q').addEventListener('input', (e) => {
 });
 $('#plugBtn').onclick = () => pluginsSheet();
 $('#bellBtn').onclick = () => notificationsSheet();
+$('#qrBtn').onclick = () => tunnelSheet();
 $('#moreBtn').onclick = () => { S.shown += 40; renderList(); fillTitles(); };
 
 // ---------- Renderer ----------
@@ -2377,6 +2378,29 @@ async function notificationsSheet() {
   openSheet(...kids);
 }
 
+// ---------- Tunnel QR ----------
+// With --tunnel the server knows its public URL; show it as a QR code so a phone
+// can open it by scanning. The code holds only the URL, never a login.
+async function loadTunnelUrl() {
+  try {
+    const res = await fetch('./tunnel');
+    if (!res.ok) return null;
+    const { url } = await res.json();
+    return typeof url === 'string' && /^https:\/\//.test(url) ? url : null;
+  } catch { return null; }
+}
+async function tunnelSheet() {
+  const url = await loadTunnelUrl();
+  if (!url) { $('#qrBtn').hidden = true; toast('No tunnel is running'); return; }
+  const canvas = h('canvas', { role: 'img', 'aria-label': 'QR code for ' + url });
+  dshQr.drawToCanvas(canvas, dshQr.encode(url), { scale: 8, quiet: 4 });
+  openSheet(h('h3', {}, 'Open on your phone'),
+    h('div', { class: 'note' }, 'Scan with the phone camera. You still log in with the passphrase.'),
+    h('div', { class: 'qr-tile' }, canvas),
+    h('div', { class: 'note url' }, url),
+    h('div', { class: 'note' }, 'The address changes every time dsh-rc starts with --tunnel.'));
+}
+
 // ---------- Viewport (iOS keyboard) ----------
 function fitViewport() {
   const vv = window.visualViewport;
@@ -2405,6 +2429,7 @@ fitViewport();
     if (e.code === 'http-404' || e.code === 'http-401') return showUnsupportedDsh(e.code);
     toast('dsh not reachable: ' + e.message, 6000);
   }
+  loadTunnelUrl().then((url) => { $('#qrBtn').hidden = !url; });
   connect();
   await loadSessions();
   if (location.hash) route();

@@ -39,6 +39,7 @@ import { defaultStateDir, ensureStateDir, writeSecret } from './state.mjs';
 import { DEFAULT_UPSTREAM_HOST, apiMethodOf, checkRequest, createProxy, hostnameOf, isLoopbackHostname, isPrivilegedMethod } from './proxy.mjs';
 import { MIN_PASSPHRASE_LENGTH, createAuth, loadPassphraseRecord, passphraseProblem, savePassphrase } from './auth.mjs';
 import { startTunnel } from './tunnel.mjs';
+import { encode as encodeQr, toTerminalLines } from './qr.mjs';
 
 export { defaultStateDir } from './state.mjs';
 
@@ -482,6 +483,7 @@ export async function startServer(options = {}) {
       if (!pathname.startsWith('/')) return sendText(res, 400, 'Bad request');
       const isApi = pathname === '/api' || pathname.startsWith('/api/');
       const isPush = pathname === '/push' || pathname.startsWith('/push/');
+      const isTunnel = pathname === '/tunnel';
 
       // Cross-site writes are refused everywhere, before auth is looked at.
       if (req.method !== 'GET' && req.method !== 'HEAD') {
@@ -493,7 +495,7 @@ export async function startServer(options = {}) {
       if (pathname === '/logout') return auth.handleLogout(req, res);
 
       if (!auth.isAuthed(req) && !auth.isPublic(req, pathname)) {
-        if (isApi || isPush) {
+        if (isApi || isPush || isTunnel) {
           // The header lets the page tell this login 401 from a 401 dsh itself sends (dsh 0.2 wants its own cookie).
           const buf = Buffer.from(JSON.stringify({ error: 'authentication required' }), 'utf8');
           res.writeHead(401, { 'Content-Type': 'application/json; charset=utf-8', 'Content-Length': buf.length, 'Cache-Control': 'no-store', 'X-Dsh-Rc-Login': '1' });
@@ -515,6 +517,10 @@ export async function startServer(options = {}) {
         return proxy.proxyHttp(req, res);
       }
       if (isPush) return handlePush(req, res, pathname);
+      if (isTunnel) {
+        if (req.method !== 'GET' && req.method !== 'HEAD') return sendJson(res, 405, { error: 'method not allowed' });
+        return sendJson(res, 200, { url: tunnel ? `${tunnel.url}/` : null });
+      }
       if (req.method !== 'GET' && req.method !== 'HEAD') return sendText(res, 405, 'Method not allowed');
       return serveStatic(req, res, publicDir, pathname);
     })().catch((err) => {
@@ -568,6 +574,12 @@ export async function startServer(options = {}) {
       throw err;
     }
     logger.log(`[dsh-rc] tunnel: ${tunnel.url}/ (new on every start; anyone with it reaches the login page)`);
+    try {
+      const ansi = Boolean(process.stdout.isTTY) && !process.env.NO_COLOR;
+      logger.log(toTerminalLines(encodeQr(`${tunnel.url}/`), { ansi }).join('\n'));
+    } catch (err) {
+      logger.error(`[dsh-rc] could not draw the tunnel QR code: ${err.message}`);
+    }
   }
 
   const shownHost = host.includes(':') ? `[${host}]` : host;
