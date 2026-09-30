@@ -446,7 +446,7 @@ input, textarea, select { font: inherit; color: inherit; }
 .run-empty { font-size: 12px; color: var(--muted); }
 
 /* Prices sheet */
-#sheetBody textarea { width: 100%; padding: 10px 12px; border-radius: 10px; border: 1px solid var(--line); background: var(--card); font-family: var(--mono); font-size: 13px; line-height: 1.45; resize: vertical; }
+#sheetBody textarea { width: 100%; padding: 10px 12px; border-radius: 10px; border: 1px solid var(--line); background: var(--card); font-family: var(--mono); font-size: 16px; /* under 16px iOS zooms on focus */ line-height: 1.45; resize: vertical; }
 
 /* Tunnel QR sheet: a white tile so the code scans in dark mode too. */
 .qr-tile { background: #fff; border-radius: 12px; padding: 8px; margin: 8px auto; width: fit-content; max-width: 100%; box-sizing: border-box; }
