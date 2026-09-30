@@ -1,5 +1,39 @@
 # Changelog
 
+## [0.3.0](https://github.com/Matthew3957/dsh-rc/compare/v0.2.0...v0.3.0) (2026-09-30)
+
+
+### Features
+
+* **ui:** complete [@file](https://github.com/file) mentions from the session folder ([b27b800](https://github.com/Matthew3957/dsh-rc/commit/b27b800c1349138d03d4454d97032c4a1728ef96)), closes [#9](https://github.com/Matthew3957/dsh-rc/issues/9)
+* **ui:** dictate the composer with the browser's Web Speech API ([efc4f6d](https://github.com/Matthew3957/dsh-rc/commit/efc4f6d4f6015f3def93fd2da91f5a73a5fdf36f)), closes [#33](https://github.com/Matthew3957/dsh-rc/issues/33)
+* **ui:** fork, export and archive a session from the menu ([82108de](https://github.com/Matthew3957/dsh-rc/commit/82108de57649a144d9823f9b79b6fb5b827dc27a)), closes [#11](https://github.com/Matthew3957/dsh-rc/issues/11)
+* **ui:** show the tunnel URL as a QR code in the terminal and on the page ([18069ce](https://github.com/Matthew3957/dsh-rc/commit/18069ce02d443ec72a6d15409c0b997f32db50e5)), closes [#34](https://github.com/Matthew3957/dsh-rc/issues/34)
+* **ui:** simplify the session list with one row per session and floating actions ([1f53e91](https://github.com/Matthew3957/dsh-rc/commit/1f53e915c5060649b488f910f0e6f7e983f3dfff)), closes [#45](https://github.com/Matthew3957/dsh-rc/issues/45)
+
+
+### Bug Fixes
+
+* **ui:** archive guard covers live subagents, guard the remaining action calls, grow-only archive set ([e0c1149](https://github.com/Matthew3957/dsh-rc/commit/e0c1149246c5b908642a4b11ebc6ff4e5115019c))
+* **ui:** credit the QR encoder's source, guard it, and draw whole pixels per module ([c6fa5b8](https://github.com/Matthew3957/dsh-rc/commit/c6fa5b8c3cba0984b0ef86b689e0a73fb582d097))
+* **ui:** guard session actions, export inside the tap, never archive a working session ([78b1f55](https://github.com/Matthew3957/dsh-rc/commit/78b1f5507dec7ba9a764164d25a2959f240716e2))
+* **ui:** list menu shows the dsh web UI link only where it exists, and handles a failed push-state check ([9d45c2f](https://github.com/Matthew3957/dsh-rc/commit/9d45c2f00d4585cd13bf4aa54883149ff29f885a))
+* **ui:** re-check the mention at the caret before inserting, guard list entries ([e77b937](https://github.com/Matthew3957/dsh-rc/commit/e77b93710ace2714c7ac9520caeb7b66566b9127))
+* **ui:** say when dsh is too new or unreachable, and stop reading dsh's 401 as a login expiry ([f82aa84](https://github.com/Matthew3957/dsh-rc/commit/f82aa848fac9e29226e725381dd88646bca38e8a)), closes [#12](https://github.com/Matthew3957/dsh-rc/issues/12)
+* **ui:** show Running now progress bars by default and tighten text sizes ([78111b9](https://github.com/Matthew3957/dsh-rc/commit/78111b98c5c9acba0b291278a8cc42f6546dffc2))
+
+
+### Documentation
+
+* **readme:** add screenshots from a mock dsh with demo sessions ([ca1435a](https://github.com/Matthew3957/dsh-rc/commit/ca1435afd1dd00d8e24865380117068d4861ba5c)), closes [#13](https://github.com/Matthew3957/dsh-rc/issues/13)
+* **readme:** regenerate screenshots for the simpler list, and harden the screenshot tooling ([1b4b4df](https://github.com/Matthew3957/dsh-rc/commit/1b4b4df8625dd1bbfebb72a7763ac5d8f04a1e32))
+
+
+### Tests
+
+* **scripts:** add an RPC smoke test for the methods the page calls ([d1c2ee2](https://github.com/Matthew3957/dsh-rc/commit/d1c2ee23aa796b2b9fa763525176b88cf0de05a2)), closes [#15](https://github.com/Matthew3957/dsh-rc/issues/15)
+* **scripts:** probe fileReferences/list in the smoke test ([98fc6c9](https://github.com/Matthew3957/dsh-rc/commit/98fc6c96f6e6726c3184633bda24badbd80fead2))
+
 ## [0.2.0](https://github.com/Matthew3957/dsh-rc/compare/v0.1.0...v0.2.0) (2026-09-30)
 
 
