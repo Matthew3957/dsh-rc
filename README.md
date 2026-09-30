@@ -164,8 +164,8 @@ It has no authentication, and dsh-rc exists so that it never has to.
 
 ## Notifications
 
-The server also watches dsh's event sockets (`/api/events.mux` and `/api/events.host`,
-read-only, with capped reconnect backoff) and sends a Web Push notification with VAPID when:
+The server also watches dsh's event feeds (dsh 0.1: `/api/events.mux` and `/api/events.host`;
+dsh 0.2: one `/api/remote.mux` socket; read-only, with capped reconnect backoff) and sends a Web Push notification with VAPID when:
 
 - an approval is requested (title "Approval needed", with the tool name and reason),
 - a question is waiting (title "Question waiting"),
@@ -197,6 +197,8 @@ Environment variables:
 | `DSH_RC_STATE_DIR` | `$XDG_STATE_HOME/dsh-rc` or `~/.local/state/dsh-rc` | Where `vapid.json`, `subscriptions.json`, `passphrase.json` and `session-secret` live |
 | `DSH_RC_VAPID_SUBJECT` | `https://github.com/Matthew3957/dsh-rc` (Apple rejects `localhost` mailto subjects; use your own `mailto:` or `https:` URL) | VAPID subject sent with each push |
 | `DSH_URL` | `http://127.0.0.1:3080` | dsh web base URL: its event sockets are watched and `/api` is proxied to it |
+| `DSH_TOKEN` | none | dsh 0.2 only: the launch token dsh printed at start (or the whole `?token=` URL) |
+| `DSH_TOKEN_FILE` | none | dsh 0.2 only: a file holding that token, read again on every exchange |
 | `DSH_RC_UPSTREAM_HOST` | `dsh-rc.internal` | Host the proxy presents to dsh; start dsh with `--trusted-host` for it |
 | `DSH_RC_TRUSTED_HOSTS` | none | Comma-separated extra Host names the proxy accepts when there is no passphrase |
 | `DSH_RC_PASSPHRASE` | none | Login passphrase, 12 characters or more (hashed in memory; `--set-passphrase` avoids keeping the plaintext around) |
@@ -204,7 +206,7 @@ Environment variables:
 | `DSH_RC_CERT`, `DSH_RC_KEY` | none | Certificate and key files to serve HTTPS directly |
 
 Flags: `--host`, `--port`, `--dsh-url`, `--upstream-host`, `--trusted-host` (repeatable),
-`--tunnel`, `--cert`, `--key`, and `--set-passphrase`, which stores a hashed passphrase (from
+`--dsh-token-file`, `--tunnel`, `--cert`, `--key`, and `--set-passphrase`, which stores a hashed passphrase (from
 `DSH_RC_PASSPHRASE`, or a prompt) and exits. Flags win over environment variables. `--help`
 lists them.
 
@@ -251,45 +253,76 @@ applies to it; the tailnet is the boundary there.
 - Typing `@` in the composer lists files and folders of the session's working directory
   (`fileReferences/list`, payload `args: {agentId, query}`) and inserts the path, `@"..."` when it
   has spaces. Tapping a folder keeps the list open one level down.
-- Tested against dsh 0.1.1-rc.2. dsh 0.2 is not supported, see Compatibility below.
+- The above is dsh 0.1. dsh 0.2 differs on every point (namespaced methods, one `/api/remote.mux`
+  socket, a cookie); `public/dsh02.js` maps it onto the same shapes. See Compatibility below.
 
 ## Compatibility
 
 | dsh | Status |
 | --- | --- |
-| 0.1.1-rc.2 | Supported, what everything here is tested against. |
-| 0.2.0-rc.2 | **Not supported.** The page shows a "too new for dsh-rc" card; nothing else works. |
+| 0.1.1-rc.2 | Supported, what everything here was first built against. |
+| 0.2.0-rc.2 | Supported for the core: session list, chat streaming, prompts, approvals, questions, queue, stop, model, rename, fork, archive, new session, slash commands, push notifications. Gaps are listed below. |
 
-Checked against the newest 0.2 on npm (0.2.0-rc.2), run in isolation beside 0.1.1 with the same
-probes. Findings:
+One page and one server speak both. The page asks `host.describe` (dsh 0.1) first; when that is a
+404 it asks `session/canOpenWorkspacePath` (dsh 0.2) and, if that answers, switches to the 0.2
+transport. The push watcher makes the same choice on every (re)connect, so a dsh restarted as the
+other version is picked up without restarting dsh-rc.
 
-- **The 0.1 schemas are gone.** 0.1.1 ships its wire types as zod schemas in
-  `dsh-host-apiproxy` (`sessions`, `events`, `rpc-map` and the rest). 0.2 has no such package.
-  Its contracts are generated per feature package (`typert.remote-client.d.ts` in
-  `dsh-api-session-controller` and its siblings) on top of `dsh-api-gateway`.
-- **Every RPC method the page calls answers 404.** `host.describe`, `session.list`,
-  `session.history`, `session.prompt`, `workspace.list`, `agentPreset.list`, `host.listDirectory`,
-  `subagent.list` and the rest are not routes in 0.2. Endpoints are now `<namespace>/<method>`
-  (`session/list`, `session/modelCatalog`, `session/canOpenWorkspacePath`) and `args` must carry
-  every parameter by its declared name (`session/list` wants `{args: {_request: {}}}`). The
-  `client-request` and `server-response` envelope is unchanged.
-- **The event sockets are gone.** `/api/events.mux` and `/api/events.host` cannot be opened.
-  Live data moves to streams (`session/follow`, `session/control` and others) multiplexed over one
-  `/api/remote.mux` WebSocket with its own framing. That replaces the page's whole event handling,
-  and the push watcher in `server/notify.mjs` with it.
-- **dsh 0.2 needs a browser login.** Every method and socket answers 401 without a signed cookie.
-  dsh prints `http://127.0.0.1:<port>/?token=...` at start; opening that exchanges the token for
-  an HttpOnly cookie bound to the host and port. The Host and Origin trust rules (`--trusted-host`)
-  are unchanged and still answer 403. dsh-rc's proxy has no cookie to send, so a port needs its
-  own token handshake as well.
-- **`session.prompt` and the approval, question and plan flows** were not probed: they sit behind
-  the same gate. Treat their payloads as unverified until the port reads the new contracts.
+### Running dsh-rc against dsh 0.2
 
-What dsh-rc does about it: the page treats a 404 or 401 from `host.describe` as "dsh too new" and
-says so, rather than redirecting to the login page or failing call by call. dsh-rc's own login
-401 carries an `X-Dsh-Rc-Login` header, so an upstream 401 is no longer mistaken for an expired
-login. Both changes work the same on 0.1.1. A real port is a separate piece of work: new client
-on `/api/remote.mux`, a token handshake in the proxy, and a rewritten watcher.
+dsh 0.2 answers 401 to everything until it has a signed cookie. dsh prints a launch URL at start
+(`http://127.0.0.1:<port>/?token=...`); give dsh-rc that token:
+
+    DSH_TOKEN=<token> node server/index.mjs
+    # or keep it in a file a supervisor rewrites when dsh restarts
+    node server/index.mjs --dsh-token-file <file>
+
+dsh-rc exchanges it for dsh's cookie (one per Host it presents, since dsh binds the cookie to it)
+and adds that cookie to every proxied call and socket. The browser never sees dsh's cookie, only
+dsh-rc's own login. The page therefore has to be served by dsh-rc (the front-door setup); a
+Tailscale Serve mount straight to dsh has nothing to hold the cookie and shows "dsh wants its
+launch token". Start dsh with `--trusted-host` for the name dsh-rc presents, as before. The token
+is as powerful as dsh's own login, so keep it out of the command line (use the environment or a
+file with mode 0600).
+
+### How the 0.2 port works
+
+Everything below comes from the generated `typert.remote-client.d.ts` contracts in
+`dsh-api-session-controller`, `dsh-api-workspace-controller`, `dsh-agent-preset-registry`,
+`dsh-commands` and `dsh-user-questions`, the framing in `dsh-api-gateway`'s stream protocol, and
+the `approval/request` and `user-questions/request` events in `dsh-user-approval` and
+`dsh-user-questions`, checked against a running 0.2.0-rc.2.
+
+- **Calls.** `POST /api/<namespace>/<method>`, `payload: {args}`, every parameter under its declared
+  name (`session/list` wants `{_request: {}}`, `session/prompt` wants `{request: {...}}`).
+  `public/dsh02.js` maps the 0.1 method names the page uses onto these, and back again.
+- **Live data.** One WebSocket, `/api/remote.mux`, carrying logical streams: `$events` (session
+  status and errors, and the approval and question requests), `session/control` (every session's
+  projections: title, queue, usage), `workspace/follow` (the archive set) and, for the open session,
+  `session/follow` (snapshot, durable events, live assistant chunks). Each item is converted into
+  the 0.1 frame the page already renders, so the chat, status line and dashboard code is shared.
+- **Approvals and questions** are not calls but pending requests dsh holds open until some client
+  answers with `POST /api/$events/result`. Like a second browser tab, dsh-rc's watcher sees them and
+  never answers. dsh does not echo a cancel to the client that answered, so the page clears the card itself.
+
+### Not ported yet (dsh 0.2)
+
+- **Tool cards lose their rich view.** 0.1 attached a presentation view to tool events (the diff
+  cards and review summary read it). 0.2 events carry none, so tools show their name, arguments and
+  result text only; the turn summary's file and command counts are therefore thinner.
+- **Background jobs** in Running now (`session/jobs` frames): 0.2 has `job/list` and `job/follow`
+  streams, not wired.
+- **Subagent tree** is built from the `subagentCatalog` projection: no grandchildren, and a child's
+  activity is only as fresh as the last status event.
+- **A question dsh already moved on from** (its timed wait ran out and the agent continued) is not
+  shown; only open requests are. `userQuestions/answer` is not used.
+- **Session search** answers as dsh does: on a deployment with the session-query index off it fails.
+- **Plugins & connectors** sheet, **file uploads**, goals, terminals, schedules and settings are not
+  touched (the last three are refused by the proxy, as before).
+- Unverified against a real model: only a scripted Messages-compatible stand-in was available, so
+  reasoning blocks, tool-call chunks and images in 0.2's live stream are read from the contracts.
+- There is no browser-level test of the 0.2 path; the adapter is covered in Node (`test/dsh02.test.mjs`)
+  and was driven live through the proxy.
 
 ## Smoke test
 
@@ -306,7 +339,7 @@ The only requests it can send are the read methods on its allowlist; it never st
 prompts, steers or changes a session. The session-changing methods the page calls are
 listed in the output as not called, so a rename there still takes a live phone to notice.
 
-Against dsh 0.2.x the handshake answers 401 (see Compatibility), and the smoke reports that
+Against dsh 0.2.x the handshake answers 401 without a cookie (see Compatibility), and the smoke reports that
 rather than working around it.
 
 ## Reviewing the work
@@ -407,7 +440,7 @@ Keep each image under around 250 KB, and never point this at a real instance.
 
 Next, in priority order:
 
-1. **Port to the dsh 0.2 API** (#37, see Compatibility).
+1. **Finish the dsh 0.2 port** (#37): the gaps listed under Compatibility, and dropping 0.1 once 0.2.0 is final.
 
 ## License
 
