@@ -405,6 +405,6 @@ input, textarea, select { font: inherit; color: inherit; }
 #sheetBody textarea { width: 100%; padding: 10px 12px; border-radius: 10px; border: 1px solid var(--line); background: var(--card); font-family: var(--mono); font-size: 13px; line-height: 1.45; resize: vertical; }
 
 /* Tunnel QR sheet: a white tile so the code scans in dark mode too. */
-.qr-tile { background: #fff; border-radius: 12px; padding: 8px; margin: 8px auto; width: min(100%, 300px); box-sizing: border-box; }
-.qr-tile canvas { display: block; width: 100%; height: auto; image-rendering: pixelated; }
+.qr-tile { background: #fff; border-radius: 12px; padding: 8px; margin: 8px auto; width: fit-content; max-width: 100%; box-sizing: border-box; }
+.qr-tile canvas { display: block; max-width: 100%; height: auto; image-rendering: pixelated; }
 .note.url { word-break: break-all; user-select: all; -webkit-user-select: all; font-family: var(--mono); font-size: 12.5px; }

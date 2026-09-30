@@ -1,4 +1,24 @@
 'use strict';
+// Adapted from the QR Code generator library by Project Nayuki (https://www.nayuki.io/page/qr-code-generator-library),
+// under the MIT License below: the alignment-pattern positions, block tables and structure follow it.
+//
+// Copyright (c) Project Nayuki. (MIT License)
+// Permission is hereby granted, free of charge, to any person obtaining a copy of
+// this software and associated documentation files (the "Software"), to deal in
+// the Software without restriction, including without limitation the rights to
+// use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of
+// the Software, and to permit persons to whom the Software is furnished to do so,
+// subject to the following conditions:
+// - The above copyright notice and this permission notice shall be included in
+//   all copies or substantial portions of the Software.
+// - The Software is provided "as is", without warranty of any kind, express or
+//   implied, including but not limited to the warranties of merchantability,
+//   fitness for a particular purpose and noninfringement. In no event shall the
+//   authors or copyright holders be liable for any claim, damages or other
+//   liability, whether in an action of contract, tort or otherwise, arising from,
+//   out of or in connection with the Software or the use or other dealings in the
+//   Software.
+//
 // A small QR Code encoder (byte mode, error correction L or M, versions 1-40),
 // shared by the page and the server so the tunnel URL is drawn the same way in
 // both. No dependencies. Follows ISO/IEC 18004: Reed-Solomon over GF(256) with
