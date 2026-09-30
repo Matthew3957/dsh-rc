@@ -225,6 +225,35 @@ export function bareCode(code) {
   return typeof code === 'string' ? code.replace(/^[^/]+\//, '') : code;
 }
 
+/**
+ * A session's goal as the page shows it, from the `goal` projection (`{goal, roundsStarted}`) or a
+ * `goals/get` view (the same fields flat, plus `activation`). Null when there is no goal.
+ */
+export function goalOf(value) {
+  const v = obj(value);
+  const g = v.goal && typeof v.goal === 'object' ? v.goal : v;
+  if (typeof g.objective !== 'string' || typeof g.id !== 'string' || typeof g.revision !== 'number') return null;
+  const reason = obj(g.blockedReason);
+  return {
+    ref: { id: g.id, revision: g.revision },
+    objective: g.objective,
+    phase: str(g.phase) || 'active',
+    blocked: str(reason.message),
+    maxRounds: typeof g.maxGoalRounds === 'number' ? g.maxGoalRounds : null,
+    rounds: typeof v.roundsStarted === 'number' ? v.roundsStarted : 0,
+    activation: str(v.activation),
+  };
+}
+
+const GOAL_GLYPH = { active: '●', paused: '⏸', blocked: '⚠', complete: '✓' };
+/** The short status for a goal: glyph, phase and rounds against the cap. An active goal that will not continue on its own says so. */
+export function goalStatus(g) {
+  const idle = g.phase === 'active' && g.activation === 'disarmed';
+  const phase = idle ? 'active, not continuing' : g.phase;
+  const rounds = g.maxRounds ? `${g.rounds}/${g.maxRounds} rounds` : `${g.rounds} rounds`;
+  return { glyph: GOAL_GLYPH[g.phase] || '●', level: g.phase === 'blocked' ? 'err' : (idle ? 'warn' : g.phase), text: `${phase} · ${rounds}` };
+}
+
 const toEvents = (sessionId, records) => (records || []).map((r) => ({ sessionId, event: r.event }));
 
 /**
@@ -452,5 +481,5 @@ export function createClient({ transport, wsUrl, WebSocketImpl = globalThis.WebS
 }
 
 if (typeof window !== 'undefined') {
-  window.dsh02 = { createClient, MUX_PATH, bareCode, fromPluginInventory, localizedText };
+  window.dsh02 = { createClient, MUX_PATH, bareCode, fromPluginInventory, localizedText, goalOf, goalStatus };
 }

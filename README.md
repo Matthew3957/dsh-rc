@@ -8,7 +8,8 @@ as line diffs), a summary card at the end of each turn (files changed, commands 
 failed), approval and question cards above the composer, plan-mode plans as approve / keep
 planning cards, stop / steer / queue, slash commands, model switching,
 fork, export and archive from the session menu, image attachments, dictation through the browser's
-Web Speech API where it exists, a read-only plugins and connectors screen, a per-session status line
+Web Speech API where it exists, a read-only plugins and connectors screen, session goals on dsh 0.2
+(shown in the chat and set, edited, paused or cleared from the session menu), a per-session status line
 (model and route, context fill, session tokens, estimated cost), a Running now dashboard for
 every active session, and Web Push notifications for approvals, questions, finished turns and
 errors.
@@ -303,6 +304,11 @@ events in `dsh-user-approval` and `dsh-user-questions`, checked against a runnin
   projections: title, queue, usage), `workspace/follow` (the archive set) and, for the open session,
   `session/follow` (snapshot, durable events, live assistant chunks). Each item is converted into
   the 0.1 frame the page already renders, so the chat, status line and dashboard code is shared.
+- **Goals** (`dsh-goal`). The `goal` projection arrives on `session/control` like any other and
+  drives the goal line under the header; `goals/get` adds whether continuation is armed, and
+  `goals/create`, `edit`, `pause`, `resume`, `complete` and `clear` change it, each carrying the
+  goal's `{id, revision}` so a stale view is refused. The older API has no goals: the line never
+  shows and the menu entry is not offered.
 - **Approvals and questions** are not calls but pending requests dsh holds open until some client
   answers with `POST /api/$events/result`. Like a second browser tab, dsh-rc's watcher sees them and
   never answers. dsh does not echo a cancel to the client that answered, so the page clears the card itself.
@@ -325,7 +331,7 @@ events in `dsh-user-approval` and `dsh-user-questions`, checked against a runnin
 - **A question dsh already moved on from** (its timed wait ran out and the agent continued) is not
   shown; only open requests are. `userQuestions/answer` is not used.
 - **Session search** answers as dsh does: on a deployment with the session-query index off it fails.
-- **File uploads**, goals, terminals, schedules and settings are not touched (the last three are
+- **File uploads**, terminals, schedules and settings are not touched (the last three are
   refused by the proxy, as before).
 - Checked in headless Chromium with real DeepSeek turns against 0.1.1-rc.2, 0.1.7-rc.2 and
   0.2.0-rc.2: streaming, reasoning blocks, tool calls and results, the status line, and an approval
