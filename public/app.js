@@ -1,6 +1,7 @@
 'use strict';
 // dsh mobile: a phone-first chat client for a running `dsh web` server.
-// Talks to the same-origin /api (HTTP RPC) and /api/events.{mux,host} (WebSockets).
+// Talks to the same-origin /api (HTTP RPC) and, for live data, WebSockets: /api/events.{mux,host} on
+// dsh 0.1, /api/remote.mux on dsh 0.2 (public/dsh02.js maps it onto the same frames). Boot picks one.
 
 const $ = (s, el = document) => el.querySelector(s);
 const TZ = (() => { try { return Intl.DateTimeFormat().resolvedOptions().timeZone; } catch { return undefined; } })();
@@ -49,20 +50,18 @@ function copyText(text, btn) {
   if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(done, fallback);
   else fallback();
 }
-// dsh 0.2 replaced the HTTP RPC surface this page speaks (methods like session.list are gone) and
-// wants a launch-token cookie, so nothing here can work against it. Say so instead of failing piecemeal.
-// 401 from dsh itself (not dsh-rc's login) is dsh 0.2's token gate. A 404 is ambiguous: dsh 0.2
-// renamed every method, but a /api that is not routed to dsh at all answers 404 too.
+// Shown when neither dsh 0.1's host.describe nor dsh 0.2's session/canOpenWorkspacePath answers.
+// 401 from dsh itself (not dsh-rc's login) is dsh 0.2's token gate: dsh-rc has no launch token for it.
+// A 404 is a /api that is not routed to dsh at all.
 function showUnsupportedDsh(code) {
   const four04 = code === 'http-404';
   const card = h('div', { class: 'card api403' },
-    h('h4', {}, four04 ? 'dsh-rc cannot find dsh here' : 'This dsh is too new for dsh-rc'),
+    h('h4', {}, four04 ? 'dsh-rc cannot find dsh here' : 'dsh wants its launch token'),
     h('div', { class: 'why' }, four04
-      ? 'host.describe answered 404. Either this page\'s /api is not reaching dsh (check the Tailscale Serve mount, ' +
-        'or --dsh-url when dsh-rc runs as the front door), or dsh is 0.2, which dsh-rc does not support yet ' +
-        '(tested on 0.1.1-rc.2; see Compatibility in the README).'
-      : 'dsh answered 401 to host.describe, which is how dsh 0.2 behaves. dsh-rc speaks the dsh 0.1 API ' +
-        '(tested on 0.1.1-rc.2). Run dsh 0.1.x for now; see Compatibility in the README.'));
+      ? 'Neither dsh 0.1 nor dsh 0.2 answered. Check that this page\'s /api reaches dsh (the Tailscale Serve mount, ' +
+        'or --dsh-url when dsh-rc runs as the front door).'
+      : 'dsh 0.2 answers 401 until it has a signed cookie. Start dsh-rc with the token dsh printed at start ' +
+        '(DSH_TOKEN, or --dsh-token-file), so its proxy can exchange it. See Compatibility in the README.'));
   $('#api403').replaceChildren(card);
 }
 // trusted: the name dsh-rc's proxy says dsh must trust; absent when the page sits beside dsh.
@@ -100,7 +99,8 @@ function checkLogin(r) {
   if (r.status === 401 && r.headers.get('x-dsh-rc-login')) { location.assign('login'); return true; }
   return false;
 }
-async function rpc(method, payload = {}, rpcId = rid()) {
+// The one HTTP call: dsh 0.1 method names with their payloads as they are, dsh 0.2 endpoints with {args}.
+async function post(method, payload = {}, rpcId = rid()) {
   const r = await fetch('/api/' + method, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -118,8 +118,12 @@ async function rpc(method, payload = {}, rpcId = rid()) {
   }
   return j.result.value;
 }
-const remote = (method, args) => rpc(method, { args });
+// dsh 0.2: the adapter in dsh02.js answers the 0.1 method names the page uses.
+let dsh2 = null;
+const rpc = (method, payload = {}, rpcId = rid()) => (dsh2 ? dsh2.rpc(method, payload, rpcId) : post(method, payload, rpcId));
+const remote = (method, args) => (dsh2 ? dsh2.remote(method, args) : post(method, { args }));
 async function respond(rpcId, result) {
+  if (dsh2) return dsh2.respond(rpcId, result);
   const r = await fetch('/api/respond', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ type: 'client-response', rpcId, result }),
@@ -315,6 +319,11 @@ function openWS(path, onFrame) {
 function connect() {
   const c = S.conn;
   clearTimeout(c.timer);
+  if (dsh2) {
+    S.approvals.clear(); S.questions.clear(); renderPending();
+    dsh2.connect();
+    return;
+  }
   for (const k of ['mux', 'host']) if (c[k]) { c[k].onclose = null; try { c[k].close(); } catch {} }
   S.approvals.clear(); S.questions.clear(); renderPending();
   let opened = 0;
@@ -334,10 +343,27 @@ function connect() {
   c.host = openWS('/api/events.host', onHost);
   for (const ws of [c.mux, c.host]) { ws.onopen = onOpen; ws.onclose = onClose; ws.onerror = () => {}; }
 }
+// dsh 0.2: one socket carries every feed. It going away is the same reconnect as dsh 0.1's.
+function startDsh2() {
+  const c = S.conn;
+  dsh2 = window.dsh02.createClient({
+    transport: post,
+    wsUrl: (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + window.dsh02.MUX_PATH,
+    onFrame: (kind, payload, env) => (kind === 'host' ? onHost(payload) : onMux(payload, env)),
+    onHome: (home) => { if (home) S.describe = { ...(S.describe || {}), home }; },
+    onUp: () => { c.tries = 0; setConn(true); if (S.cur) loadHistory(); },
+    onDown: () => {
+      setConn(false);
+      if (c.timer) return;
+      const wait = Math.min(10000, 800 * 2 ** c.tries++);
+      c.timer = setTimeout(() => { c.timer = null; connect(); }, wait);
+    },
+  });
+}
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState !== 'visible') return;
   const c = S.conn;
-  const dead = !c.mux || c.mux.readyState > 1 || !c.host || c.host.readyState > 1;
+  const dead = dsh2 ? !dsh2.isOpen() : !c.mux || c.mux.readyState > 1 || !c.host || c.host.readyState > 1;
   if (dead) connect();
   else if (S.cur) loadHistory();
   else if (!$('#listView').hidden) loadSessions();
@@ -1046,10 +1072,12 @@ async function loadHistory() {
     const t = v.projections && v.projections.values && titleFromProjection(v.projections.values.title);
     if (t) setTitle(cur.id, t);
     cur.lastSeq = cur.events.length ? cur.events[cur.events.length - 1].event.seq : -1;
+    if (typeof v.cursor === 'number') cur.lastSeq = Math.max(cur.lastSeq, v.cursor);
     if (v.projections && v.projections.values) {
       for (const [key, value] of Object.entries(v.projections.values)) setProjection(cur.id, key, value, -1);
     }
     rerender(true);
+    for (const f of v.live || []) R.apply(f); // dsh 0.2: the reply that was mid-stream at the snapshot
     renderRunning(); // the turn's start time is only known once history is in
     renderStatusLine();
   } catch (e) {
@@ -1092,6 +1120,8 @@ function ingest(frame) {
 }
 function applyLive(frame) {
   const cur = S.cur; const seq = frame.event.seq;
+  // dsh 0.2's live assistant chunks carry no seq: they only paint the turn in progress.
+  if (frame.transient) { R.apply(frame); return; }
   if (seq <= cur.lastSeq) return;
   if (cur.lastSeq >= 0 && seq > cur.lastSeq + 1) { loadHistory(); return; }
   cur.lastSeq = seq;
@@ -2613,8 +2643,17 @@ fitViewport();
   }
   try { S.describe = await rpc('host.describe', {}); } catch (e) {
     if (e.code === 'login') return; // on its way to the login page
-    if (e.code === 'http-404' || e.code === 'http-401') return showUnsupportedDsh(e.code);
-    toast('dsh not reachable: ' + e.message, 6000);
+    if (e.code === 'http-404' || e.code === 'http-401') {
+      // dsh 0.2 has no host.describe. Ask for something only it has before giving up.
+      try {
+        await post('session/canOpenWorkspacePath', { args: {} });
+        if (!window.dsh02) return toast('public/dsh02.js did not load, so this page cannot talk to dsh 0.2', 8000);
+        S.describe = null; startDsh2();
+      } catch (e2) {
+        if (e2.code === 'login') return;
+        return showUnsupportedDsh(e.code);
+      }
+    } else toast('dsh not reachable: ' + e.message, 6000);
   }
   loadTunnelUrl().then((url) => { S.tunnelUrl = url; });
   connect();
