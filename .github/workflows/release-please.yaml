@@ -1,0 +1,18 @@
+name: release-please
+on:
+  push:
+    branches: [main]
+permissions:
+  contents: write
+  pull-requests: write
+jobs:
+  release-please:
+    runs-on: ubuntu-latest
+    steps:
+      # GITHUB_TOKEN is enough here: nothing in this repo builds on a tag. If an image or
+      # package build ever triggers on tags, switch to a GitHub App token, because events
+      # made with GITHUB_TOKEN never start other workflows.
+      - uses: googleapis/release-please-action@v4
+        with:
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
