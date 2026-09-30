@@ -250,11 +250,11 @@ input, textarea, select { font: inherit; color: inherit; }
 .tmplrow {
   display: flex; align-items: flex-start; gap: 10px; width: 100%;
   padding: 11px 12px; border-bottom: 1px solid var(--line);
-  text-align: left; background: var(--card);
+  background: var(--card);
 }
 .tmplrow:last-child { border-bottom: 0; }
-.tmplrow:active { background: var(--bg2); }
-.tmplrow > span:first-child { flex: 1; min-width: 0; display: block; }
+.tmplmain { flex: 1; min-width: 0; display: block; text-align: left; background: none; border: 0; padding: 0; color: inherit; }
+.tmplmain:active { background: var(--bg2); }
 .tmplrow b { display: block; font-weight: 550; font-size: 14px; }
 .tmplrow small {
   display: block; color: var(--muted); font-size: 12px; margin-top: 2px;
@@ -262,5 +262,6 @@ input, textarea, select { font: inherit; color: inherit; }
 }
 .tmplx {
   flex-shrink: 0; font-size: 14px; color: var(--muted);
-  padding: 0 0 0 4px;
+  min-width: 36px; min-height: 36px; margin: -8px -6px -8px 0;
+  background: none; border: 0; padding: 0;
 }
