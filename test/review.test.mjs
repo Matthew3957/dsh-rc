@@ -362,3 +362,19 @@ test('an interrupted edit is not counted as a file change', () => {
   const s = review.summarizeTurn([{ id: 'c1', name: 'edit', view, done: true, orphan: true }], { kind: 'interrupted' });
   assert.equal(s.files.length, 0);
 });
+
+test('a command that never reported a result is not a success', () => {
+  const view = { card: 'terminal', title: 'npm test' };
+  const s = review.summarizeTurn([{ id: 'c1', name: 'bash', view, done: true, orphan: true }], { kind: 'completed' });
+  assert.equal(s.commands[0].noResult, true);
+  assert.equal(s.commands[0].failed, false);
+  assert.equal(s.outcome, 'stopped');
+});
+
+test('the push notifier uses the same plan-review narrowing as the page', () => {
+  const q = { question: 'Ready?', detail: '# Ship it\nsteps', intent: { kind: 'plan-review', approve: 'Approve' },
+    options: [{ label: 'Approve' }, { label: 'Keep planning' }, { label: 'Other' }] };
+  const frame = { type: 'question/requested', sessionId: 's1', questions: [q] };
+  const n = mapFrame({ payload: frame, rpcId: 'r1' }, {});
+  assert.ok(!n || n.title !== 'Plan ready for review', 'three options is an ordinary question on the page, so not a plan push');
+});

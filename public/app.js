@@ -368,7 +368,7 @@ function onMux(p, env) {
       S.questions.set(env.rpcId, { ...p, rpcId: env.rpcId }); renderPending(); badge();
       break;
     case 'question/resolved':
-      S.questions.delete(p.questionRpcId); renderPending(); badge();
+      S.questions.delete(p.questionRpcId); planDrafts.delete(p.questionRpcId); renderPending(); badge();
       break;
     case 'session/queue':
       S.queues.set(p.sessionId, p.items || []);
@@ -755,10 +755,10 @@ function turnCard(s, partial) {
     const shown = s.commands.slice(-MAX);
     if (s.commands.length > MAX) card.append(h('div', { class: 'tc-more' }, `${s.commands.length - MAX} earlier not shown`));
     for (const c of shown) {
-      const mark = !c.done ? '·' : c.failed ? '✗' : '✓';
+      const mark = !c.done ? '·' : c.failed ? '✗' : c.noResult ? '?' : '✓';
       const exit = c.signal ? c.signal : c.exitCode != null ? 'exit ' + c.exitCode : '';
       card.append(h('button', { type: 'button', class: 'tc-row', onclick: () => revealTool(c.callId) },
-        h('span', { class: 'tc-mark ' + (c.failed ? 'err' : c.done ? 'ok' : '') }, mark),
+        h('span', { class: 'tc-mark ' + (c.failed ? 'err' : c.done && !c.noResult ? 'ok' : '') }, mark),
         h('span', { class: 'tc-main mono' }, firstLine(c.title) || 'command'),
         exit ? h('span', { class: 'tc-exit' }, exit) : null));
     }
@@ -1476,7 +1476,10 @@ function renderPending() {
   for (const q of S.questions.values()) {
     if (!belongsToCur(q.sessionId)) continue;
     const review = window.dshReview && window.dshReview.planReviewOf(q.questions);
-    cards.push(review ? planCard(q, review) : questionCard(q));
+    // Keep an open plan card's node: rebuilding it would drop the feedback box's focus
+    // and, on iOS, the keyboard whenever another card arrives.
+    const kept = review && box.querySelector(`.card.plan[data-rpc="${CSS.escape(q.rpcId)}"]`);
+    cards.push(kept || (review ? planCard(q, review) : questionCard(q)));
   }
   box.replaceChildren(...cards);
   if (cards.length) stick();
@@ -1490,7 +1493,7 @@ function planCard(q, review) {
   const sub = q.sessionId !== (S.cur && S.cur.id) ? ' (subagent)' : '';
   const body = h('div', { class: 'md plan-body' });
   body.append(mdNode(review.plan));
-  const card = h('div', { class: 'card plan' },
+  const card = h('div', { class: 'card plan', 'data-rpc': q.rpcId },
     h('h4', {}, 'Plan review' + sub),
     review.question ? h('div', { class: 'why' }, review.question) : null,
     body);
