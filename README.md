@@ -202,8 +202,8 @@ dsh has no authentication. Anyone who can reach it can run commands as your user
 on loopback, or tailnet-only through Tailscale Serve (not Funnel), and never point a tunnel, a LAN
 bind or a reverse proxy at it directly. dsh blocks settings and credential changes from
 non-loopback hosts. This page does not edit settings or credentials, but it can do anything a
-dsh session can: send prompts, run slash commands, approve tools, switch models and rename
-sessions.
+dsh session can: send prompts, run slash commands, approve tools, switch models, rename, fork
+and export sessions, and archive them (which dsh cannot undo).
 
 When dsh-rc is the front door, it adds:
 
@@ -358,11 +358,10 @@ a subagent catalog only when it is stale, and stops while a chat is open.
 
 Next, in priority order:
 
-1. **Fork, archive and export sessions** (`session.fork`, `session.export`).
+1. **Port to the dsh 0.2 API** (#37, see Compatibility).
 
 Later:
 
-- Port to the dsh 0.2 API (#37, see Compatibility).
 - Screenshots from a clean demo instance.
 - A dictation button.
 - A QR code for the tunnel URL in the terminal and the page, if a no-dependency way to draw one
