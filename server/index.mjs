@@ -14,8 +14,11 @@
 //   POST /push/unsubscribe { endpoint }
 //   POST /push/test       send a test notification to every subscription
 //
-// It also watches dsh's event sockets and pushes notifications for approvals,
-// questions, finished turns and errors. It never POSTs to /api on its own.
+// It also watches dsh's event feeds (server/watcher.mjs) and pushes notifications for approvals,
+// questions, finished turns and errors. It never changes anything in dsh on its own.
+//
+// dsh 0.2 wants a signed cookie on every call: give dsh-rc the launch token dsh prints at start
+// (DSH_TOKEN, or DSH_TOKEN_FILE / --dsh-token-file) and the proxy and watcher exchange it.
 //
 // Auth (server/auth.mjs) gates everything except /login and the app-install
 // files. The server refuses to start without a passphrase whenever `host` is
@@ -35,6 +38,8 @@ import { Writable } from 'node:stream';
 import webpush from 'web-push';
 
 import { createNotifier } from './notify.mjs';
+import { createDshAuth } from './dsh-auth.mjs';
+import { RECONNECT_CAP_MS, startWatcher } from './watcher.mjs';
 import { defaultStateDir, ensureStateDir, writeSecret } from './state.mjs';
 import { DEFAULT_UPSTREAM_HOST, apiMethodOf, checkRequest, createProxy, hostnameOf, isLoopbackHostname, isPrivilegedMethod } from './proxy.mjs';
 import { MIN_PASSPHRASE_LENGTH, createAuth, loadPassphraseRecord, passphraseProblem, savePassphrase } from './auth.mjs';
@@ -53,8 +58,10 @@ const DEFAULT_VAPID_SUBJECT = 'https://github.com/Matthew3957/dsh-rc';
 export const BODY_LIMIT = 16 * 1024;
 /** More subscriptions than this are refused. */
 export const MAX_SUBSCRIPTIONS = 20;
-/** Backoff cap for the event sockets. */
-export const RECONNECT_CAP_MS = 30000;
+export { RECONNECT_CAP_MS, startWatcher };
+
+/** The WebSockets the proxy relays: dsh 0.1's two event sockets and dsh 0.2's one multiplexed socket. */
+const UPGRADE_PATHS = new Set(['/api/events.mux', '/api/events.host', '/api/remote.mux']);
 
 const TYPES = {
   '.html': 'text/html; charset=utf-8',
@@ -250,100 +257,6 @@ export function validateSubscription(sub) {
   return null;
 }
 
-// ---------- Watcher ----------
-
-/**
- * Connect to dsh's event sockets, reconnect with capped backoff, and hand
- * notifications to `onNotification`. Read-only: it never POSTs to /api.
- */
-export function startWatcher({
-  dshUrl = DEFAULT_DSH_URL,
-  notifier,
-  onNotification = () => {},
-  logger = console,
-  WebSocketImpl = globalThis.WebSocket,
-  reconnectCapMs = RECONNECT_CAP_MS,
-} = {}) {
-  if (typeof WebSocketImpl !== 'function') {
-    throw new Error('This Node has no global WebSocket. dsh-rc needs Node 22 or newer.');
-  }
-  const wsBase = String(dshUrl).replace(/\/+$/, '').replace(/^http/, 'ws');
-  const streams = [
-    { label: 'mux', url: `${wsBase}/api/events.mux` },
-    { label: 'host', url: `${wsBase}/api/events.host` },
-  ];
-  const sockets = new Map();
-  const timers = new Map();
-  const attempts = new Map();
-  let stopped = false;
-
-  function open(stream) {
-    if (stopped) return;
-    let ws;
-    try {
-      ws = new WebSocketImpl(stream.url);
-    } catch (err) {
-      logger.error(`[dsh-rc] ${stream.label} could not open: ${err.message}`);
-      schedule(stream);
-      return;
-    }
-    sockets.set(stream.label, ws);
-    ws.onopen = () => {
-      attempts.set(stream.label, 0);
-      logger.log(`[dsh-rc] ${stream.label} connected`);
-    };
-    ws.onmessage = (event) => {
-      let frame;
-      try {
-        frame = JSON.parse(typeof event.data === 'string' ? event.data : String(event.data));
-      } catch {
-        return;
-      }
-      let n;
-      try {
-        n = notifier.handle(frame);
-      } catch (err) {
-        logger.error(`[dsh-rc] notification mapping failed: ${err.message}`);
-        return;
-      }
-      if (n) Promise.resolve(onNotification(n)).catch((err) => logger.error(`[dsh-rc] push failed: ${err.message}`));
-    };
-    ws.onerror = () => {};
-    ws.onclose = () => {
-      if (stopped) return;
-      logger.log(`[dsh-rc] ${stream.label} disconnected, will reconnect`);
-      schedule(stream);
-    };
-  }
-
-  function schedule(stream) {
-    if (stopped || timers.has(stream.label)) return;
-    const n = attempts.get(stream.label) || 0;
-    attempts.set(stream.label, n + 1);
-    const wait = Math.min(reconnectCapMs, 1000 * 2 ** Math.min(n, 5));
-    const timer = setTimeout(() => {
-      timers.delete(stream.label);
-      open(stream);
-    }, wait);
-    if (timer.unref) timer.unref();
-    timers.set(stream.label, timer);
-  }
-
-  for (const stream of streams) open(stream);
-
-  return {
-    stop() {
-      stopped = true;
-      for (const timer of timers.values()) clearTimeout(timer);
-      timers.clear();
-      for (const ws of sockets.values()) {
-        try { ws.close(); } catch { /* already gone */ }
-      }
-      sockets.clear();
-    },
-  };
-}
-
 // ---------- Server ----------
 
 function createWebPushSender(vapid) {
@@ -398,7 +311,13 @@ export async function startServer(options = {}) {
     secure: useHttps || tunnelEnabled,
     readBody,
   });
-  const proxy = createProxy({ dshUrl, upstreamHost, logger });
+  const dshAuth = createDshAuth({
+    dshUrl,
+    token: options.dshToken ?? env.DSH_TOKEN,
+    tokenFile: options.dshTokenFile || env.DSH_TOKEN_FILE,
+    logger,
+  });
+  const proxy = createProxy({ dshUrl, upstreamHost, logger, dshAuth });
   // Without a login, only loopback (or explicitly trusted) Host names may use
   // the proxy. A reverse proxy or tunnel someone points at a no-login server
   // forwards its public Host and is refused, as are DNS-rebinding pages.
@@ -544,7 +463,7 @@ export async function startServer(options = {}) {
   server.on('upgrade', (req, socket, head) => {
     socket.on('error', () => socket.destroy());
     const pathname = requestPath(req.url);
-    if (pathname !== '/api/events.mux' && pathname !== '/api/events.host') return refuseUpgrade(socket, 404, 'Not Found');
+    if (!UPGRADE_PATHS.has(pathname)) return refuseUpgrade(socket, 404, 'Not Found');
     if (!auth.isAuthed(req)) return refuseUpgrade(socket, 401, 'Unauthorized');
     if (checkRequest(req, fence)) return refuseUpgrade(socket, 403, 'Forbidden');
     proxy.proxyUpgrade(req, socket, head);
@@ -557,7 +476,7 @@ export async function startServer(options = {}) {
   const actualPort = server.address().port;
 
   let watcher = null;
-  if (watch) watcher = startWatcher({ dshUrl, notifier, onNotification: deliver, logger });
+  if (watch) watcher = startWatcher({ dshUrl, notifier, onNotification: deliver, logger, dshAuth });
 
   let tunnel = null;
   if (tunnelEnabled) {
@@ -672,6 +591,7 @@ const USAGE = `Usage: node server/index.mjs [options]
   --port <n>              port (default ${DEFAULT_PORT})
   --dsh-url <url>         dsh web base URL (default ${DEFAULT_DSH_URL})
   --upstream-host <name>  Host the proxy presents to dsh (default ${DEFAULT_UPSTREAM_HOST})
+  --dsh-token-file <file> file holding the launch token dsh 0.2 prints at start (or set DSH_TOKEN)
   --trusted-host <name>   extra Host allowed without a login (repeatable, private networks only)
   --tunnel                start a Cloudflare quick tunnel (needs cloudflared and a passphrase)
   --cert <file>           certificate for serving https directly (with --key)
@@ -698,6 +618,7 @@ export function parseCliArgs(argv) {
     else if (arg === '--key') options.keyFile = value(++i, arg);
     else if (arg === '--dsh-url') options.dshUrl = value(++i, arg);
     else if (arg === '--upstream-host') options.upstreamHost = value(++i, arg);
+    else if (arg === '--dsh-token-file') options.dshTokenFile = value(++i, arg);
     else if (arg === '--trusted-host') (options.trustedHosts ||= []).push(value(++i, arg));
     else throw new Error(`unknown option ${arg}\n${USAGE}`);
   }

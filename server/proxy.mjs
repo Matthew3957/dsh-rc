@@ -1,6 +1,10 @@
-// Reverse proxy for dsh's HTTP RPC (`/api/*`) and event WebSockets
-// (`/api/events.mux`, `/api/events.host`), so one process is the whole front
-// door instead of relying on Tailscale Serve path mounting.
+// Reverse proxy for dsh's HTTP RPC (`/api/*`) and event WebSockets (dsh 0.1:
+// `/api/events.mux`, `/api/events.host`; dsh 0.2: `/api/remote.mux`), so one
+// process is the whole front door instead of relying on Tailscale Serve path mounting.
+//
+// dsh 0.2 also wants a signed cookie on every call and socket. When a launch token is
+// configured (see dsh-auth.mjs) the proxy exchanges it for that cookie and adds it to each
+// request it relays, so the browser never holds it.
 //
 // The upstream is always the fixed `dshUrl` this process was started with,
 // never anything taken from the incoming request. Bodies are streamed both
@@ -41,7 +45,20 @@ const HOP_BY_HOP = new Set([
 
 /** dsh methods that are loopback-only in dsh itself. The page never calls
  *  them; the proxy refuses them whatever Host it presents. */
-const PRIVILEGED_METHOD = /^(settings|credentials)[./]|^host[./](pickDirectory|openPath)$|^agentPreset[./](read|copy|openDocument|remove)$/i;
+const PRIVILEGED_METHOD = new RegExp(
+  [
+    // dsh 0.1: `settings.get`, `host.openPath`, ...
+    '^(settings|credentials)[./]',
+    '^host[./](pickDirectory|openPath)$',
+    '^agentPreset[./](read|copy|openDocument|remove)$',
+    // dsh 0.2: `<namespace>/<method>`. Nothing the page calls is in this list.
+    '^(pluginManager|dynamicCordisRunner|terminal|account|llm|speech)/',
+    '^directoryPicker/(pick|createDirectory)$',
+    '^agentPresets/read$',
+    '^session/(openWorkspacePath|workspacePathApplications)$',
+  ].join('|'),
+  'i',
+);
 
 /** Hostname part of a Host header or authority, lowercased, or null. */
 export function hostnameOf(authority) {
@@ -151,7 +168,7 @@ function headerBlock(headers) {
     .join('\r\n');
 }
 
-export function createProxy({ dshUrl, upstreamHost = DEFAULT_UPSTREAM_HOST, logger = console }) {
+export function createProxy({ dshUrl, upstreamHost = DEFAULT_UPSTREAM_HOST, logger = console, dshAuth = null }) {
   const upstream = new URL(dshUrl);
   const mod = upstream.protocol === 'https:' ? https : http;
   const presentedHost = normalizeAuthority(upstreamHost);
@@ -164,7 +181,7 @@ export function createProxy({ dshUrl, upstreamHost = DEFAULT_UPSTREAM_HOST, logg
   const presentedOrigin = `${upstream.protocol}//${presentedHost}`;
   let warned403 = false;
 
-  function upstreamOptions(req, { forUpgrade = false } = {}) {
+  function upstreamOptions(req, { forUpgrade = false, dshCookie = null } = {}) {
     const headers = filterHeaders(req.headers);
     if (forUpgrade) {
       headers.connection = 'Upgrade';
@@ -172,7 +189,9 @@ export function createProxy({ dshUrl, upstreamHost = DEFAULT_UPSTREAM_HOST, logg
     }
     headers.host = presentedHost;
     if (headers.origin !== undefined) headers.origin = presentedOrigin;
-    const cookie = stripSessionCookie(headers.cookie);
+    // With a launch token the browser's cookies are not dsh's: dsh-rc's own login cookie is dropped
+    // and the cookie dsh issued to this process goes in its place.
+    const cookie = dshAuth && dshAuth.enabled ? dshCookie : stripSessionCookie(headers.cookie);
     if (cookie) headers.cookie = cookie;
     else delete headers.cookie;
     return {
@@ -196,8 +215,15 @@ export function createProxy({ dshUrl, upstreamHost = DEFAULT_UPSTREAM_HOST, logg
 
   /** Proxy a plain HTTP request (`/api/<method>`, `/api/respond`, ...). */
   function proxyHttp(req, res) {
-    const upstreamReq = mod.request(upstreamOptions(req), (upstreamRes) => {
+    Promise.resolve(dshAuth ? dshAuth.cookieFor(presentedHost) : null)
+      .catch(() => null)
+      .then((dshCookie) => relayHttp(req, res, dshCookie));
+  }
+
+  function relayHttp(req, res, dshCookie) {
+    const upstreamReq = mod.request(upstreamOptions(req, { dshCookie }), (upstreamRes) => {
       note403(upstreamRes.statusCode);
+      if (upstreamRes.statusCode === 401 && dshAuth) dshAuth.invalidate(presentedHost);
       const out = filterHeaders(upstreamRes.headers);
       // Tell the page which name dsh must trust: behind the proxy it is the presented Host,
       // not the hostname in the address bar, so the 403 help card can say so.
@@ -220,9 +246,19 @@ export function createProxy({ dshUrl, upstreamHost = DEFAULT_UPSTREAM_HOST, logg
     req.pipe(upstreamReq);
   }
 
-  /** Proxy a WebSocket upgrade (`/api/events.mux`, `/api/events.host`). */
+  /** Proxy a WebSocket upgrade (`/api/events.mux`, `/api/events.host`, `/api/remote.mux`). */
   function proxyUpgrade(req, socket, head) {
-    const upstreamReq = mod.request(upstreamOptions(req, { forUpgrade: true }));
+    let gone = false;
+    socket.once('close', () => { gone = true; });
+    Promise.resolve(dshAuth ? dshAuth.cookieFor(presentedHost) : null)
+      .catch(() => null)
+      .then((dshCookie) => {
+        if (!gone) relayUpgrade(req, socket, head, dshCookie);
+      });
+  }
+
+  function relayUpgrade(req, socket, head, dshCookie) {
+    const upstreamReq = mod.request(upstreamOptions(req, { forUpgrade: true, dshCookie }));
     socket.on('error', () => upstreamReq.destroy());
     socket.on('close', () => upstreamReq.destroy());
     upstreamReq.on('error', (err) => {
@@ -234,6 +270,7 @@ export function createProxy({ dshUrl, upstreamHost = DEFAULT_UPSTREAM_HOST, logg
       // Upstream answered without upgrading (e.g. a 403 from dsh's Host check).
       // Relay it instead of leaving the browser's WebSocket hanging.
       note403(upstreamRes.statusCode);
+      if (upstreamRes.statusCode === 401 && dshAuth) dshAuth.invalidate(presentedHost);
       const headers = { ...filterHeaders(upstreamRes.headers), connection: 'close' };
       if (socket.writable) {
         socket.write(`HTTP/1.1 ${upstreamRes.statusCode} ${upstreamRes.statusMessage || ''}\r\n${headerBlock(headers)}\r\n\r\n`);
