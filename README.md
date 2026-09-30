@@ -8,7 +8,7 @@ question cards above the composer, stop / steer / queue, slash commands, model s
 image attachments, a read-only plugins and connectors screen, and Web Push notifications for
 approvals, questions, finished turns and errors.
 
-No build step. `public/` is plain HTML, CSS and JS; `server/` is plain Node ESM. Markdown uses
+No build step. `public/` is plain HTML, CSS and JS; `server/` is plain Node ESM (Node 22 or newer). Markdown uses
 marked and DOMPurify, vendored in `public/vendor/` (their license headers are kept in the files).
 
 ## Setup

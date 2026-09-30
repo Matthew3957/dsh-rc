@@ -1014,7 +1014,7 @@ async function ensureSW() {
   await navigator.serviceWorker.register('./sw.js', { scope: './' });
   return swReady();
 }
-function swReady(timeoutMs = 3000) {
+function swReady(timeoutMs = 10000) {
   return Promise.race([
     navigator.serviceWorker.ready,
     new Promise((_, reject) => setTimeout(() => reject(new Error('service worker not ready')), timeoutMs)),
