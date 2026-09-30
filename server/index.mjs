@@ -27,7 +27,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DEFAULT_PUBLIC_DIR = path.resolve(__dirname, '..', 'public');
 const DEFAULT_PORT = 3081;
 const DEFAULT_DSH_URL = 'http://127.0.0.1:3080';
-const DEFAULT_VAPID_SUBJECT = 'mailto:dsh-rc@localhost';
+const DEFAULT_VAPID_SUBJECT = 'https://github.com/Matthew3957/dsh-rc';
 
 /** JSON request bodies for /push/* are capped at this many bytes. */
 export const BODY_LIMIT = 16 * 1024;
@@ -382,7 +382,7 @@ export async function startServer(options = {}) {
           store.remove(sub.endpoint);
           removed += 1;
         } else {
-          logger.error(`[dsh-rc] push send failed: ${(err && err.message) || err}`);
+          logger.error(`[dsh-rc] push send failed: ${status || ''} ${(err && err.body) || (err && err.message) || err}`.replace(/\s+/g, ' '));
         }
       }
     }
