@@ -58,9 +58,9 @@ function showUnsupportedDsh(code) {
   const card = h('div', { class: 'card api403' },
     h('h4', {}, four04 ? 'dsh-rc cannot find dsh here' : 'dsh wants its launch token'),
     h('div', { class: 'why' }, four04
-      ? 'Neither dsh 0.1 nor dsh 0.2 answered. Check that this page\'s /api reaches dsh (the Tailscale Serve mount, ' +
+      ? 'Neither the older dsh API (0.1.6 and earlier) nor the newer one (0.1.7 and later) answered. Check that this page\'s /api reaches dsh (the Tailscale Serve mount, ' +
         'or --dsh-url when dsh-rc runs as the front door).'
-      : 'dsh 0.2 answers 401 until it has a signed cookie. Start dsh-rc with the token dsh printed at start ' +
+      : 'This dsh (0.1.7 or later) answers 401 until it has a signed cookie. Start dsh-rc with the token dsh printed at start ' +
         '(DSH_TOKEN, or --dsh-token-file), so its proxy can exchange it. See Compatibility in the README.'));
   $('#api403').replaceChildren(card);
 }
