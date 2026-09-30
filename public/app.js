@@ -1625,8 +1625,9 @@ function renderMentionPop(tok) {
     try { list = await remote('fileReferences/list', { agentId: cur.id, query: tok.query }); } catch { list = null; }
     // A newer keystroke, another session or a closed token makes this answer stale.
     if (seq !== mentionSeq || !S.cur || S.cur.id !== cur.id) return;
-    if (!Array.isArray(list) || !list.length) { pop.hidden = true; return; }
-    pop.replaceChildren(...list.slice(0, 30).map((c) => {
+    const ok = Array.isArray(list) ? list.filter((c) => c && typeof c.path === 'string' && c.path) : [];
+    if (!ok.length) { pop.hidden = true; return; }
+    pop.replaceChildren(...ok.slice(0, 30).map((c) => {
       const slash = c.path.lastIndexOf('/');
       return h('button', { type: 'button', class: 'cmd mention', onclick: () => acceptMention(tok, c) },
         h('b', {}, c.path.slice(slash + 1) + (c.kind === 'directory' ? '/' : '')),
@@ -1636,9 +1637,15 @@ function renderMentionPop(tok) {
   }, 120);
 }
 function acceptMention(tok, c) {
+  // The list was fetched for an earlier caret: re-read the token at the caret now, and
+  // if it no longer matches (the caret moved, or it sits in another mention), refresh.
+  const col = input.selectionStart;
+  const now = activeAtToken(input.value, col);
+  if (!now || now.prefix !== tok.prefix) { renderCmdPop(); return; }
   const text = formatFileMention(c, tok.quoted);
   if (text === undefined) { toast('That path has characters a mention cannot hold'); return; }
-  const col = input.selectionStart, start = col - tok.prefix.length, tail = input.value.slice(col);
+  const start = col - tok.prefix.length, tail = input.value.slice(col);
+  if (start < 0) { renderCmdPop(); return; }
   // Files finish the mention with a space; directories stay open for the next level.
   const dir = c.kind === 'directory';
   const ins = dir || /^\s/.test(tail) ? text : text + ' ';

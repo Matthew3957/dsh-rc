@@ -302,8 +302,7 @@ a subagent catalog only when it is stale, and stops while a chat is open.
 
 Next, in priority order:
 
-1. **@-mention files** in the composer (`fileReferences/list`).
-2. **Fork, archive and export sessions** (`session.fork`, `session.export`).
+1. **Fork, archive and export sessions** (`session.fork`, `session.export`).
 
 Later:
 
