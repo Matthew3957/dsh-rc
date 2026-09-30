@@ -893,12 +893,14 @@ function loadTemplates() {
 }
 templates = loadTemplates();
 function saveTemplates() {
-  try { localStorage.setItem(TEMPLATES_KEY, JSON.stringify(templates)); } catch {}
+  try { localStorage.setItem(TEMPLATES_KEY, JSON.stringify(templates)); return true; } catch { return false; }
 }
+// Two sibling buttons, not a control nested inside a button: taps on an element
+// inside a <button> are not reliably delivered to that element.
 function templateRow(i, t, use, del) {
-  return h('button', { type: 'button', class: 'tmplrow', onclick: () => use(i) },
-    h('span', {}, h('b', {}, t.name), h('small', {}, t.text.slice(0, 100) || '(empty)')),
-    h('span', { class: 'tmplx', onclick: (e) => { e.stopPropagation(); del(i); } }, '✕'));
+  return h('div', { class: 'tmplrow' },
+    h('button', { type: 'button', class: 'tmplmain', onclick: () => use(i) }, h('b', {}, t.name), h('small', {}, t.text.slice(0, 100) || '(empty)')),
+    h('button', { type: 'button', class: 'tmplx', 'aria-label': 'Delete ' + t.name, onclick: () => del(i) }, '✕'));
 }
 function templatesSheet() {
   // Remember the cursor up front: opening the sheet blurs the composer and
@@ -924,7 +926,7 @@ function templatesSheet() {
     const t = templates[i];
     if (!confirm('Delete "' + t.name + '"?')) return;
     templates.splice(i, 1);
-    saveTemplates();
+    if (!saveTemplates()) { templates = loadTemplates(); render(); toast('Could not delete: this browser refused storage'); return; }
     render();
     toast('Template deleted');
   }
@@ -938,7 +940,7 @@ function templatesSheet() {
       if (!name) { toast('Name is required'); return; }
       if (!text.trim()) { toast('Nothing to save: the composer is empty'); return; }
       templates.push({ name, text });
-      saveTemplates();
+      if (!saveTemplates()) { templates.pop(); toast('Could not save: this browser refused storage'); return; }
       render();
       toast('Template saved');
     } }, 'Save current text as template'));
