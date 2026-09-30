@@ -900,7 +900,7 @@ function saveTemplates() {
 function templateRow(i, t, use, del) {
   return h('div', { class: 'tmplrow' },
     h('button', { type: 'button', class: 'tmplmain', onclick: () => use(i) }, h('b', {}, t.name), h('small', {}, t.text.slice(0, 100) || '(empty)')),
-    h('button', { type: 'button', class: 'tmplx', 'aria-label': 'Delete ' + t.name, onclick: () => del(i) }, '✕'));
+    h('button', { type: 'button', class: 'tmplx', 'aria-label': 'Delete ' + t.name, onclick: (e) => del(i, e.currentTarget) }, '✕'));
 }
 function templatesSheet() {
   // Remember the cursor up front: opening the sheet blurs the composer and
@@ -909,41 +909,52 @@ function templatesSheet() {
   const list = h('div', { class: 'tmpl-list' });
   const render = () => {
     if (!templates.length) {
-      list.replaceChildren(h('div', { class: 'note' }, 'No templates saved yet. Use "Save current text as template" to add one.'));
+      list.replaceChildren(h('div', { class: 'note' }, 'No templates saved yet. Type a name below to save the composer text as one.'));
     } else {
       list.replaceChildren(...templates.map((t, i) => templateRow(i, t, insertTemplate, deleteTemplate)));
     }
   };
   function insertTemplate(i) {
     const t = templates[i];
-    input.value = input.value.slice(0, a) + t.text + input.value.slice(b);
-    input.selectionStart = input.selectionEnd = a + t.text.length;
+    const len = input.value.length;
+    const start = Math.min(a ?? len, len), end = Math.min(b ?? len, len);
+    input.value = input.value.slice(0, start) + t.text + input.value.slice(end);
+    input.selectionStart = input.selectionEnd = start + t.text.length;
     grow();
     closeSheet();
     input.focus();
   }
-  function deleteTemplate(i) {
-    const t = templates[i];
-    if (!confirm('Delete "' + t.name + '"?')) return;
+  // Native confirm()/prompt() are unreliable in iOS Home Screen apps, so delete
+  // asks for a second tap on the same ✕ instead, and the name is typed in the sheet.
+  let armed = -1;
+  function deleteTemplate(i, btn) {
+    if (armed !== i) {
+      armed = i;
+      list.querySelectorAll('.tmplx').forEach((x) => { x.textContent = '✕'; x.classList.remove('armed'); });
+      btn.textContent = 'Delete?'; btn.classList.add('armed');
+      return;
+    }
+    armed = -1;
     templates.splice(i, 1);
     if (!saveTemplates()) { templates = loadTemplates(); render(); toast('Could not delete: this browser refused storage'); return; }
     render();
     toast('Template deleted');
   }
   render();
+  const nameIn = h('input', { type: 'text', placeholder: 'Name for the current text', enterkeyhint: 'done' });
   openSheet(h('h3', {}, 'Prompt templates'), list,
+    h('label', {}, 'Save the composer text as a template'), nameIn,
     h('button', { type: 'button', class: 'go', onclick: () => {
-      const n = prompt('Short name for this template:');
-      if (n == null) return;
-      const name = n.trim();
+      const name = nameIn.value.trim();
       const text = input.value;
       if (!name) { toast('Name is required'); return; }
       if (!text.trim()) { toast('Nothing to save: the composer is empty'); return; }
       templates.push({ name, text });
       if (!saveTemplates()) { templates.pop(); toast('Could not save: this browser refused storage'); return; }
+      nameIn.value = '';
       render();
       toast('Template saved');
-    } }, 'Save current text as template'));
+    } }, 'Save template'));
 }
 $('#tmplBtn').onclick = templatesSheet;
 
