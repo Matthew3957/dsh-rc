@@ -353,7 +353,11 @@ test('tool result views read dsh-shell\'s exit markers and dsh-tool-fs\'s applie
   // The persistent shell's own marker.
   assert.deepEqual(toolResultView('bash', { command: 'ls' }, { content: text('a\n[Command finished with exit code 1]') }), { card: 'terminal', output: 'a', exitCode: 1 });
   assert.deepEqual(toolResultView('bash', { command: 'ls' }, { content: text('a') }), { card: 'terminal', output: 'a' });
-  assert.equal(toolResultView('bash', sh, { content: text('denied'), isError: true }), null);
+  // An errored command keeps its output but claims no exit code; a marker still counts.
+  assert.deepEqual(toolResultView('bash', sh, { content: text('denied'), isError: true }), { card: 'terminal', output: 'denied' });
+  assert.deepEqual(toolResultView('bash', sh, { content: text('boom\n[exit code: 2]'), isError: true }), { card: 'terminal', output: 'boom', exitCode: 2 });
+  // A command that printed nothing: the marker is the whole result.
+  assert.deepEqual(toolResultView('bash', sh, { content: text('[exit code: 1]') }), { card: 'terminal', output: '', exitCode: 1 });
   assert.equal(toolResultView('bash', sh, { content: [] }), null);
 
   const hunk = { path: 'a.js', oldText: 'x\n', newText: 'y\n' };

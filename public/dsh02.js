@@ -321,9 +321,9 @@ function appliedDiffs(meta) {
 // The exit markers dsh-shell's renderer appends (`parseExitStatus` in dsh-shell/render): a signal,
 // a non-zero code, or neither for a clean exit.
 function exitStatus(text) {
-  const sig = /\n\[killed by signal: ([^\]\n]+)\]$/.exec(text);
+  const sig = /(?:^|\n)\[killed by signal: ([^\]\n]+)\]$/.exec(text); // a silent command's result is the marker alone
   if (sig) return { output: text.slice(0, sig.index), signal: sig[1] };
-  const code = /\n\[exit code: (\d+)\]$/.exec(text);
+  const code = /(?:^|\n)\[exit code: (\d+)\]$/.exec(text);
   if (code) return { output: text.slice(0, code.index), exitCode: Number(code[1]) };
   return { output: text, exitCode: 0 };
 }
@@ -354,9 +354,10 @@ export function toolCallView(name, argsRaw) {
  */
 export function toolResultView(name, argsRaw, result) {
   const r = obj(result);
-  if (r.isError) return null; // the error text is the result, and a failed write changed nothing
   const a = argsOf(argsRaw);
   const sh = shellCall(name, a);
+  // A failed write changed nothing; a failed command still has output (and maybe an exit marker) worth showing.
+  if (r.isError && !sh) return null;
   if (sh) {
     const text = onlyText(r.content);
     if (text === undefined) return null;
@@ -366,13 +367,18 @@ export function toolResultView(name, argsRaw, result) {
       return m ? { card: 'terminal', output: text.slice(0, m.index), exitCode: Number(m[1]) } : { card: 'terminal', output: text };
     }
     if (spilled(text)) return { card: 'terminal', output: text };
-    return { card: 'terminal', ...exitStatus(text) };
+    const st = exitStatus(text);
+    // An errored call with no marker did not exit cleanly: keep its output, claim no exit code.
+    if (r.isError && st.exitCode === 0 && !st.signal) return { card: 'terminal', output: st.output };
+    return { card: 'terminal', ...st };
   }
   const d = intendedDiff(name, a);
   if (!d) return null;
   // str_replace_editor has no result view on dsh 0.2, and an edit is only drawn from its applied hunks.
   if (name === 'str_replace_editor') return { card: 'generic' };
   const applied = appliedDiffs(r.meta);
+  // 'empty' (diffs: []) is how dsh-tool-fs marks a write that created the file (before === null); its
+  // own presentResult then draws the whole new file, so a write falls through to the intended diff.
   if (Array.isArray(applied)) return { card: 'diff', diffs: applied };
   return name === 'write' ? { card: 'diff', diffs: [d] } : { card: 'generic' };
 }
