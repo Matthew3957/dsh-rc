@@ -337,8 +337,10 @@ calls `job/kill`. There is no `job/kill` in the older API, so the stop control i
 
 **Subagent trees and expired questions.** `subagent.list` answers from a session's
 `subagentCatalog` projection and probes a child whose own catalog the control feed omits, so the
-page's recursion reaches grandchildren. The `userQuestions` projection is mirrored as question
-frames: a `continued` row (the timed wait ran out and the agent moved on) shows as an expired
+page's recursion reaches grandchildren. A tree is read again as soon as it changes (a subagent
+added, a child starting or settling, the parent's catalog growing), so a parent whose turn ended
+while a background child works stays in Running now until the child settles. The `userQuestions`
+projection is mirrored as question frames: a `continued` row (the timed wait ran out and the agent moved on) shows as an expired
 card and is still answered through `userQuestions/answer`.
 
 ### Scheduled prompts (dsh 0.2 with the schedule plugin)

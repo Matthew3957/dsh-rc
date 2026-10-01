@@ -452,6 +452,7 @@ function onMux(p, env) {
           if (p.key === 'goal') { renderGoalBar(); refreshGoal(p.sessionId); }
         }
         if (DASH_KEYS.has(p.key)) scheduleDashboard();
+        if (p.key === 'subagentCatalog') refreshAgentTree(p.sessionId);
       }
       break;
     }
@@ -469,6 +470,7 @@ function onHost(p) {
       if (p.running && !S.running.get(p.sessionId)) S.turnStart.set(p.sessionId, Date.now());
       if (!p.running) S.turnStart.delete(p.sessionId);
       S.running.set(p.sessionId, !!p.running);
+      if (S.parent.has(p.sessionId)) refreshAgentTree(p.sessionId);
       if (S.cur && p.sessionId === S.cur.id) renderRunning();
       if (!$('#listView').hidden && !S.searchMode) renderList();
       scheduleDashboard();
@@ -476,7 +478,7 @@ function onHost(p) {
     case 'host/session-added':
       // Only subagents fold into their parent. A fork also carries parentSessionId (lineage), but it
       // is a session of its own and belongs in the list.
-      if (p.parentSessionId && p.origin === 'subagent') S.parent.set(p.sessionId, p.parentSessionId);
+      if (p.parentSessionId && p.origin === 'subagent') { S.parent.set(p.sessionId, p.parentSessionId); refreshAgentTree(p.sessionId); }
       if (!p.blank && p.origin !== 'subagent' && !$('#listView').hidden) loadSessions();
       scheduleDashboard();
       break;
@@ -1641,11 +1643,13 @@ function scheduleDashboard() {
   if (dashPending && dashPending.unref) dashPending.unref();
 }
 function liveJobs(id) { return (S.jobs.get(id) || []).filter(dashLive); }
+// A catalog row's `activity` is as old as the read; the child's own live status is newer.
+const agentLive = (e) => e.activity === 'running' || S.running.get(e.id) === true;
 function hasLiveAgent(id, depth = 0) {
   const tree = S.subagents.get(id);
   if (!tree || depth > 3) return false;
   return tree.entries.some((e) => e && e.kind === 'child' &&
-    (e.activity === 'running' || (e.hasChildren && hasLiveAgent(e.id, depth + 1))));
+    (agentLive(e) || (e.hasChildren && hasLiveAgent(e.id, depth + 1))));
 }
 // When the running turn began. Live turn/start events are exact; the list
 // baseline's last human prompt is the best available anchor when the page
@@ -1699,8 +1703,30 @@ async function loadAgentTree(id, depth, budget) {
     if (!S.subagents.has(id)) S.subagents.set(id, { entries: [], parentAvailable: false, at: Date.now(), failed: true });
   } finally {
     S.agentsLoading.delete(id);
+    if (depth === 0 && agentStale.has(id)) refreshAgentTree(id);
     scheduleDashboard();
   }
+}
+// The refresh above only runs for sessions already on screen, so a parent whose turn
+// ended while a background child works would never be read again and never show. The
+// events that change a tree (a subagent added, a child starting or settling, the
+// parent's catalog growing) re-read its root at once instead. Coalesced to one read per
+// macrotask, after the 0.2 adapter has cached the frame; a read already in flight may
+// predate the change, so the root is read again when it finishes.
+const agentStale = new Set(); // root sessions whose tree must be read again
+let agentRefresh = null;
+function refreshAgentTree(id) {
+  agentStale.add(rootOf(id));
+  if (agentRefresh) return;
+  agentRefresh = setTimeout(() => {
+    agentRefresh = null;
+    for (const root of [...agentStale]) {
+      if (S.agentsLoading.has(root)) continue;
+      agentStale.delete(root);
+      loadAgentTree(root, 0, { n: 0 }).catch(() => {});
+    }
+  }, 0);
+  if (agentRefresh && agentRefresh.unref) agentRefresh.unref();
 }
 function flattenAgents(parentId, depth, out) {
   const tree = S.subagents.get(parentId);
@@ -1873,7 +1899,7 @@ function agentRow({ e, depth }) {
     row.append(h('span', { class: 'adot' }), h('span', { class: 'aname' }, e.id || 'subagent'), h('span', { class: 'afail' }, e.reason || 'unavailable'));
     return row;
   }
-  const live = e.activity === 'running';
+  const live = agentLive(e);
   row.append(h('span', { class: 'adot ' + (live ? 'running' : 'settled') }));
   row.append(h('span', { class: 'aname', title: e.id || '' }, e.label || e.id || 'subagent'));
   if (e.mode) row.append(h('span', { class: 'amode' }, e.mode));
