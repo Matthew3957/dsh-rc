@@ -1180,12 +1180,21 @@ function turnStartTime(cur) {
   if (firstMsg) return firstMsg;
   return !ended && cur.hasMore ? oldest : null;
 }
+// While a turn runs: an empty composer offers Stop; once there is something to send, Send and the
+// queue/steer choice take its place (Stop stays reachable with the box cleared).
+function paintComposer() {
+  const cur = S.cur;
+  const running = !!(cur && S.running.get(cur.id));
+  const hasText = !!$('#input').value.trim() || S.images.length > 0;
+  $('#sendBtn').hidden = running && !hasText;
+  $('#steerBtn').hidden = !(running && hasText);
+  $('#stopBtn').hidden = !running || hasText;
+}
 function renderRunning() {
   const cur = S.cur; if (!cur) return;
   const running = !!S.running.get(cur.id);
   $('#working').hidden = !running;
-  $('#stopBtn').hidden = !running;
-  $('#steerBtn').hidden = !running;
+  paintComposer();
   $('#steerBtn').classList.toggle('on', S.steer);
   $('#steerBtn').textContent = S.steer ? 'steer' : 'queue';
   clearInterval(workTimer);
@@ -2126,7 +2135,7 @@ function questionCard(q) {
 
 // ---------- Composer ----------
 const input = $('#input');
-function grow() { input.style.height = 'auto'; input.style.height = Math.min(input.scrollHeight, window.innerHeight * 0.4) + 'px'; }
+function grow() { input.style.height = 'auto'; input.style.height = Math.min(input.scrollHeight, window.innerHeight * 0.4) + 'px'; paintComposer(); } // every value change goes through here
 input.addEventListener('input', () => { grow(); renderCmdPop(); });
 input.addEventListener('click', () => { if (!input.value.startsWith('/')) renderCmdPop(); });
 input.addEventListener('keydown', (e) => {
@@ -2272,6 +2281,7 @@ function b64(blob) {
 function renderAttachments() {
   const box = $('#attachments');
   box.hidden = !S.images.length;
+  paintComposer();
   box.replaceChildren(...S.images.map((im, i) => h('div', { class: 'thumb' }, h('img', { src: im.url, alt: '' }),
     h('button', { type: 'button', onclick: () => { S.images.splice(i, 1); renderAttachments(); } }, '×'))));
 }

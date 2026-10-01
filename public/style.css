@@ -212,7 +212,13 @@ input, textarea, select { font: inherit; color: inherit; }
 
 /* Dock / composer */
 #dock { flex-shrink: 0; border-top: 1px solid var(--line); background: var(--bg); padding: 8px 10px calc(env(safe-area-inset-bottom) + 8px); display: flex; flex-direction: column; gap: 8px; }
-#composer { display: flex; align-items: flex-end; gap: 6px; }
+/* Two rows, as in Claude's app: the text box gets the full width, the controls sit under it
+   (attach, templates and mic on the left; queue, send or stop on the right). */
+#composer { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+#composer #input { order: -1; flex: 1 1 100%; }
+#composer #steerBtn { margin-left: auto; }
+#composer #steerBtn[hidden] + #sendBtn { margin-left: auto; }
+#composer #sendBtn[hidden] + #stopBtn { margin-left: auto; }
 #input { flex: 1; resize: none; border: 1px solid var(--line); background: var(--card); border-radius: 20px; padding: 9px 14px; font-size: 16px; line-height: 1.35; max-height: 40vh; min-height: 40px; outline: none; }
 #input:focus { border-color: var(--accent); }
 /* Dictation is live: the mic button pulses red until it is tapped off again. */
