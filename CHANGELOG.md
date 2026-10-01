@@ -1,5 +1,50 @@
 # Changelog
 
+## [0.4.0](https://github.com/Matthew3957/dsh-rc/compare/v0.3.0...v0.4.0) (2026-10-01)
+
+
+### Features
+
+* exchange dsh 0.2's launch token and watch its remote.mux ([53eff27](https://github.com/Matthew3957/dsh-rc/commit/53eff2745f0b2496118266d6d879b30693a55e07)), closes [#37](https://github.com/Matthew3957/dsh-rc/issues/37)
+* **ui:** add the dsh 0.2 wire adapter ([9cb330c](https://github.com/Matthew3957/dsh-rc/commit/9cb330cdf7a163ee43905e04f4d8578171f7ea71)), closes [#37](https://github.com/Matthew3957/dsh-rc/issues/37)
+* **ui:** draw diffs, command exits and turn summaries on dsh 0.2 ([a3e0d5d](https://github.com/Matthew3957/dsh-rc/commit/a3e0d5d984816be409e8b6ff618b2591fc69ddc8)), closes [#52](https://github.com/Matthew3957/dsh-rc/issues/52)
+* **ui:** list, edit, delete and create scheduled prompts on dsh 0.2 ([16be9a5](https://github.com/Matthew3957/dsh-rc/commit/16be9a5e4f40ac0e2347adfacb9ca3b91414c71b)), closes [#54](https://github.com/Matthew3957/dsh-rc/issues/54)
+* **ui:** read the plugins sheet from the dsh 0.2 inventory ([26c6bbc](https://github.com/Matthew3957/dsh-rc/commit/26c6bbc9a8acaf23314a69dd6bf16a067032d853)), closes [#56](https://github.com/Matthew3957/dsh-rc/issues/56)
+* **ui:** run the page on dsh 0.2 as well as 0.1 ([329f704](https://github.com/Matthew3957/dsh-rc/commit/329f7049080fccd7a367744566feb999497647eb)), closes [#37](https://github.com/Matthew3957/dsh-rc/issues/37)
+* **ui:** show a session's goal and set, edit, pause or clear it from the phone ([59da3ba](https://github.com/Matthew3957/dsh-rc/commit/59da3baf08efc496cacc1bea687623307b0d94ae)), closes [#53](https://github.com/Matthew3957/dsh-rc/issues/53)
+* **ui:** show and stop background jobs on dsh 0.2 ([27009d2](https://github.com/Matthew3957/dsh-rc/commit/27009d268513be86b556826e077029fb535f556f)), closes [#55](https://github.com/Matthew3957/dsh-rc/issues/55)
+* **ui:** status icons for needs approval, question, failed, working and unread sessions ([b2747b7](https://github.com/Matthew3957/dsh-rc/commit/b2747b7ea75c1545034898024e513ef8438fe5c7))
+
+
+### Bug Fixes
+
+* keep reconnecting after a dropped newer-API socket, and push each request once across reconnects ([8986bde](https://github.com/Matthew3957/dsh-rc/commit/8986bdec9b4b9f482e1e4d959e4a0deccdddf7bb))
+* **proxy:** honour a cookie's Expires as well as Max-Age ([19e86d3](https://github.com/Matthew3957/dsh-rc/commit/19e86d3f68c80cdc50031c48883d89a6443b2e54))
+* **ui:** call goals/* by literal name and list them as newer-API-only in the smoke test ([3e94590](https://github.com/Matthew3957/dsh-rc/commit/3e9459052faee569b61cf7a75668f9643b224cf1))
+* **ui:** count an empty goal reply as success, and stop iOS zooming into sheet text boxes ([ff00dd6](https://github.com/Matthew3957/dsh-rc/commit/ff00dd6cda2245ad430e1939cb1c92c6a88e454b))
+* **ui:** do not cache a failed catalog read, and wait for the questions view before syncing ([71356fc](https://github.com/Matthew3957/dsh-rc/commit/71356fcf0ddf136e953aecad340555aa3824e2a7))
+* **ui:** follow the 0.2 subagent tree down and show expired questions ([5f73558](https://github.com/Matthew3957/dsh-rc/commit/5f735586b0fbabc2aed4992352ac80f566c021e4)), closes [#57](https://github.com/Matthew3957/dsh-rc/issues/57)
+* **ui:** give the message box its own full-width row, with stop or send beneath it ([4d5a1b8](https://github.com/Matthew3957/dsh-rc/commit/4d5a1b8cbe51c4a475c943d0db33aa79bba252bc))
+* **ui:** goal edits keep the cap when left blank, failures keep what was typed ([8d0199a](https://github.com/Matthew3957/dsh-rc/commit/8d0199a7617812336d0e9ac0d0a5065e42274abe))
+* **ui:** keep a parent in running now while its background subagent works ([fbae3d7](https://github.com/Matthew3957/dsh-rc/commit/fbae3d7e5f56db8e9b1ae30d3a297f8fbc57c91e)), closes [#63](https://github.com/Matthew3957/dsh-rc/issues/63)
+* **ui:** read a silent command's exit marker, keep an errored command's output ([28672c3](https://github.com/Matthew3957/dsh-rc/commit/28672c3aa02abfa0318176c4281c90e875dabf22))
+* **ui:** read dsh 0.2 tool results from the tool message itself ([0308c88](https://github.com/Matthew3957/dsh-rc/commit/0308c8825e3c04da384ad573c1fe8e28551c3fcc))
+* **ui:** schedules in the session menu, repaint only their own sheet, re-arm delete after a failure ([d26fa9f](https://github.com/Matthew3957/dsh-rc/commit/d26fa9fce3fb0fc0bd778b28eb169992e8e0c658))
+* **ui:** tail checks record the right sessions, seen times use the server's clock ([a709cbf](https://github.com/Matthew3957/dsh-rc/commit/a709cbf18306120618bc262d4ae748d9a2bff72e))
+* **ui:** working outranks failed, check each session's tail once, no false unread ([70c296e](https://github.com/Matthew3957/dsh-rc/commit/70c296e941b8e01c0c2363fba118d86fe731d7c2))
+
+
+### Documentation
+
+* describe dsh 0.2 support, the launch token and what is not ported ([9e6a349](https://github.com/Matthew3957/dsh-rc/commit/9e6a3497549b893a2deb3f1212f37a7dbc02a56b)), closes [#37](https://github.com/Matthew3957/dsh-rc/issues/37)
+* the newer dsh API starts at 0.1.7, and the port is checked with real turns ([a9dd250](https://github.com/Matthew3957/dsh-rc/commit/a9dd2501d4bc71b7e03d018900105a37b4d7bcb4))
+
+
+### Tests
+
+* keep a home path out of the dsh 0.2 adapter test ([e76cdbf](https://github.com/Matthew3957/dsh-rc/commit/e76cdbf90b6f7478e8c9cd27d9eec52819f9c399)), closes [#37](https://github.com/Matthew3957/dsh-rc/issues/37)
+* **scripts:** smoke the newer dsh API as well as the older one ([a3b65d7](https://github.com/Matthew3957/dsh-rc/commit/a3b65d78bdf77e27e69585becc2bd75997d3935e)), closes [#66](https://github.com/Matthew3957/dsh-rc/issues/66)
+
 ## [0.3.0](https://github.com/Matthew3957/dsh-rc/compare/v0.2.0...v0.3.0) (2026-09-30)
 
 
