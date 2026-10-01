@@ -749,7 +749,6 @@ function listMenuSheet() {
   refreshPushState().then((st) => { notifState.textContent = pushStateLabel(st); }).catch(() => {});
   openSheet(h('h3', {}, 'Menu'),
     h('button', { class: 'menuitem', onclick: () => notificationsSheet() }, 'Notifications', notifState),
-    window.dshSchedulesUI && window.dshSchedulesUI.menuItem(),
     h('button', { class: 'menuitem', onclick: pluginsSheet }, 'Plugins & connectors', h('small', {}, 'What this dsh has loaded')),
     S.tunnelUrl ? h('button', { class: 'menuitem', onclick: () => { tunnelSheet().catch((e) => toast('Tunnel address unavailable: ' + e.message)); } }, 'Open on your phone', h('small', {}, 'Show the tunnel address as a QR code')) : null,
     location.pathname.replace(/\/+$/, '') ? h('a', { class: 'menuitem', href: '/', style: 'color:inherit;text-decoration:none' }, 'Open full dsh web UI') : null);
@@ -2591,6 +2590,7 @@ $('#menuBtn').onclick = () => {
     h('button', { class: 'menuitem', onclick: modelSheet }, 'Model', h('small', {}, 'Switch the model for this session')),
     h('button', { class: 'menuitem', onclick: pricesSheet }, 'Prices', h('small', {}, 'Override the price table behind "est. cost"')),
     dsh2 ? h('button', { class: 'menuitem', onclick: () => goalSheet() }, 'Goal', h('small', {}, goalFor(cur.id) ? 'View, edit, pause or clear' : 'Keep this session working toward one objective')) : null,
+    window.dshSchedulesUI && window.dshSchedulesUI.menuItem(), // per session, so in the chat menu
     h('button', { class: 'menuitem', onclick: commandsSheet }, 'Commands', h('small', {}, 'Slash commands available here')),
     notifRow,
     h('button', { class: 'menuitem', onclick: renameSheet }, 'Rename'),

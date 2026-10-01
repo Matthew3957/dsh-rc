@@ -18,7 +18,7 @@
   }
 
   const fmt = (iso) => new Date(iso).toLocaleString([], { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
-  const fail = (what, e) => openSheet(h('h3', {}, TITLE), h('div', { class: 'note err' }, `${what}: ${e.message}`));
+  const fail = (what, e) => openSheet(h('h3', { 'data-sched': '' }, TITLE), h('div', { class: 'note err' }, `${what}: ${e.message}`));
 
   async function rows() {
     return SC().sessionSchedules(await rpc('schedule.catalog', {}), S.cur.id);
@@ -37,13 +37,13 @@
           h('div', { class: 'pmain' }, h('b', {}, e.title), h('small', {}, `${SC().ruleText(e, TZ)} · ${SC().nextText(e, now)}`)),
           h('span', { class: 'pstate' }, '›'));
       };
-      openSheet(h('h3', {}, TITLE),
+      openSheet(h('h3', { 'data-sched': '' }, TITLE),
         msg ? h('div', { class: 'note' }, msg) : null,
         list.length ? list.map(item) : h('div', { class: 'note' }, 'Nothing is scheduled in this session.'),
         h('button', { type: 'button', class: 'go', onclick: () => formSheet(null) }, 'New scheduled prompt'));
     };
     redraw = () => draw();
-    openSheet(h('h3', {}, TITLE), h('div', { class: 'note' }, 'Loading…'));
+    openSheet(h('h3', { 'data-sched': '' }, TITLE), h('div', { class: 'note' }, 'Loading…'));
     await draw(note);
   }
 
@@ -66,9 +66,13 @@
         try {
           const r = await rpc('schedule.delete', { sessionId: S.cur.id, id: e.id });
           listSheet(r && r.deleted === false ? 'That schedule was already gone.' : 'Deleted.');
-        } catch (err) { del.disabled = false; del.textContent = 'Delete'; toast('Delete failed: ' + err.message, 4000); }
+        } catch (err) {
+          // Back to the unarmed state, so the next tap asks again instead of deleting at once.
+          armed = null; del.classList.remove('armed');
+          del.disabled = false; del.textContent = 'Delete'; toast('Delete failed: ' + err.message, 4000);
+        }
       };
-      openSheet(h('h3', {}, e.title),
+      openSheet(h('h3', { 'data-sched': '' }, e.title),
         h('div', { class: 'note cmd' }, e.prompt),
         line('When', SC().ruleText(e, TZ)),
         line('Next', SC().stateOf(e, now) === 'done' ? 'finished' : `${fmt(e.scheduledAt)} (${SC().nextText(e, now).replace(/^next /, '')})`),
@@ -153,7 +157,7 @@
       } catch (e) { go.disabled = false; show((entry ? 'Could not save: ' : 'Could not send: ') + e.message); }
     };
 
-    openSheet(h('h3', {}, entry ? 'Edit scheduled prompt' : 'New scheduled prompt'),
+    openSheet(h('h3', { 'data-sched': '' }, entry ? 'Edit scheduled prompt' : 'New scheduled prompt'),
       entry ? null : h('div', { class: 'note' }, 'dsh has no way to create one from here, so this asks the agent to set it up with its own schedule tool. It costs one short turn.'),
       h('label', {}, 'Name'), title,
       h('label', {}, 'Prompt'), prompt,
@@ -169,7 +173,8 @@
     /** `host/schedules-changed`: dsh only says this when the plugin is loaded. */
     changed: () => {
       available = !!dsh2;
-      if (redraw && !$('#sheet').hidden) redraw();
+      // Only repaint while a schedules sheet is the one on screen, never over another sheet.
+      if (redraw && !$('#sheet').hidden && $('#sheetBody [data-sched]')) redraw();
     },
   };
 })();
