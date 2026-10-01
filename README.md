@@ -291,16 +291,10 @@ file with mode 0600).
 ### How the 0.2 port works
 
 Everything below comes from the generated `typert.remote-client.d.ts` contracts in
-`dsh-api-session-controller`, `dsh-api-workspace-controller`, `dsh-agent-preset-registry`,
-`dsh-commands`, `dsh-user-questions` and `dsh-host-plugin-inventory`, the framing in
-`dsh-api-gateway`'s stream protocol, and the `approval/request` and `user-questions/request`
-events in `dsh-user-approval` and `dsh-user-questions`, checked against a running 0.2.0-rc.2.
 `dsh-api-session-controller`, `dsh-api-workspace-controller`, `dsh-api-job-controller`,
-`dsh-agent-preset-registry`, `dsh-commands` and `dsh-user-questions`, the framing in
-`dsh-api-gateway`'s stream protocol, and
-the `approval/request` and `user-questions/request` events in `dsh-user-approval` and
-`dsh-commands`, `dsh-user-questions` and `dsh-subagent`, the framing in `dsh-api-gateway`'s stream
-protocol, and the `approval/request` and `user-questions/request` events in `dsh-user-approval` and
+`dsh-agent-preset-registry`, `dsh-commands`, `dsh-user-questions`, `dsh-subagent`, `dsh-goal` and
+`dsh-host-plugin-inventory`, the framing in `dsh-api-gateway`'s stream protocol, and the
+`approval/request` and `user-questions/request` events in `dsh-user-approval` and
 `dsh-user-questions`, checked against a running 0.2.0-rc.2.
 
 - **Calls.** `POST /api/<namespace>/<method>`, `payload: {args}`, every parameter under its declared
