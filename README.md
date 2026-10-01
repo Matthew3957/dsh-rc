@@ -380,20 +380,34 @@ covered in Node (`test/dsh02.test.mjs`).
 ## Smoke test
 
 `scripts/smoke.mjs` guards the RPC surface the page depends on. It extracts every
-`rpc(...)` or `remote(...)` method name from `public/app.js`, calls `host.describe` against
-the running dsh, then calls one harmless read method per namespace. A method that no longer
-exists answers HTTP 404 and the script exits non-zero:
+`rpc(...)` or `remote(...)` method name from `public/app.js`, detects which dsh API is
+running, then calls one harmless read method per namespace. A method that no longer exists
+answers HTTP 404 and the script exits non-zero:
 
 ```
 DSH_URL=http://127.0.0.1:3080 node scripts/smoke.mjs   # or: npm run smoke
 ```
 
+Against dsh 0.1.7 and later it first exchanges the launch token for dsh's cookie, the same
+way the server does, so the same two sources work:
+
+```
+DSH_TOKEN=<token> node scripts/smoke.mjs
+DSH_TOKEN_FILE=<file> node scripts/smoke.mjs
+```
+
+`--token` and `--token-file` set the same values; either accepts a bare token or the whole
+`?token=` URL dsh printed. With no token the older API still works, and the newer one
+answers 401 and the script says so. On the newer API it probes the 0.2 endpoints
+`public/dsh02.js` maps the page's calls onto: one harmless unary read per namespace
+(`session/list`, `directoryPicker/list`, ...) and one harmless read of each mux feed the
+adapter opens (`$events`, `session/control`, `workspace/follow`, ...). An unknown endpoint
+answers HTTP 404, an unknown feed `gateway/invocation-unavailable`, and either fails the
+script.
+
 The only requests it can send are the read methods on its allowlist; it never starts,
 prompts, steers or changes a session. The session-changing methods the page calls are
 listed in the output as not called, so a rename there still takes a live phone to notice.
-
-Against dsh 0.2.x the handshake answers 401 without a cookie (see Compatibility), and the smoke reports that
-rather than working around it.
 
 ## Reviewing the work
 

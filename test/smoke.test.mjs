@@ -4,7 +4,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
-import { APP_PATH, PROBES, callRpc, extractMethods, namespaceOf, planChecks } from '../scripts/smoke.mjs';
+import {
+  APP_PATH, NEWER_CALL_PROBES, NEWER_STREAM_PROBES, PROBES, callNewer, callRpc,
+  exchangeLaunchToken, extractMethods, namespaceOf, planChecks, planNewerChecks, probeStream,
+} from '../scripts/smoke.mjs';
 
 // Methods the smoke must never send: they start, prompt, steer or change a session.
 const CHANGES_A_SESSION = [
@@ -68,4 +71,75 @@ test('callRpc refuses any method outside the read-only probe list', async () => 
     () => callRpc('http://127.0.0.1:1', 'session.prompt', {}),
     /not on the read-only probe list/,
   );
+});
+
+// Endpoints the newer smoke must never send: they start, prompt, steer or change a session.
+const NEWER_CHANGES_A_SESSION = [
+  'session/prompt', 'session/cancel', 'session/create', 'session/rename', 'session/fork',
+  'session/selectModel', 'session/updateQueue', 'workspace/archiveSession', 'workspace/create',
+  'workspace/delete', 'goals/create', 'goals/edit', 'goals/pause', 'goals/complete',
+  'goals/clear', 'commands/execute', 'job/kill', 'userQuestions/answer',
+];
+
+test('planNewerChecks probes one unary read per namespace the page maps onto, and the feeds', () => {
+  const methods = [
+    'session.list', 'session.prompt', 'agentPreset.list', 'host.listDirectory', 'workspace.list',
+    'goals/get', 'commands/execute', 'pluginInventory/list', 'fileReferences/list',
+  ];
+  const { calls, streams, unchecked } = planNewerChecks(methods);
+  assert.deepEqual(calls.map((c) => c.endpoint), [
+    'agentPresets/list', 'commands/list', 'directoryPicker/list', 'fileReferences/list',
+    'goals/get', 'pluginInventory/list', 'session/list',
+  ]);
+  for (const call of calls) {
+    assert.ok(Object.hasOwn(NEWER_CALL_PROBES, call.endpoint), `${call.endpoint} is not on the call allowlist`);
+    assert.ok(!NEWER_CHANGES_A_SESSION.includes(call.endpoint), `${call.endpoint} must never be sent`);
+  }
+  assert.ok(streams.some((s) => s.endpoint === 'session/control'));
+  assert.ok(streams.some((s) => s.endpoint === 'workspace/follow'));
+  for (const stream of streams) assert.ok(Object.hasOwn(NEWER_STREAM_PROBES, stream.endpoint));
+  // The writes are reported as unchecked, never probed.
+  assert.ok(unchecked.some((u) => u.method === 'session.prompt' && !u.readOnly));
+  assert.ok(!calls.some((c) => NEWER_CHANGES_A_SESSION.includes(c.endpoint)));
+});
+
+test('planNewerChecks skips a namespace the page does not call', () => {
+  const { calls } = planNewerChecks(['session.list']);
+  assert.deepEqual(calls.map((c) => c.endpoint), ['session/list']);
+});
+
+test('callNewer and probeStream refuse anything outside the newer allowlists', async () => {
+  await assert.rejects(
+    () => callNewer('http://127.0.0.1:1', 'session/prompt', {}, {}),
+    /not on the newer-API read-only probe list/,
+  );
+  await assert.rejects(
+    () => probeStream('http://127.0.0.1:1', 'workspace/create', {}),
+    /not on the newer-API feed probe list/,
+  );
+});
+
+test('exchangeLaunchToken asks the token path and keeps the returned cookie', async () => {
+  const seen = [];
+  const fetchImpl = async (url, init) => {
+    seen.push({ url: String(url), redirect: init.redirect });
+    return { status: 303, headers: { getSetCookie: () => ['dsh-auth-x=v1.abc; Path=/; HttpOnly; SameSite=Strict'] } };
+  };
+  const out = await exchangeLaunchToken(new URL('http://127.0.0.1:3080'), 'tok 1/2', { fetchImpl });
+  assert.equal(out.status, 303);
+  assert.equal(out.cookie, 'dsh-auth-x=v1.abc');
+  assert.equal(seen[0].url, 'http://127.0.0.1:3080/?token=tok%201%2F2');
+  assert.equal(seen[0].redirect, 'manual');
+});
+
+test('every newer probe endpoint is referenced by the adapter or the page', async () => {
+  const dsh02 = await readFile(new URL('../public/dsh02.js', import.meta.url), 'utf8');
+  const app = await readFile(APP_PATH, 'utf8');
+  const quoted = (source, endpoint) => source.includes(`'${endpoint}'`) || source.includes(`"${endpoint}"`);
+  for (const endpoint of Object.keys(NEWER_CALL_PROBES)) {
+    assert.ok(quoted(dsh02, endpoint) || quoted(app, endpoint), `${endpoint} is not called by public/dsh02.js or public/app.js`);
+  }
+  for (const endpoint of Object.keys(NEWER_STREAM_PROBES)) {
+    assert.ok(quoted(dsh02, endpoint), `${endpoint} is not opened by public/dsh02.js`);
+  }
 });
