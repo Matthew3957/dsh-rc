@@ -1,6 +1,6 @@
 {
   "name": "dsh-rc",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "private": false,
   "description": "Phone-first remote control for a running dsh web server, with Web Push notifications.",
   "license": "MIT",
