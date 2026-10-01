@@ -3,16 +3,26 @@
 A phone-first remote control for a running `dsh web` server (compatible with DeepSeek Harness).
 Independent project, not affiliated with or endorsed by DeepSeek.
 
-Session list, chat with streaming replies, compact tool rows you tap to expand (file edits open
-as line diffs), a summary card at the end of each turn (files changed, commands run, passed or
-failed), approval and question cards above the composer, plan-mode plans as approve / keep
-planning cards, stop / steer / queue, slash commands, model switching,
-fork, export and archive from the session menu, image attachments, dictation through the browser's
-Web Speech API where it exists, a read-only plugins and connectors screen, session goals on dsh 0.2
-(shown in the chat and set, edited, paused or cleared from the session menu), a per-session status line
-(model and route, context fill, session tokens, estimated cost), a Running now dashboard for
-every active session, scheduled prompts on dsh 0.2, and Web Push notifications for approvals, questions, finished turns and
-errors.
+Run dsh on your laptop, drive it from your phone: watch sessions work, answer approvals, steer or
+stop a turn, and get a push notification when it needs you. Works with dsh 0.1 and with the newer
+API that dsh 0.1.7 and 0.2 speak (see Compatibility).
+
+**At a glance**
+- Session list with a status for each row: working, needs approval, a question for you, failed,
+  unread. A Running now dashboard shows every active session with todo and context bars,
+  background jobs (stop them from the phone) and its subagent tree.
+- Chat with streaming replies, tool rows you tap to expand, file edits as line diffs, and a
+  summary card at the end of each turn (files changed, commands run, passed or failed).
+- Approval, question and plan-review cards above the composer; stop, steer or queue a message;
+  edit or remove queued messages.
+- A status line per session: model and route, context fill, tokens and an estimated cost.
+- Composer extras: slash commands, @-mention files, saved prompt templates, image attachments,
+  dictation where the browser has speech recognition.
+- Session menu: switch model, rename, fork, export, archive, and on dsh 0.2 set a goal or manage
+  scheduled prompts.
+- Web Push for approvals, questions, finished turns and errors.
+- Reach it over Tailscale, or as its own front door with a passphrase login, HTTPS or a Cloudflare
+  quick tunnel with a QR code.
 
 No build step. `public/` is plain HTML, CSS and JS; `server/` is plain Node ESM (Node 22 or newer). Markdown uses
 marked and DOMPurify, vendored in `public/vendor/` (their license headers are kept in the files).
@@ -512,7 +522,11 @@ Keep each image under around 250 KB, and never point this at a real instance.
 
 Next, in priority order:
 
-1. **Finish the newer-API port** (#37): the gaps listed under Compatibility, and dropping the older API once 0.2.0 is final.
+1. **Toggle and add connectors from the phone** (#70): switch existing MCP connectors and subagent
+   providers on or off first; adding new ones needs a safety design, since a local connector is a
+   command on the laptop.
+2. **Finish the newer-API port**: the gaps listed under Compatibility, and dropping the older API once
+   dsh 0.2.0 is final.
 
 ## License
 
