@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.1](https://github.com/Matthew3957/dsh-rc/compare/v0.4.0...v0.4.1) (2026-10-01)
+
+
+### Documentation
+
+* **readme:** fresh screenshots and a scannable feature list ([f3364c6](https://github.com/Matthew3957/dsh-rc/commit/f3364c6894e2f83faa7b219a9bca7595467925c0))
+
 ## [0.4.0](https://github.com/Matthew3957/dsh-rc/compare/v0.3.0...v0.4.0) (2026-10-01)
 
 
