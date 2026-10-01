@@ -553,7 +553,9 @@ export function createClient({ transport, wsUrl, WebSocketImpl = globalThis.WebS
     if (p.key === 'subagentCatalog') catalogs.set(p.sessionId, Array.isArray(p.value) ? p.value : []);
     else if (p.key === 'subagentTiming') timings.set(p.sessionId, p.value);
     else if (p.key === 'userQuestions') { questionViews.set(p.sessionId, p.value); syncQuestions(p.sessionId, p.value); }
-    else if (p.key === 'inbox') { inboxes.set(p.sessionId, p.value); syncQuestions(p.sessionId, questionViews.get(p.sessionId)); }
+    // Before this session's userQuestions view has arrived (a reconnect baseline can send inbox
+    // first), there is nothing to sync against: resolving now would drop every remembered question.
+    else if (p.key === 'inbox') { inboxes.set(p.sessionId, p.value); if (questionViews.has(p.sessionId)) syncQuestions(p.sessionId, questionViews.get(p.sessionId)); }
   }
 
   /** Call ids whose late answer a client already steered into this session's inbox. */
@@ -808,7 +810,8 @@ export function createClient({ transport, wsUrl, WebSocketImpl = globalThis.WebS
         const proj = await call('session/projections', { request: { sessionId: parentId } }).catch(() => null);
         parentAvailable = !!proj;
         const values = obj(obj(proj).values);
-        catalogs.set(parentId, Array.isArray(values.subagentCatalog) ? values.subagentCatalog : []);
+        // Cache only an answer: a failed read must not stick as "no children".
+        if (proj) catalogs.set(parentId, Array.isArray(values.subagentCatalog) ? values.subagentCatalog : []);
         if (values.subagentTiming !== undefined) timings.set(parentId, values.subagentTiming);
       }
       const rows = catalogs.get(parentId) || [];
