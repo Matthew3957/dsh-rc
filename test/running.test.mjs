@@ -329,6 +329,65 @@ test('a settled subagent shows its accumulated time instead of a live clock', as
   assert.match(oneByClass(row, 'adot').className, /settled/);
 });
 
+// The order dsh 0.2.0-rc.2 sends when a turn spawns one background subagent and ends
+// right away (checked live): the parent's tree is read while it runs and before the child
+// exists, then the child is added and starts, the parent's catalog grows, and the
+// parent's turn ends. Nothing else arrives until the child settles.
+function spawnWorld() {
+  const world = { children: [] };
+  const t = harness({
+    respond: (m, body) => {
+      if (m === 'session.list') return { items: [summary()] };
+      if (m === 'subagent.list') return { entries: body.payload.parentSessionId === 's1' ? world.children : [], parentAvailable: true };
+      return undefined;
+    },
+  });
+  return { t, world };
+}
+async function spawnBackgroundChild(t, world, { catalogPush = true } = {}) {
+  await t.loadSessions();
+  await settle();
+  t.renderDashboard();
+  await settle();
+  t.onHost({ type: 'host/session-added', sessionId: 'sub-1', parentSessionId: 's1', origin: 'subagent', blank: true, running: false });
+  world.children = [childEntry({ mode: 'continuable', label: 'sleep then done' })];
+  t.onHost({ type: 'host/session-status', sessionId: 'sub-1', running: true });
+  if (catalogPush) t.onMux({ type: 'session/projection', sessionId: 's1', key: 'subagentCatalog', value: [{ id: 'sub-1', mode: 'continuable', label: 'sleep then done', createdAt: T0 }], seq: 20 }, {});
+  t.onHost({ type: 'host/session-status', sessionId: 's1', running: false });
+  await settle();
+  t.renderDashboard();
+}
+
+test('a background subagent keeps its parent in Running now after the parent turn ends', async () => {
+  const { t, world } = spawnWorld();
+  await spawnBackgroundChild(t, world);
+  assert.equal(t.el('#running').hidden, false);
+  t.toggleDashCard('s1');
+  const card = t.card('s1');
+  assert.match(textOf(oneByClass(card, 'run-more')), /1 subagent/);
+  const row = oneByClass(card, 'run-agent');
+  assert.equal(textOf(oneByClass(row, 'aname')), 'sleep then done');
+  assert.match(oneByClass(row, 'adot').className, /running/);
+});
+
+test('the child settling takes the parent off Running now', async () => {
+  const { t, world } = spawnWorld();
+  await spawnBackgroundChild(t, world);
+  assert.equal(t.el('#running').hidden, false);
+  world.children = [childEntry({ mode: 'continuable', label: 'sleep then done', activity: 'inactive' })];
+  t.onHost({ type: 'host/session-status', sessionId: 'sub-1', running: false });
+  await settle();
+  t.renderDashboard();
+  assert.equal(t.el('#running').hidden, true);
+});
+
+test('without a catalog push a known child starting still refreshes its parent tree', async () => {
+  const { t, world } = spawnWorld();
+  await spawnBackgroundChild(t, world, { catalogPush: false });
+  assert.equal(t.el('#running').hidden, false);
+  assert.ok(t.card('s1'));
+});
+
 test('a child turn/start seen on the mux is tracked for a session the chat view never opens', async () => {
   const t = harness({ respond: (m) => (m === 'session.list' ? { items: [summary()] } : m === 'subagent.list' ? { entries: [], parentAvailable: true } : undefined) });
   await t.loadSessions();
