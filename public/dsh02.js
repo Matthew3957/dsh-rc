@@ -167,6 +167,49 @@ export function fromPluginInventory(snapshot, { locale } = {}) {
   return { entries, presets, managementAvailable: b.managementAvailable === true };
 }
 
+/**
+ * What a plugin row is, for the switches on the phone: `'connector'` for an MCP client
+ * instance, `'subagent'` for an external subagent provider, null for everything else (core
+ * plugins and the providers' own tool rows). The page groups rows with it and dsh-rc's proxy
+ * refuses `pluginManager/setPluginEnabled` for any row it calls null, so they share one rule.
+ */
+export function pluginKind(entry) {
+  const e = obj(entry);
+  const moduleName = str(e.moduleName) || '';
+  if (/(^|\/)dsh-mcp-client(\/|$)/.test(moduleName)) return 'connector';
+  if (/(^|\/)dsh-subagent-(claude-code|codex|acp|dsh-sdk)/.test(moduleName) && !/tool-/.test(str(e.entryId) || '')) return 'subagent';
+  return null;
+}
+
+/**
+ * `pluginManager/listPlugins` as a map from entry id to whether that row can be switched from
+ * the phone: a connector or subagent provider with a profile patch target. dsh marks the rows it
+ * will not change with `readOnlyReason` (`management-required`, `unaddressable`) instead.
+ */
+export function switchableEntries(list) {
+  const out = new Map();
+  for (const e of Array.isArray(list) ? list : []) {
+    const row = obj(e);
+    if (typeof row.entryId !== 'string') continue;
+    out.set(row.entryId, pluginKind(row) !== null && typeof row.patchId === 'string' && !row.readOnlyReason);
+  }
+  return out;
+}
+
+/** A `ChangeResult` from `setPluginEnabled` as one line for a toast, and whether it worked. */
+export function describeToggle(result, label, enabled) {
+  const r = obj(result);
+  const what = `${label} ${enabled ? 'on' : 'off'}`;
+  const err = obj(r.error);
+  if (r.application === 'failed' || r.application === 'cancelled' || err.code) {
+    return { ok: false, text: `Could not switch ${what}${err.code ? ` (${err.code})` : ''}` };
+  }
+  if (r.application === 'overridden') return { ok: false, text: `Saved ${what}, but another layer of the profile overrides it` };
+  if (r.application === 'restart-required') return { ok: true, text: `Switched ${what}; takes effect when dsh restarts` };
+  if (r.changed === false) return { ok: true, text: `${label} was already ${enabled ? 'on' : 'off'}` };
+  return { ok: true, text: `Switched ${what}` };
+}
+
 function projectionFrames(sessionId, key, value, seq) {
   const out = [{ kind: 'mux', payload: { type: 'session/projection', sessionId, key, value, seq } }];
   if (key === 'inbox') out.push({ kind: 'mux', payload: { type: 'session/queue', sessionId, items: inboxToQueue(value) } });
@@ -876,6 +919,12 @@ export function createClient({ transport, wsUrl, WebSocketImpl = globalThis.WebS
     },
     /** Kill one running job on the user's behalf; resolves with `{outcome}`. 0.2 only. */
     killJob: (sessionId, jobId) => call('job/kill', { request: { sessionId, jobId } }),
+    /**
+     * dsh-plugin-manager: the profile's rows with their patch targets, and one row switched on or
+     * off. 0.2 only; dsh-rc's proxy refuses every other `pluginManager` method and checks these.
+     */
+    listPlugins: () => call('pluginManager/listPlugins', {}),
+    setPluginEnabled: (id, enabled) => call('pluginManager/setPluginEnabled', { id, enabled }),
     /** A 0.1 method by name, or null when this adapter has no equivalent. */
     has: (method) => Object.hasOwn(methods, method),
     rpc: (method, payload, rpcId) => {
@@ -927,5 +976,5 @@ export function createClient({ transport, wsUrl, WebSocketImpl = globalThis.WebS
 }
 
 if (typeof window !== 'undefined') {
-  window.dsh02 = { createClient, MUX_PATH, bareCode, fromPluginInventory, localizedText, goalOf, goalStatus, toolCallView, toolResultView };
+  window.dsh02 = { createClient, MUX_PATH, bareCode, fromPluginInventory, pluginKind, switchableEntries, describeToggle, localizedText, goalOf, goalStatus, toolCallView, toolResultView };
 }

@@ -492,3 +492,8 @@ input, textarea, select { font: inherit; color: inherit; }
 .sched-zone { display: block; color: var(--muted); font-size: 12px; margin-top: 6px; }
 .sched-zone:empty { display: none; }
 #sheetBody textarea.sched-prompt { font-family: var(--sans); font-size: 16px; line-height: 1.35; }
+/* Plugins sheet: a connector's on/off switch, tapped twice like a job's stop button. */
+.pswitch { flex-shrink: 0; min-width: 44px; padding: 2px 8px; border: 1px solid var(--line); border-radius: 6px; color: var(--muted); font-family: var(--mono); font-size: 11px; line-height: 18px; }
+.pswitch.on { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 45%, var(--line)); }
+.pswitch.armed { color: var(--err); border-color: var(--err); }
+.pswitch:disabled { opacity: .6; }

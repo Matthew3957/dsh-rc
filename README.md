@@ -20,6 +20,8 @@ API that dsh 0.1.7 and 0.2 speak (see Compatibility).
   dictation where the browser has speech recognition.
 - Session menu: switch model, rename, fork, export, archive, and on dsh 0.2 set a goal or manage
   scheduled prompts.
+- Plugins and connectors: what this dsh has loaded, and on dsh 0.2 a tap-twice switch for each MCP
+  connector and subagent provider already in the profile.
 - Web Push for approvals, questions, finished turns and errors.
 - Reach it over Tailscale, or as its own front door with a passphrase login, HTTPS or a Cloudflare
   quick tunnel with a QR code.
@@ -232,7 +234,8 @@ on loopback, or tailnet-only through Tailscale Serve (not Funnel), and never poi
 bind or a reverse proxy at it directly. dsh blocks settings and credential changes from
 non-loopback hosts. This page does not edit settings or credentials, but it can do anything a
 dsh session can: send prompts, run slash commands, approve tools, switch models, rename, fork
-and export sessions, and archive them (which dsh cannot undo).
+and export sessions, and archive them (which dsh cannot undo). On dsh 0.2 it can also switch existing MCP connectors and subagent providers on
+or off (see Compatibility), and nothing else in the profile.
 
 When dsh-rc is the front door, it adds:
 
@@ -273,7 +276,7 @@ applies to it; the tailnet is the boundary there.
 | --- | --- |
 | 0.1.1-rc.2 | Supported (older API), what everything here was first built against. |
 | 0.1.7-rc.2 | Supported (newer API, same as 0.2): the 0.1 line switched protocols at 0.1.7. |
-| 0.2.0-rc.2 | Supported for the core (npm's `latest` tag at the time of writing): session list, chat streaming, prompts, approvals, questions, queue, stop, model, rename, fork, archive, new session, slash commands, push notifications, and the read-only plugins and connectors screen. Gaps are listed below. |
+| 0.2.0-rc.2 | Supported for the core (npm's `latest` tag at the time of writing): session list, chat streaming, prompts, approvals, questions, queue, stop, model, rename, fork, archive, new session, slash commands, push notifications, and the plugins and connectors screen with its connector switches. Gaps are listed below. |
 
 The newer API arrived in 0.1.7, not 0.2: everything said about "dsh 0.2" below applies to 0.1.7 too.
 One page and one server speak both. The page asks `host.describe` (dsh 0.1) first; when that is a
@@ -302,8 +305,8 @@ file with mode 0600).
 
 Everything below comes from the generated `typert.remote-client.d.ts` contracts in
 `dsh-api-session-controller`, `dsh-api-workspace-controller`, `dsh-api-job-controller`,
-`dsh-agent-preset-registry`, `dsh-commands`, `dsh-user-questions`, `dsh-subagent`, `dsh-goal` and
-`dsh-host-plugin-inventory`, the framing in `dsh-api-gateway`'s stream protocol, and the
+`dsh-agent-preset-registry`, `dsh-commands`, `dsh-user-questions`, `dsh-subagent`, `dsh-goal`,
+`dsh-host-plugin-inventory` and `dsh-plugin-manager`, the framing in `dsh-api-gateway`'s stream protocol, and the
 `approval/request` and `user-questions/request` events in `dsh-user-approval` and
 `dsh-user-questions`, checked against a running 0.2.0-rc.2.
 
@@ -327,8 +330,23 @@ Everything below comes from the generated `typert.remote-client.d.ts` contracts 
   `dsh-host-plugin-inventory`) adds localized display metadata and each agent preset's flattened
   composition. `fromPluginInventory` in `public/dsh02.js` resolves that, and the sheet lists failed
   entries first, then presets (a broken or failing composition first), then every plugin.
-  `dsh-plugin-manager` does offer per-entry `setPluginEnabled`, but the sheet stays read-only: the
-  proxy refuses the whole `pluginManager` namespace, so a phone cannot change the profile.
+- **Connector switches.** Each MCP connector and subagent provider already in the profile gets an
+  on/off switch: tap once to arm it, again within three seconds to switch, and a toast says what
+  changed (or that dsh needs a restart, or that another profile layer overrides it). The page asks
+  `pluginManager/listPlugins` which rows dsh will change (rows with a `patchId`, not a
+  `readOnlyReason`) and calls `pluginManager/setPluginEnabled(id, enabled)`. dsh itself answers
+  every `pluginManager` method for the proxy's Host, core plugins included, so the proxy lets only
+  these two through, and only with dsh-rc's login on, or from a loopback or Tailscale (`*.ts.net`)
+  Host when the login is off (a `--trusted-host` LAN name can read but not switch). For a switch it
+  accepts exactly `{id, enabled}`, reads the plugin list from dsh itself, refuses anything that is
+  not an existing, addressable connector or provider, and forwards a body it rebuilt from the
+  checked fields. `GET ./plugin-changes` tells the page whether to show the switches. Every other
+  `pluginManager` method (install, remove, bundles, version exemptions) stays refused. The older
+  API has no plugin manager, so its sheet stays read-only.
+- **No adding connectors from the phone.** dsh 0.2 has no remote method that adds an MCP server:
+  connectors are `cordis.yml` rows written by the host-side config editor, and `pluginManager` only
+  installs npm bundles by spec. So a new connector, remote or local, is still added on the laptop,
+  and the proxy has nothing that could add or edit a stdio (command) connector.
 - **Tool cards.** 0.1 attached each tool's presentation view to its events. 0.2 sends none:
   `tool/call` carries the raw arguments and `tool/result` the result text plus the tool's private
   `meta` (dsh-session's event map). Like dsh's own web client (dsh-client-ui-tool's diff and
@@ -522,9 +540,9 @@ Keep each image under around 250 KB, and never point this at a real instance.
 
 Next, in priority order:
 
-1. **Toggle and add connectors from the phone** (#70): switch existing MCP connectors and subagent
-   providers on or off first; adding new ones needs a safety design, since a local connector is a
-   command on the laptop.
+1. **Add remote connectors from the phone** (#70): switching existing connectors on and off is done.
+   Adding a remote (HTTP) MCP connector by URL waits on dsh exposing a remote method for it; local
+   stdio connectors stay laptop-only by design.
 2. **Finish the newer-API port**: the gaps listed under Compatibility, and dropping the older API once
    dsh 0.2.0 is final.
 
