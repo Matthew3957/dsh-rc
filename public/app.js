@@ -3194,9 +3194,11 @@ function fitViewport() {
   const vv = window.visualViewport, root = document.documentElement;
   if (!root || !root.classList) return;
   const full = root.clientHeight;
-  const kb = !!vv && isField(document.activeElement) && vv.height < full * 0.85;
+  // Keyboard state comes from the viewport, not focus, so the layout holds until the
+  // keyboard has actually gone. A pinch zoom also shrinks the visual viewport; skip it.
+  const kb = !!vv && Math.abs((vv.scale || 1) - 1) < 0.01 && vv.height < full * 0.85;
   root.classList.toggle('kb', kb);
-  root.classList.toggle('kb-card', kb && !!document.activeElement.closest('#pending'));
+  root.classList.toggle('kb-card', kb && isField(document.activeElement) && !!document.activeElement.closest('#pending'));
   if (kb) {
     root.style.setProperty('--vvh', vv.height + 'px');
     root.style.setProperty('--vvtop', vv.offsetTop + 'px');
@@ -3221,7 +3223,7 @@ window.addEventListener('resize', fitViewport);
 // The keyboard can open and close without a resize reaching us first (or at all, on a
 // field-to-field hop), so re-check after focus moves and once the animation settles.
 document.addEventListener('focusin', () => { refit(); setTimeout(refit, 350); });
-document.addEventListener('focusout', () => setTimeout(fitViewport, 50));
+document.addEventListener('focusout', () => setTimeout(refit, 50));
 fitViewport();
 
 // ---------- Boot ----------
