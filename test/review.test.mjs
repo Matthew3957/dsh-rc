@@ -344,6 +344,16 @@ test('an ordinary question still renders as a question card', async () => {
   assert.match(textOf(t.el('#pending')), /dsh is asking/);
 });
 
+test('a pending card offers a foldable header', async () => {
+  const t = await openWith([]);
+  t.onMux({ type: 'question/requested', sessionId: 's1', questions: [{ id: 'q', question: 'Which branch?' }] }, { rpcId: 'q-5' });
+  const card = byClass(t.el('#pending'), 'card')[0];
+  assert.ok(card, 'card rendered');
+  assert.equal(card.getAttribute('data-rpc'), 'q-5');
+  assert.ok(byClass(card, 'card-head')[0], 'the header can be tapped to fold the card');
+  assert.ok(byClass(card, 'card-wait')[0], 'the folded bar can say an answer is waiting');
+});
+
 test('an expired question renders as expired and still offers a dismissable answer', async () => {
   const t = await openWith([]);
   t.onMux({ type: 'question/requested', sessionId: 's1', callId: 'c1', expired: true, questions: [{ id: 'q', question: 'Which branch?' }] }, { rpcId: 'question:s1:c1' });

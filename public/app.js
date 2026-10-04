@@ -1065,6 +1065,19 @@ function stick(force) {
   requestAnimationFrame(() => { feed.scrollTop = feed.scrollHeight; });
 }
 $('#jumpBtn').onclick = () => { pinned = true; stick(true); };
+// The jump-to-bottom button floats over the feed, so keep it above the dock:
+// with a pending card open the dock is tall and the button would sit on the
+// card's buttons. The dock is the bottom flex row, so its height is the offset.
+function positionJump() {
+  const jump = $('#jumpBtn'), dock = $('#dock');
+  if (!jump || !dock) return;
+  const h = dock.offsetHeight;
+  if (Number.isFinite(h) && h > 0) jump.style.bottom = (h + 12) + 'px';
+}
+if (typeof ResizeObserver !== 'undefined') {
+  const dock = $('#dock');
+  if (dock) new ResizeObserver(() => positionJump()).observe(dock);
+}
 
 // ---------- Session view ----------
 function sessionMeta(id) { return S.sessions.find((s) => s.sessionId === id) || {}; }
@@ -2060,21 +2073,73 @@ function renderDashboard() {
 $('#runningHead').onclick = () => { S.dashCollapsed = !S.dashCollapsed; renderDashboard(); };
 
 // ---------- Approvals & questions ----------
+const collapsedCards = new Set(); // rpcId whose card the user folded to read underneath
+
+// A card folds to this slim header so the message it is asking about stays
+// readable. The chosen options and typed text live in the card's own DOM, so
+// folding never touches them. Tapping the header, or swiping it down / up,
+// toggles the fold.
+function cardHead(title, rpcId) {
+  const head = h('button', { type: 'button', class: 'card-head', 'aria-expanded': 'true' },
+    h('span', { class: 'card-title' }, title),
+    h('span', { class: 'card-wait' }, 'answer needed'),
+    h('span', { class: 'card-caret', 'aria-hidden': 'true' }, '▾'));
+  let y0 = null, x0 = null, swiped = false;
+  head.addEventListener('click', (e) => {
+    if (swiped) { swiped = false; e.preventDefault(); return; } // the tap after a swipe
+    toggleCard(rpcId);
+  });
+  head.addEventListener('touchstart', (e) => {
+    y0 = e.touches.length === 1 ? e.touches[0].clientY : null;
+    x0 = e.touches.length === 1 ? e.touches[0].clientX : null;
+    swiped = false;
+  }, { passive: true });
+  head.addEventListener('touchend', (e) => {
+    if (y0 == null) return;
+    const t = e.changedTouches[0];
+    const dy = t.clientY - y0, dx = t.clientX - x0;
+    y0 = null;
+    if (Math.abs(dy) < 24 || Math.abs(dy) <= Math.abs(dx)) return; // a tap, not a swipe
+    swiped = true;
+    toggleCard(rpcId, dy > 0); // swipe down folds it away, swipe up brings it back
+    setTimeout(() => { swiped = false; }, 600);
+  });
+  return head;
+}
+function applyCollapsed(card, rpcId) {
+  const collapsed = collapsedCards.has(rpcId);
+  card.classList.toggle('collapsed', collapsed);
+  const head = card.querySelector && card.querySelector('.card-head');
+  if (head) head.setAttribute('aria-expanded', String(!collapsed));
+}
+function toggleCard(rpcId, want) {
+  if (!rpcId) return;
+  const collapsed = want == null ? !collapsedCards.has(rpcId) : want;
+  if (collapsed) collapsedCards.add(rpcId); else collapsedCards.delete(rpcId);
+  const box = $('#pending');
+  const card = box && box.querySelector(`.card[data-rpc="${CSS.escape(rpcId)}"]`);
+  if (card) applyCollapsed(card, rpcId);
+  positionJump();
+}
 function renderPending() {
   const box = $('#pending');
-  if (!S.cur) { box.replaceChildren(); return; }
+  if (!S.cur) { collapsedCards.clear(); box.replaceChildren(); return; }
   const cards = [];
-  for (const a of S.approvals.values()) if (belongsToCur(a.sessionId)) cards.push(approvalCard(a));
+  const live = new Set();
+  for (const a of S.approvals.values()) if (belongsToCur(a.sessionId)) { cards.push(approvalCard(a)); live.add(a.rpcId); }
   for (const q of S.questions.values()) {
     if (!belongsToCur(q.sessionId)) continue;
+    live.add(q.rpcId);
     const review = window.dshReview && window.dshReview.planReviewOf(q.questions);
     // Keep an open plan card's node: rebuilding it would drop the feedback box's focus
     // and, on iOS, the keyboard whenever another card arrives.
     const kept = review && box.querySelector(`.card.plan[data-rpc="${CSS.escape(q.rpcId)}"]`);
     cards.push(kept || (review ? planCard(q, review) : questionCard(q)));
   }
+  for (const id of [...collapsedCards]) if (!live.has(id)) collapsedCards.delete(id);
   box.replaceChildren(...cards);
   if (cards.length) stick();
+  positionJump();
 }
 // Plan mode asks for review through an ordinary question tagged plan-review, with
 // the plan as markdown in its detail. It is drawn as the plan itself with
@@ -2086,7 +2151,7 @@ function planCard(q, review) {
   const body = h('div', { class: 'md plan-body' });
   body.append(mdNode(review.plan));
   const card = h('div', { class: 'card plan' + (q.expired ? ' expired' : ''), 'data-rpc': q.rpcId },
-    h('h4', {}, 'Plan review' + sub),
+    cardHead('Plan review' + sub, q.rpcId),
     q.expired ? h('div', { class: 'why expired-note' }, 'The timed wait ran out; the agent carried on. You can still answer.') : null,
     review.question ? h('div', { class: 'why' }, review.question) : null,
     body);
@@ -2116,14 +2181,15 @@ function planCard(q, review) {
   if (keep) keep.onclick = () => settle(keep, { ok: true, value: { sessionId: q.sessionId, answer: lib.planAnswer(review, false, fb.value) } });
   reply.onclick = () => settle(reply, { ok: false, error: { code: 'cancelled', message: 'the user closed this question request', details: {} } });
   card.append(h('div', { class: 'row' }, ...btns));
+  applyCollapsed(card, q.rpcId);
   return card;
 }
 function approvalCard(a) {
   const t = a.callId && R.tools.get(a.callId);
   const args = t && t.args != null ? prettyArgs(t.args) : '';
   const sub = a.sessionId !== (S.cur && S.cur.id) ? ' (subagent)' : '';
-  const card = h('div', { class: 'card approval' },
-    h('h4', {}, `Allow ${prettyTool(a.toolName)}?${sub}`),
+  const card = h('div', { class: 'card approval', 'data-rpc': a.rpcId },
+    cardHead(`Allow ${prettyTool(a.toolName)}?${sub}`, a.rpcId),
     a.reason ? h('div', { class: 'why' }, a.reason) : null,
     args ? h('pre', {}, clip(args, 4000)) : null);
   const answer = async (outcome, btn) => {
@@ -2139,11 +2205,13 @@ function approvalCard(a) {
   no.onclick = () => answer('rejected', no);
   yes.onclick = () => answer('allowed-once', yes);
   card.append(h('div', { class: 'row' }, no, yes));
+  applyCollapsed(card, a.rpcId);
   return card;
 }
 function questionCard(q) {
   const state = (q.questions || []).map((qq) => ({ id: qq.id, selected: new Set(), custom: '' }));
-  const card = h('div', { class: 'card' + (q.expired ? ' expired' : '') }, h('h4', {}, q.expired ? 'Question expired' : 'dsh is asking'));
+  const card = h('div', { class: 'card' + (q.expired ? ' expired' : ''), 'data-rpc': q.rpcId },
+    cardHead(q.expired ? 'Question expired' : 'dsh is asking', q.rpcId));
   if (q.expired) card.append(h('div', { class: 'why expired-note' }, 'The timed wait ran out; the agent carried on. You can still answer.'));
   (q.questions || []).forEach((qq, i) => {
     const st = state[i];
@@ -2178,6 +2246,7 @@ function questionCard(q) {
     try { await respond(q.rpcId, { ok: true, value: { sessionId: q.sessionId, answer: { answers } } }); S.questions.delete(q.rpcId); renderPending(); } catch (e) { toast(e.message); }
   };
   card.append(h('div', { class: 'row' }, cancel, send));
+  applyCollapsed(card, q.rpcId);
   return card;
 }
 

@@ -270,6 +270,16 @@ input, textarea, select { font: inherit; color: inherit; }
 /* Approve gets its own full-width row; the two ways of not approving share the next. */
 .card.plan .row { flex-wrap: wrap; }
 .card.plan .row .yes { flex-basis: 100%; }
+/* Cards fold to a slim header so the message being answered stays readable.
+   Tapping the header, or swiping it down / up, toggles the fold. */
+.card-head { display: flex; align-items: center; gap: 8px; width: 100%; margin: -2px 0 6px; padding: 2px 0; text-align: left; }
+.card-title { font-size: 13px; font-weight: 650; }
+.card-caret { margin-left: auto; color: var(--muted); font-size: 12px; transition: transform .15s ease; }
+.card-wait { color: var(--warn); font-size: 12px; font-weight: 650; }
+.card:not(.collapsed) .card-wait { display: none; }
+.card.collapsed .card-caret { transform: rotate(-90deg); }
+.card.collapsed { padding: 9px 12px; }
+.card.collapsed > :not(.card-head) { display: none; }
 #pending { display: flex; flex-direction: column; gap: 8px; max-height: 55vh; overflow-y: auto; }
 #pending:empty { display: none; }
 
