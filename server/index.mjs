@@ -173,6 +173,85 @@ function sendJson(res, status, value) {
   res.end(buf);
 }
 
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+/** Where the app is mounted: `/` by default, `/m/` behind Tailscale Serve. A
+ *  proxy may strip the mount from the path it forwards, so a same-origin
+ *  Referer (the page the user just tapped a link on) is the better signal that
+ *  the window is under a path. */
+export function appBasePath(pathname, referer, host) {
+  if (typeof referer === 'string' && referer) {
+    try {
+      const ref = new URL(referer);
+      if (/^https?:$/.test(ref.protocol) && (!host || ref.host === host)) {
+        return ref.pathname.slice(0, ref.pathname.lastIndexOf('/') + 1) || '/';
+      }
+    } catch {
+      // Not a usable URL: fall through to the path.
+    }
+  }
+  const p = String(pathname || '/');
+  return (p === '/m' || p.startsWith('/m/')) ? '/m/' : '/';
+}
+
+/** A browser page navigation should never hit a bare "Not found": this small
+ *  page matches the app's look and offers a way back to whichever root the app
+ *  is served from. */
+export function notFoundPageHtml(pathname, base = '/') {
+  return `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#111416" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#f6f7f8" media="(prefers-color-scheme: light)">
+<title>Not found · dsh-rc</title>
+<style>
+  :root { color-scheme: light dark; --bg:#f6f7f8; --card:#fff; --fg:#16191d; --muted:#69707a; --line:#dde1e6; --accent:#0e7c86; --accent-fg:#fff; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#111416; --card:#1e2327; --fg:#e6e9ec; --muted:#8b949e; --line:#2b3136; --accent:#3cc4c4; --accent-fg:#0b1f20; } }
+  * { box-sizing: border-box; }
+  body { margin:0; min-height:100vh; display:grid; place-items:center; padding:24px; background:var(--bg); color:var(--fg); font:16px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+  main { width:min(360px, 100%); background:var(--card); border:1px solid var(--line); border-radius:16px; padding:20px; box-shadow:0 2px 12px rgba(0,0,0,.08); }
+  h1 { margin:0 0 6px; font-size:17px; }
+  p { margin:0 0 10px; color:var(--muted); font-size:14px; }
+  code { display:block; font-family:ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size:12.5px; word-break:break-word; background:var(--bg); border:1px solid var(--line); border-radius:10px; padding:9px 11px; margin:0 0 14px; }
+  a.home { display:block; text-align:center; text-decoration:none; font-weight:650; background:var(--accent); color:var(--accent-fg); border-radius:10px; padding:11px 12px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>That page isn't here</h1>
+  <p>dsh-rc has no page at this address. It was probably a file path in a message.</p>
+  <code>${escapeHtml(pathname)}</code>
+  <a class="home" href="${escapeHtml(base)}">Back to dsh-rc</a>
+</main>
+</body>
+</html>
+`;
+}
+
+function wantsHtml(req) {
+  const accept = req.headers.accept || '';
+  return /\btext\/html\b/i.test(accept) || req.headers['sec-fetch-mode'] === 'navigate';
+}
+
+function sendNotFound(req, res, pathname) {
+  if (!wantsHtml(req)) return sendText(res, 404, 'Not found');
+  const base = appBasePath(pathname, req.headers.referer, req.headers.host);
+  const body = Buffer.from(notFoundPageHtml(pathname, base), 'utf8');
+  res.writeHead(404, {
+    'Content-Type': 'text/html; charset=utf-8',
+    'Content-Length': body.length,
+    'Cache-Control': 'no-store',
+    'X-Content-Type-Options': 'nosniff',
+    'X-Frame-Options': 'DENY',
+    'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'",
+  });
+  return req.method === 'HEAD' ? res.end() : res.end(body);
+}
+
 async function serveStatic(req, res, publicDir, pathname) {
   const abs = resolveStatic(publicDir, pathname);
   if (!abs) return sendText(res, 403, 'Forbidden');
@@ -180,7 +259,7 @@ async function serveStatic(req, res, publicDir, pathname) {
   try {
     st = await fsp.stat(abs);
   } catch {
-    return sendText(res, 404, 'Not found');
+    return sendNotFound(req, res, pathname);
   }
   let file = abs;
   if (st.isDirectory()) {
@@ -188,10 +267,10 @@ async function serveStatic(req, res, publicDir, pathname) {
     try {
       st = await fsp.stat(file);
     } catch {
-      return sendText(res, 404, 'Not found');
+      return sendNotFound(req, res, pathname);
     }
   }
-  if (!st.isFile()) return sendText(res, 404, 'Not found');
+  if (!st.isFile()) return sendNotFound(req, res, pathname);
 
   const ext = path.extname(file).toLowerCase();
   res.writeHead(200, {
