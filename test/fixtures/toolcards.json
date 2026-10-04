@@ -1,0 +1,103 @@
+{
+  "_source": "Shapes recorded from an isolated dsh 0.2.0-rc.2 (tool/result.meta) and sanitized: invented paths, URLs and text only.",
+  "read": {
+    "arguments": { "file_path": "src/app.js", "offset": 10, "limit": 3 },
+    "result": {
+      "isError": false,
+      "meta": {
+        "path": "src/app.js",
+        "offset": 10,
+        "lines": [
+          { "number": 10, "text": "const a = 1;" },
+          { "number": 11, "text": "const b = 2;" },
+          { "number": 12, "text": "return a + b;" }
+        ],
+        "totalLines": 42,
+        "lang": "js"
+      }
+    }
+  },
+  "read_whole": {
+    "arguments": { "file_path": "notes.md" },
+    "result": {
+      "isError": false,
+      "meta": {
+        "path": "notes.md",
+        "offset": 1,
+        "lines": [
+          { "number": 1, "text": "# Notes" },
+          { "number": 2, "text": "" },
+          { "number": 3, "text": "Hello world." }
+        ],
+        "totalLines": 3
+      }
+    }
+  },
+  "grep": {
+    "arguments": { "pattern": "TODO", "path": "src" },
+    "result": {
+      "isError": false,
+      "meta": {
+        "shape": "matches",
+        "files": [
+          { "path": "src/a.js", "matches": [{ "lineNumber": 3, "line": "// TODO: cache" }, { "lineNumber": 9, "line": "// TODO: test" }] },
+          { "path": "src/b.js", "matches": [{ "lineNumber": 1, "line": "// TODO: docs" }] }
+        ],
+        "truncated": false,
+        "total": 3
+      }
+    }
+  },
+  "glob": {
+    "arguments": { "pattern": "*.md", "path": "docs" },
+    "result": {
+      "isError": false,
+      "meta": {
+        "shape": "paths",
+        "paths": ["docs/README.md", "docs/guide.md", "docs/faq.md"],
+        "truncated": true,
+        "total": 12
+      }
+    }
+  },
+  "web_search": {
+    "arguments": { "queries": ["node 22 lts", "node release schedule"] },
+    "result": {
+      "isError": false,
+      "meta": {
+        "sources": [
+          { "url": "https://example.com/node22", "title": "Node 22 is now available", "snippet": "The release adds a faster startup.", "publishedAt": "2026-01-02T00:00:00Z" },
+          { "url": "https://example.org/schedule" }
+        ],
+        "truncated": true,
+        "answer": "Node 22 is the current LTS."
+      }
+    }
+  },
+  "web_fetch": {
+    "arguments": { "url": "https://example.com/docs" },
+    "result": {
+      "isError": false,
+      "meta": { "url": "https://example.com/docs", "statusCode": 200, "truncated": false }
+    }
+  },
+  "todo_write": {
+    "arguments": {
+      "todos": [
+        { "content": "Read the files", "status": "in_progress" },
+        { "content": "Summarize", "status": "pending" },
+        { "content": "Report", "status": "completed" }
+      ]
+    },
+    "result": { "isError": false, "meta": null }
+  },
+  "malformed": {
+    "read_offset": { "isError": false, "meta": { "path": "src/app.js", "offset": 0, "lines": [], "totalLines": 1 } },
+    "read_number_gap": { "isError": false, "meta": { "path": "src/app.js", "offset": 1, "lines": [{ "number": 1, "text": "a" }, { "number": 1, "text": "b" }], "totalLines": 2 } },
+    "grep_truncated_flag": { "isError": false, "meta": { "shape": "matches", "files": [], "truncated": "no", "total": 0 } },
+    "glob_path_number": { "isError": false, "meta": { "shape": "paths", "paths": [1, 2], "truncated": false, "total": 2 } },
+    "web_search_source": { "isError": false, "meta": { "sources": [{ "title": "no url" }], "truncated": false } },
+    "web_fetch_status": { "isError": false, "meta": { "url": "https://example.com/", "statusCode": "200", "truncated": false } },
+    "todo_status": { "isError": false, "meta": null }
+  }
+}

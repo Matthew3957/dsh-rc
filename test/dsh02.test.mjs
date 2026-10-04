@@ -1,8 +1,13 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
 
-import { bareCode, createClient, fromControl, fromEvents, fromFollow, fromPluginInventory, fromWorkspace, goalOf, goalStatus, inboxToQueue, liveChunksOf, localizedText, toolCallView, toolResultView, fromJobFollow, fromJobs, questionKey } from '../public/dsh02.js';
+import { bareCode, createClient, fromControl, fromEvents, fromFollow, fromPluginInventory, fromWorkspace, goalOf, goalStatus, inboxToQueue, liveChunksOf, localizedText, toolCallView, toolResultView, todosFrom, fromJobFollow, fromJobs, questionKey } from '../public/dsh02.js';
 import { createNotifier } from '../server/notify.mjs';
+
+// Recorded and sanitized tool/result `meta` shapes; see the file's `_source`.
+const FIXTURES = JSON.parse(fs.readFileSync(new URL('./fixtures/toolcards.json', import.meta.url), 'utf8'));
+const resultOf = (f) => ({ content: [{ type: 'text', text: 'result text' }], isError: false, ...f.result });
 
 test('api-session emits become the host frames the page reads', () => {
   const summary = { sessionId: 's1', parentSessionId: 'p', origin: 'subagent', blank: false, cwd: '/w', running: true };
@@ -462,7 +467,24 @@ test('tool call views are rebuilt from the arguments, as dsh 0.2\'s web client d
   assert.deepEqual(toolCallView('write', { file_path: 'b.txt', content: 'hi' }),
     { card: 'diff', title: 'Write b.txt', diffs: [{ path: 'b.txt', oldText: null, newText: 'hi' }] });
   assert.deepEqual(toolCallView('str_replace_editor', { command: 'create', path: 'c.md', file_text: '# c' }).diffs, [{ path: 'c.md', oldText: null, newText: '# c' }]);
-  assert.equal(toolCallView('read', { file_path: 'a.js' }), null);
+  assert.deepEqual(toolCallView('read', { file_path: 'a.js' }),
+    { card: 'generic', title: 'Read a.js', kind: 'read', locations: [{ path: 'a.js', line: 1 }] });
+  assert.deepEqual(toolCallView('read', { file_path: 'a.js', offset: 5, limit: 3 }),
+    { card: 'generic', title: 'Read a.js (5 - 7)', kind: 'read', locations: [{ path: 'a.js', line: 5 }] });
+  assert.deepEqual(toolCallView('grep', { pattern: 'TODO', path: 'src', include: '*.js' }),
+    { card: 'generic', title: 'Grep TODO in src (*.js)', kind: 'search', rawInput: 'TODO' });
+  assert.deepEqual(toolCallView('glob', { pattern: '*.md' }),
+    { card: 'generic', title: 'Glob *.md', kind: 'search', rawInput: '*.md' });
+  assert.deepEqual(toolCallView('web_search', { queries: ['node 22', 'lts'] }),
+    { card: 'generic', title: 'node 22, lts', kind: 'search', rawInput: 'node 22, lts' });
+  assert.deepEqual(toolCallView('web_fetch', { url: 'https://example.com/' }),
+    { card: 'generic', title: 'https://example.com/', kind: 'fetch', rawInput: 'https://example.com/' });
+  assert.deepEqual(toolCallView('todo_write', FIXTURES.todo_write.arguments),
+    { card: 'todos', todos: FIXTURES.todo_write.arguments.todos });
+  assert.equal(toolCallView('read', { file_path: '' }), null);
+  assert.equal(toolCallView('grep', { pattern: '' }), null);
+  assert.equal(toolCallView('web_search', { queries: [] }), null);
+  assert.equal(toolCallView('web_fetch', {}), null);
   assert.equal(toolCallView('edit', '{not json'), null);
   assert.equal(toolCallView('write', { file_path: '', content: 'x' }), null);
 });
@@ -497,6 +519,53 @@ test('tool result views read dsh-shell\'s exit markers and dsh-tool-fs\'s applie
   assert.deepEqual(toolResultView('str_replace_editor', { command: 'create', path: 'c', file_text: '' }, { content: text('ok') }), { card: 'generic' });
   assert.equal(toolResultView('read', { file_path: 'a.js' }, { content: text('...') }), null);
   assert.equal(toolResultView(undefined, undefined, { content: text('orphan') }), null);
+});
+
+test('read, search and web result views are rebuilt from the tool-private meta', () => {
+  const f = FIXTURES;
+  const read = toolResultView('read', f.read.arguments, resultOf(f.read));
+  assert.deepEqual(read, { card: 'read', path: 'src/app.js', offset: 10, lines: f.read.result.meta.lines, totalLines: 42, lang: 'js' });
+  // A whole-file read carries no language hint.
+  assert.deepEqual(toolResultView('read', f.read_whole.arguments, resultOf(f.read_whole)),
+    { card: 'read', path: 'notes.md', offset: 1, lines: f.read_whole.result.meta.lines, totalLines: 3 });
+
+  assert.deepEqual(toolResultView('grep', f.grep.arguments, resultOf(f.grep)),
+    { card: 'search', shape: 'matches', files: f.grep.result.meta.files, truncated: false, total: 3 });
+  assert.deepEqual(toolResultView('glob', f.glob.arguments, resultOf(f.glob)),
+    { card: 'search', shape: 'paths', paths: ['docs/README.md', 'docs/guide.md', 'docs/faq.md'], truncated: true, total: 12 });
+
+  assert.deepEqual(toolResultView('web_search', f.web_search.arguments, resultOf(f.web_search)),
+    { card: 'web', kind: 'search', title: 'node 22 lts, node release schedule', sources: f.web_search.result.meta.sources, truncated: true, answer: 'Node 22 is the current LTS.' });
+  assert.deepEqual(toolResultView('web_fetch', f.web_fetch.arguments, resultOf(f.web_fetch)),
+    { card: 'web', kind: 'fetch', title: 'https://example.com/docs', url: 'https://example.com/docs', statusCode: 200, truncated: false });
+
+  // No meta, a malformed one, or an error keeps the raw result on the generic row.
+  const text = (t) => [{ type: 'text', text: t }];
+  assert.equal(toolResultView('read', f.read.arguments, { content: text('x'), isError: false }), null);
+  assert.equal(toolResultView('grep', f.grep.arguments, { content: text('x'), isError: false }), null);
+  assert.equal(toolResultView('read', f.read.arguments, { content: text('x'), isError: true, meta: f.read.result.meta }), null);
+  assert.equal(toolResultView('web_fetch', f.web_fetch.arguments, { content: text('x'), isError: false }), null);
+});
+
+test('malformed read, search and web meta falls back to the generic row', () => {
+  const m = FIXTURES.malformed;
+  assert.equal(toolResultView('read', {}, { isError: false, meta: m.read_offset.meta }), null);
+  assert.equal(toolResultView('read', {}, { isError: false, meta: m.read_number_gap.meta }), null);
+  assert.equal(toolResultView('grep', {}, { isError: false, meta: m.grep_truncated_flag.meta }), null);
+  assert.equal(toolResultView('glob', {}, { isError: false, meta: m.glob_path_number.meta }), null);
+  assert.equal(toolResultView('web_search', {}, { isError: false, meta: m.web_search_source.meta }), null);
+  assert.equal(toolResultView('web_fetch', {}, { isError: false, meta: m.web_fetch_status.meta }), null);
+});
+
+test('todosFrom reads the call view (0.1) or the raw argument (0.2), and rejects a bad list', () => {
+  const todos = FIXTURES.todo_write.arguments.todos;
+  assert.deepEqual(todosFrom('todo_write', FIXTURES.todo_write.arguments), todos);
+  assert.deepEqual(todosFrom('todo_write', JSON.stringify(FIXTURES.todo_write.arguments)), todos);
+  assert.deepEqual(todosFrom('todo_write', null, { rawInput: todos }), todos);
+  assert.deepEqual(todosFrom('todo_write', null, { rawInput: [] }), []);
+  assert.equal(todosFrom('read', FIXTURES.todo_write.arguments), null);
+  assert.equal(todosFrom('todo_write', { todos: [{ content: '', status: 'pending' }] }), null);
+  assert.equal(todosFrom('todo_write', { todos: [{ content: 'x', status: 'done' }] }), null);
 });
 
 test('watchJobs opens one job/list stream per session and reconciles the set', () => {

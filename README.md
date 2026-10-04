@@ -334,12 +334,18 @@ Everything below comes from the generated `typert.remote-client.d.ts` contracts 
   proxy refuses the whole `pluginManager` namespace, so a phone cannot change the profile.
 - **Tool cards.** 0.1 attached each tool's presentation view to its events. 0.2 sends none:
   `tool/call` carries the raw arguments and `tool/result` the result text plus the tool's private
-  `meta` (dsh-session's event map). Like dsh's own web client (dsh-client-ui-tool's diff and
-  terminal card models), `public/dsh02.js` rebuilds the 0.1 views from those: `write`, `edit` and
-  `str_replace_editor` become diff cards (the applied hunks from `meta` once settled), and
-  foreground `bash` and `pwsh` calls become commands whose exit code or signal comes from the
-  `[exit code: N]` marker dsh-shell appends (the persistent shell's `[Command finished with exit
-  code N]`). The diff rows, the turn summary card and the verdict then work as on 0.1.
+  `meta` (dsh-session's event map). Like dsh's own web client, `public/dsh02.js` rebuilds the 0.1
+  views from those. `write`, `edit` and `str_replace_editor` become diff cards (the applied hunks
+  from `meta` once settled); foreground `bash` and `pwsh` calls become commands whose exit code or
+  signal comes from the `[exit code: N]` marker dsh-shell appends (the persistent shell's
+  `[Command finished with exit code N]`); a `read` is a line-numbered file window (its path, the
+  line range and the language hint); a `grep` a per-file match list and a `glob` a path list; a
+  `web_search` its citeable sources and answer, a `web_fetch` its URL and HTTP status; and a
+  `todo_write` the checklist with a mark per item. Each carries a one-line summary — file and line
+  range, pattern and match count, query and source count, URL and status, todo progress — and
+  opens to the full result. A malformed or missing `meta` falls back to the generic row, and since
+  0.1 already sends these views, the same cards render there. The diff rows, the turn summary card
+  and the verdict then work as on 0.1.
 
 **Background jobs.** 0.2 has no host-wide jobs feed, so `public/dsh02.js` opens one `job/list`
 stream per listed session (the first 64, since the list is activity-ordered; its own jobs plus
@@ -379,10 +385,9 @@ and shows nothing. The older API has no schedules and never sees the entry.
 
 ### Not ported yet (dsh 0.2)
 
-- **Other tool cards** (read, grep and glob, web search and fetch, todos) stay generic rows: name,
-  arguments and result text. A `str_replace_editor` edit shows its diff while it runs and a plain
-  row once settled, as in dsh's web client, so it is not counted in the turn summary. A command
-  whose output was spilled to a file has no exit code to show.
+- **`str_replace_editor`** shows its diff while it runs and a plain row once settled, as in dsh's
+  web client, so it is not counted in the turn summary. A command whose output was spilled to a
+  file has no exit code to show.
 - **Session search** answers as dsh does: on a deployment with the session-query index off it fails.
 - **File uploads**, terminals and settings are not touched (refused by the proxy, as before).
 

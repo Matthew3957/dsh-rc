@@ -305,11 +305,11 @@ export function goalStatus(g) {
 // ---------- Tool presentation ----------
 //
 // dsh 0.1 sent each tool event with the view its tool's `presentCall` / `presentResult` made
-// (dsh-tools' presentation vocabulary: `card: 'diff' | 'terminal' | ...`). dsh 0.2 runs neither on
-// the wire: `tool/call` carries the raw `arguments` string and `tool/result` the model-facing
-// result plus the tool's private `meta` (dsh-session's event map). dsh's own web client
-// (dsh-client-ui-tool's diff and terminal card models) rebuilds the cards from those, and so do
-// these two functions, returning the 0.1 views the page and public/review.js already read.
+// (dsh-tools' presentation vocabulary: `card: 'diff' | 'terminal' | 'read' | 'search' | 'web' |
+// ...`). dsh 0.2 runs neither on the wire: `tool/call` carries the raw `arguments` string and
+// `tool/result` the model-facing result plus the tool's private `meta` (dsh-session's event map).
+// dsh's own web client (dsh-client-ui-tool) rebuilds the cards from those, and so do these two
+// functions, returning the 0.1 views the page and public/review.js already read.
 
 const SHELLS = new Set(['bash', 'pwsh']);
 
@@ -379,6 +379,150 @@ function exitStatus(text) {
 // A result dsh-spill-policy cut short ends in its notice, which can hide the exit marker.
 const spilled = (text) => text.endsWith(')') && text.includes(' Full formatted result stored at: ');
 
+const isText = (s) => typeof s === 'string' && s !== '';
+
+// dsh-tool-fs's `readMetaFromMeta`/`isFileTextLine`: the numbered window persisted on the
+// result. The range checks keep a hand-edited log from rendering an out-of-range card.
+function readView(meta) {
+  const m = obj(meta);
+  if (typeof m.path !== 'string' || !Number.isInteger(m.offset) || m.offset < 1) return null;
+  if (!Number.isInteger(m.totalLines) || m.totalLines < 0 || !Array.isArray(m.lines)) return null;
+  if (m.lang !== undefined && typeof m.lang !== 'string') return null;
+  const lines = [];
+  let previous = m.offset - 1;
+  for (const raw of m.lines) {
+    const l = obj(raw);
+    if (!Number.isInteger(l.number) || l.number < 1 || typeof l.text !== 'string') return null;
+    if (l.number <= previous || l.number > m.totalLines) return null;
+    previous = l.number;
+    lines.push({ number: l.number, text: l.text });
+  }
+  const out = { card: 'read', path: m.path, offset: m.offset, lines, totalLines: m.totalLines };
+  if (m.lang !== undefined) out.lang = m.lang;
+  return out;
+}
+
+// dsh-tool-fs-search's `searchViewFromMeta`: grep's grouped `matches` or glob's flat `paths`.
+function searchView(meta) {
+  const m = obj(meta);
+  if (typeof m.truncated !== 'boolean' || typeof m.total !== 'number') return null;
+  if (m.shape === 'matches') {
+    if (!Array.isArray(m.files)) return null;
+    const files = [];
+    for (const raw of m.files) {
+      const f = obj(raw);
+      if (typeof f.path !== 'string' || !Array.isArray(f.matches)) return null;
+      const matches = [];
+      for (const ml of f.matches) {
+        const l = obj(ml);
+        if (typeof l.lineNumber !== 'number' || typeof l.line !== 'string') return null;
+        matches.push({ lineNumber: l.lineNumber, line: l.line });
+      }
+      files.push({ path: f.path, matches });
+    }
+    return { card: 'search', shape: 'matches', files, truncated: m.truncated, total: m.total };
+  }
+  if (m.shape === 'paths') {
+    if (!Array.isArray(m.paths) || !m.paths.every(isText)) return null;
+    return { card: 'search', shape: 'paths', paths: m.paths.slice(), truncated: m.truncated, total: m.total };
+  }
+  return null;
+}
+
+// dsh-tool-web's `searchMetaFromResult`/`isWebSource`.
+function webSearchView(title, meta) {
+  const m = obj(meta);
+  if (!Array.isArray(m.sources) || typeof m.truncated !== 'boolean') return null;
+  if (m.answer !== undefined && typeof m.answer !== 'string') return null;
+  const sources = [];
+  for (const raw of m.sources) {
+    const s = obj(raw);
+    if (typeof s.url !== 'string') return null;
+    if (s.title !== undefined && typeof s.title !== 'string') return null;
+    if (s.snippet !== undefined && typeof s.snippet !== 'string') return null;
+    if (s.publishedAt !== undefined && typeof s.publishedAt !== 'string') return null;
+    const out = { url: s.url };
+    if (s.title !== undefined) out.title = s.title;
+    if (s.snippet !== undefined) out.snippet = s.snippet;
+    if (s.publishedAt !== undefined) out.publishedAt = s.publishedAt;
+    sources.push(out);
+  }
+  const view = { card: 'web', kind: 'search', sources, truncated: m.truncated };
+  if (title) view.title = title;
+  if (m.answer !== undefined) view.answer = m.answer;
+  return view;
+}
+
+// dsh-tool-web's `fetchMetaFromResult`.
+function webFetchView(title, meta) {
+  const m = obj(meta);
+  if (typeof m.url !== 'string' || typeof m.statusCode !== 'number' || typeof m.truncated !== 'boolean') return null;
+  const view = { card: 'web', kind: 'fetch', url: m.url, statusCode: m.statusCode, truncated: m.truncated };
+  if (title) view.title = title;
+  return view;
+}
+
+/**
+ * The todo items a `todo_write` row shows: the call view's `rawInput` on dsh 0.1, or the
+ * raw `todos` argument on dsh 0.2 (where no view crosses the wire). Null for any other
+ * tool or a malformed list, so the row keeps the generic card.
+ */
+export function todosFrom(name, argsRaw, view = null) {
+  if (name !== 'todo_write') return null;
+  const a = argsOf(argsRaw);
+  const fromView = view && Array.isArray(view.rawInput) ? view.rawInput : null;
+  const list = fromView || (a && Array.isArray(a.todos) ? a.todos : null);
+  if (!Array.isArray(list)) return null;
+  const out = [];
+  for (const raw of list) {
+    const item = obj(raw);
+    if (!isText(item.content)) return null;
+    if (item.status !== 'pending' && item.status !== 'in_progress' && item.status !== 'completed') return null;
+    out.push({ content: item.content, status: item.status });
+  }
+  return out;
+}
+
+// The pending-call views dsh's tools declare with `presentCall`: the generic cards for
+// read, grep, glob, web_search, web_fetch and todo_write. The result-time cards below
+// carry what happened; these carry the subject the row shows while it runs.
+function genericCallView(name, a) {
+  if (!a) return null;
+  if (name === 'read') {
+    if (!isText(a.file_path)) return null;
+    const offset = a.offset;
+    const limit = a.limit;
+    const window = limit !== undefined && limit > 0 ? ` (${offset ?? 1} - ${(offset ?? 1) + limit - 1})` : offset !== undefined ? ` (from line ${offset})` : '';
+    return { card: 'generic', title: `Read ${a.file_path}${window}`, kind: 'read', locations: [{ path: a.file_path, line: offset ?? 1 }] };
+  }
+  if (name === 'grep') {
+    if (!isText(a.pattern)) return null;
+    const where = a.path !== undefined ? ` in ${a.path}` : '';
+    const filter = a.include !== undefined ? ` (${a.include})` : '';
+    return { card: 'generic', title: `Grep ${a.pattern}${where}${filter}`, kind: 'search', rawInput: a.pattern };
+  }
+  if (name === 'glob') {
+    if (!isText(a.pattern)) return null;
+    const where = a.path !== undefined ? ` in ${a.path}` : '';
+    return { card: 'generic', title: `Glob ${a.pattern}${where}`, kind: 'search', rawInput: a.pattern };
+  }
+  if (name === 'web_search') {
+    if (!Array.isArray(a.queries) || !a.queries.length || !a.queries.every(isText)) return null;
+    const title = a.queries.join(', ');
+    return { card: 'generic', title, kind: 'search', rawInput: title };
+  }
+  if (name === 'web_fetch') {
+    if (!isText(a.url)) return null;
+    return { card: 'generic', title: a.url, kind: 'fetch', rawInput: a.url };
+  }
+  if (name === 'todo_write') {
+    const todos = todosFrom('todo_write', a);
+    if (!todos) return null;
+    return { card: 'todos', todos };
+  }
+  return null;
+}
+
 /** The 0.1 call view for a 0.2 `tool/call`, or null for the generic row. */
 export function toolCallView(name, argsRaw) {
   const a = argsOf(argsRaw);
@@ -389,6 +533,8 @@ export function toolCallView(name, argsRaw) {
     if (sh.workdir) v.cwd = sh.workdir;
     return v;
   }
+  const generic = genericCallView(name, a);
+  if (generic) return generic;
   const d = intendedDiff(name, a);
   if (!d) return null;
   const verb = name === 'write' || (name === 'str_replace_editor' && a.command === 'create') ? 'Write' : 'Edit';
@@ -406,6 +552,14 @@ export function toolResultView(name, argsRaw, result) {
   const sh = shellCall(name, a);
   // A failed write changed nothing; a failed command still has output (and maybe an exit marker) worth showing.
   if (r.isError && !sh) return null;
+  if (!sh) {
+    // The result-time cards dsh's tools declare with `presentResult`; an absent or
+    // malformed `meta` returns null so the row falls back to the generic card.
+    if (name === 'read') return readView(r.meta);
+    if (name === 'grep' || name === 'glob') return searchView(r.meta);
+    if (name === 'web_search') return webSearchView(Array.isArray(a && a.queries) ? a.queries.join(', ') : undefined, r.meta);
+    if (name === 'web_fetch') return webFetchView(str(a && a.url), r.meta);
+  }
   if (sh) {
     const text = onlyText(r.content);
     if (text === undefined) return null;
@@ -927,5 +1081,5 @@ export function createClient({ transport, wsUrl, WebSocketImpl = globalThis.WebS
 }
 
 if (typeof window !== 'undefined') {
-  window.dsh02 = { createClient, MUX_PATH, bareCode, fromPluginInventory, localizedText, goalOf, goalStatus, toolCallView, toolResultView };
+  window.dsh02 = { createClient, MUX_PATH, bareCode, fromPluginInventory, localizedText, goalOf, goalStatus, toolCallView, toolResultView, todosFrom };
 }
