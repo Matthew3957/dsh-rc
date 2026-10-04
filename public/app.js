@@ -3183,13 +3183,63 @@ async function tunnelSheet() {
 }
 
 // ---------- Viewport (iOS keyboard) ----------
+// #app is as tall as the visible window (--vvh), so a Safari tab keeps the composer
+// above the toolbar. With the keyboard open, iOS pans a shorter
+// visual viewport over the page to reach the focused field, so #app follows that window
+// (top and height) in both modes.
+const isField = (el) => !!el && (el.tagName === 'TEXTAREA' || el.isContentEditable
+  || (el.tagName === 'INPUT' && !/^(button|checkbox|radio|file|submit|reset|range|color)$/.test(el.type)));
 function fitViewport() {
-  const vv = window.visualViewport;
-  document.documentElement.style.setProperty('--vvh', (vv ? vv.height : window.innerHeight) + 'px');
-  if (vv) window.scrollTo(0, 0);
+  const vv = window.visualViewport, root = document.documentElement;
+  if (!root || !root.classList) return;
+  const standalone = navigator.standalone === true || (window.matchMedia && matchMedia('(display-mode: standalone)').matches);
+  // Only a page drawn under the status bar (top inset > 0) has the iOS 26 shortfall;
+  // with an opaque status bar the page starts below it and reaches the home indicator.
+  if (!fitViewport.probe && document.body) {
+    fitViewport.probe = document.createElement('div');
+    fitViewport.probe.style.cssText = 'position:fixed;top:0;left:0;width:0;height:env(safe-area-inset-top);visibility:hidden;pointer-events:none;';
+    document.body.append(fitViewport.probe);
+  }
+  const underBar = !!fitViewport.probe && fitViewport.probe.offsetHeight > 0;
+  const short = window.screen ? screen.height - window.innerHeight : 0;
+  root.classList.toggle('ios-short', standalone && underBar && short >= 40 && short <= 80);
+  const full = root.clientHeight;
+  // Keyboard state comes from the viewport, not focus, so the layout holds until the
+  // keyboard has actually gone. A pinch zoom also shrinks the visual viewport; skip it.
+  const kb = !!vv && Math.abs((vv.scale || 1) - 1) < 0.01 && vv.height < full * 0.85;
+  root.classList.toggle('kb', kb);
+  // Typing into a card hides the feed (display: none drops its scroll position), so keep it.
+  const card = kb && isField(document.activeElement) && !!document.activeElement.closest('#pending');
+  const feed = document.getElementById('feed');
+  if (feed && card && !root.classList.contains('kb-card')) fitViewport.feedTop = feed.scrollTop;
+  root.classList.toggle('kb-card', card);
+  if (feed && !card && fitViewport.feedTop != null) { feed.scrollTop = fitViewport.feedTop; fitViewport.feedTop = null; }
+  if (!vv) root.style.setProperty('--vvh', window.innerHeight + 'px');
+  else if (Math.abs((vv.scale || 1) - 1) < 0.01) root.style.setProperty('--vvh', vv.height + 'px');
+  if (kb) {
+    root.style.setProperty('--vvtop', vv.offsetTop + 'px');
+    root.style.setProperty('--vvbot', Math.max(0, full - vv.offsetTop - vv.height) + 'px');
+  }
 }
-if (window.visualViewport) { visualViewport.addEventListener('resize', () => { fitViewport(); stick(); }); }
+function refit() {
+  fitViewport();
+  stick();
+  // Typing into a question card: keep that field in sight inside the (now shorter) card list.
+  const a = document.activeElement;
+  if (document.documentElement?.classList?.contains('kb-card')) {
+    a.scrollIntoView({ block: 'nearest' });
+    $('#app').scrollTop = 0; // scrollIntoView also scrolls overflow:hidden ancestors; the frame must not move
+  }
+}
+if (window.visualViewport) {
+  visualViewport.addEventListener('resize', refit);
+  visualViewport.addEventListener('scroll', fitViewport);
+}
 window.addEventListener('resize', fitViewport);
+// The keyboard can open and close without a resize reaching us first (or at all, on a
+// field-to-field hop), so re-check after focus moves and once the animation settles.
+document.addEventListener('focusin', () => { refit(); setTimeout(refit, 350); });
+document.addEventListener('focusout', () => setTimeout(refit, 50));
 fitViewport();
 
 // ---------- Boot ----------
