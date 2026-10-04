@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.5.0](https://github.com/Matthew3957/dsh-rc/compare/v0.4.1...v0.5.0) (2026-10-04)
+
+
+### Features
+
+* **ui:** fold pending cards and keep the jump button clear ([0c68c53](https://github.com/Matthew3957/dsh-rc/commit/0c68c530fbbd65d362a3c9715f88093833ecb392))
+* **ui:** give read, search, web and todo tools their own cards ([a49b407](https://github.com/Matthew3957/dsh-rc/commit/a49b4070855e691ff8999ba30726ee22faf0d27f)), closes [#81](https://github.com/Matthew3957/dsh-rc/issues/81)
+* **ui:** theme picker with colourblind-safe, high-contrast and seasonal themes ([b508a5c](https://github.com/Matthew3957/dsh-rc/commit/b508a5cdc9888ebc30f31da02955c8d4b0858e08)), closes [#73](https://github.com/Matthew3957/dsh-rc/issues/73)
+
+
+### Bug Fixes
+
+* **server:** answer a missing page with a styled 404 and a way back ([c85aca3](https://github.com/Matthew3957/dsh-rc/commit/c85aca3581976252da5a0b6655ec7d9bdb204587))
+* **ui:** refuse message links that are not app pages ([aef5abb](https://github.com/Matthew3957/dsh-rc/commit/aef5abb042ff9d04127534e0d9e80f020d931250))
+
 ## [0.4.1](https://github.com/Matthew3957/dsh-rc/compare/v0.4.0...v0.4.1) (2026-10-01)
 
 
