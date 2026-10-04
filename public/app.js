@@ -3183,13 +3183,45 @@ async function tunnelSheet() {
 }
 
 // ---------- Viewport (iOS keyboard) ----------
+// With the keyboard closed, #app is fixed to the whole screen: iOS home-screen apps
+// under-report visualViewport.height (and keep the short value after the keyboard
+// closes), which left a dead band under the composer. With the keyboard open, iOS keeps
+// the layout viewport full height and pans a shorter visual viewport over it to reach
+// the focused field, so #app follows that window (top, height, bottom) instead.
+const isField = (el) => !!el && (el.tagName === 'TEXTAREA' || el.isContentEditable
+  || (el.tagName === 'INPUT' && !/^(button|checkbox|radio|file|submit|reset|range|color)$/.test(el.type)));
 function fitViewport() {
-  const vv = window.visualViewport;
-  document.documentElement.style.setProperty('--vvh', (vv ? vv.height : window.innerHeight) + 'px');
-  if (vv) window.scrollTo(0, 0);
+  const vv = window.visualViewport, root = document.documentElement;
+  if (!root || !root.classList) return;
+  const full = root.clientHeight;
+  const kb = !!vv && isField(document.activeElement) && vv.height < full * 0.85;
+  root.classList.toggle('kb', kb);
+  root.classList.toggle('kb-card', kb && !!document.activeElement.closest('#pending'));
+  if (kb) {
+    root.style.setProperty('--vvh', vv.height + 'px');
+    root.style.setProperty('--vvtop', vv.offsetTop + 'px');
+    root.style.setProperty('--vvbot', Math.max(0, full - vv.offsetTop - vv.height) + 'px');
+  }
 }
-if (window.visualViewport) { visualViewport.addEventListener('resize', () => { fitViewport(); stick(); }); }
+function refit() {
+  fitViewport();
+  stick();
+  // Typing into a question card: keep that field in sight inside the (now shorter) card list.
+  const a = document.activeElement;
+  if (document.documentElement?.classList?.contains('kb-card')) {
+    a.scrollIntoView({ block: 'nearest' });
+    $('#app').scrollTop = 0; // scrollIntoView also scrolls overflow:hidden ancestors; the frame must not move
+  }
+}
+if (window.visualViewport) {
+  visualViewport.addEventListener('resize', refit);
+  visualViewport.addEventListener('scroll', fitViewport);
+}
 window.addEventListener('resize', fitViewport);
+// The keyboard can open and close without a resize reaching us first (or at all, on a
+// field-to-field hop), so re-check after focus moves and once the animation settles.
+document.addEventListener('focusin', () => { refit(); setTimeout(refit, 350); });
+document.addEventListener('focusout', () => setTimeout(fitViewport, 50));
 fitViewport();
 
 // ---------- Boot ----------
