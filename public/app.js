@@ -3183,11 +3183,11 @@ async function tunnelSheet() {
 }
 
 // ---------- Viewport (iOS keyboard) ----------
-// With the keyboard closed, #app is fixed to the whole screen: iOS home-screen apps
-// under-report visualViewport.height (and keep the short value after the keyboard
-// closes), which left a dead band under the composer. With the keyboard open, iOS keeps
-// the layout viewport full height and pans a shorter visual viewport over it to reach
-// the focused field, so #app follows that window (top, height, bottom) instead.
+// #app is as tall as the visible window (--vvh), so a Safari tab keeps the composer
+// above the toolbar. A home-screen app is sized to the whole screen in CSS instead (iOS
+// reports its viewport one status bar short). With the keyboard open, iOS pans a shorter
+// visual viewport over the page to reach the focused field, so #app follows that window
+// (top and height) in both modes.
 const isField = (el) => !!el && (el.tagName === 'TEXTAREA' || el.isContentEditable
   || (el.tagName === 'INPUT' && !/^(button|checkbox|radio|file|submit|reset|range|color)$/.test(el.type)));
 function fitViewport() {
@@ -3199,8 +3199,8 @@ function fitViewport() {
   const kb = !!vv && Math.abs((vv.scale || 1) - 1) < 0.01 && vv.height < full * 0.85;
   root.classList.toggle('kb', kb);
   root.classList.toggle('kb-card', kb && isField(document.activeElement) && !!document.activeElement.closest('#pending'));
+  if (vv && Math.abs((vv.scale || 1) - 1) < 0.01) root.style.setProperty('--vvh', vv.height + 'px');
   if (kb) {
-    root.style.setProperty('--vvh', vv.height + 'px');
     root.style.setProperty('--vvtop', vv.offsetTop + 'px');
     root.style.setProperty('--vvbot', Math.max(0, full - vv.offsetTop - vv.height) + 'px');
   }

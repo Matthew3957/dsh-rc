@@ -45,10 +45,10 @@ button { font: inherit; color: inherit; background: none; border: 0; cursor: poi
 input, textarea, select { font: inherit; color: inherit; }
 [hidden] { display: none !important; }
 
-#app { position: fixed; inset: 0; display: flex; flex-direction: column; overflow: hidden; }
+#app { position: fixed; top: 0; left: 0; right: 0; height: var(--vvh); display: flex; flex-direction: column; overflow: hidden; }
 
 /* Keyboard open (app.js sets .kb): follow the visible window rather than the screen. */
-html.kb #app { bottom: auto; top: var(--vvtop); height: var(--vvh); }
+html.kb #app { top: var(--vvtop); height: var(--vvh); }
 html.kb #dock { padding-bottom: 8px; }
 html.kb #input { max-height: calc(var(--vvh) * .4); }
 html.kb #queueLine { max-height: calc(var(--vvh) * .25); }
@@ -635,7 +635,7 @@ html[data-theme="contrast"] .dl.del { background: color-mix(in srgb, var(--err) 
    padding stacked under that. 100lvh is the real screen height there; fixed elements
    anchored to the bottom drop by the same shortfall. */
 @media (display-mode: standalone) {
-  #app { bottom: auto; height: 100lvh; }
+  #app { height: 100lvh; }
   #sheet { bottom: calc(100dvh - 100lvh); }
   #toast { bottom: calc(env(safe-area-inset-bottom) + 90px + 100dvh - 100lvh); }
 }
