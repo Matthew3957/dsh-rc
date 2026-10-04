@@ -768,11 +768,28 @@ function closeSearch() {
 $('#searchBtn').onclick = openSearch;
 $('#searchClose').onclick = closeSearch;
 $('#q').addEventListener('keydown', (e) => { if (e.key === 'Escape') closeSearch(); });
+// Theme picker (public/theme.js applies and remembers the choice; style.css holds the colours).
+function themeItem() {
+  const t = window.dshTheme; if (!t) return null;
+  const cur = t.THEMES.find((x) => x.id === t.current());
+  return h('button', { class: 'menuitem', onclick: themeSheet }, 'Theme', h('small', {}, cur ? cur.label : 'Default'));
+}
+function themeSheet() {
+  const t = window.dshTheme; if (!t) return;
+  const now = t.current();
+  openSheet(h('h3', {}, 'Theme'),
+    ...t.THEMES.map((x) => h('button', {
+      class: 'menuitem' + (x.id === now ? ' cur' : ''), 'aria-pressed': String(x.id === now),
+      onclick: () => { if (!t.set(x.id)) toast('Applied for now: this browser refused to save it'); themeSheet(); },
+    }, x.label, h('small', {}, x.hint))),
+    h('div', { class: 'note' }, 'Each theme follows your device’s light or dark setting. Saved on this device.'));
+}
 function listMenuSheet() {
   const notifState = h('small', {}, 'Approvals, questions, finished turns');
   refreshPushState().then((st) => { notifState.textContent = pushStateLabel(st); }).catch(() => {});
   openSheet(h('h3', {}, 'Menu'),
     h('button', { class: 'menuitem', onclick: () => notificationsSheet() }, 'Notifications', notifState),
+    themeItem(),
     h('button', { class: 'menuitem', onclick: pluginsSheet }, 'Plugins & connectors', h('small', {}, 'What this dsh has loaded')),
     S.tunnelUrl ? h('button', { class: 'menuitem', onclick: () => { tunnelSheet().catch((e) => toast('Tunnel address unavailable: ' + e.message)); } }, 'Open on your phone', h('small', {}, 'Show the tunnel address as a QR code')) : null,
     location.pathname.replace(/\/+$/, '') ? h('a', { class: 'menuitem', href: '/', style: 'color:inherit;text-decoration:none' }, 'Open full dsh web UI') : null);
@@ -2720,6 +2737,7 @@ $('#menuBtn').onclick = () => {
     window.dshSchedulesUI && window.dshSchedulesUI.menuItem(), // per session, so in the chat menu
     h('button', { class: 'menuitem', onclick: commandsSheet }, 'Commands', h('small', {}, 'Slash commands available here')),
     notifRow,
+    themeItem(),
     h('button', { class: 'menuitem', onclick: renameSheet }, 'Rename'),
     h('button', { class: 'menuitem', onclick: forkSession }, 'Fork', h('small', {}, 'Branch a new session from the last finished turn')),
     h('button', { class: 'menuitem', onclick: exportSheet }, 'Export log', h('small', {}, 'Download this session as a ZIP')),

@@ -492,3 +492,109 @@ input, textarea, select { font: inherit; color: inherit; }
 .sched-zone { display: block; color: var(--muted); font-size: 12px; margin-top: 6px; }
 .sched-zone:empty { display: none; }
 #sheetBody textarea.sched-prompt { font-family: var(--sans); font-size: 16px; line-height: 1.35; }
+
+/* Themes: token overrides picked by public/theme.js (html[data-theme]) and saved per device.
+   Each follows the device's light or dark setting and sets every token, so that
+   test/theme-contrast.test.mjs can check the pairs that carry text. The default look is the
+   :root blocks above. */
+
+/* Colourblind-safe: blue for good, orange for caution, crimson for bad. No red against green;
+   shape cues for the places colour alone carried meaning are further down. */
+html[data-theme="colourblind"] {
+  --bg: #f7f7f5; --bg2: #ecece8; --card: #ffffff; --fg: #1a1c1e; --muted: #5a5f66; --line: #d4d4ce;
+  --accent: #0a679b; --accent-fg: #ffffff; --user: #e0eaf1;
+  --ok: #005a8e; --err: #a31a42; --warn: #a64100; --code: #ecece8;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  html[data-theme="colourblind"] {
+    --bg: #121417; --bg2: #1a1d21; --card: #21252a; --fg: #e8eaed; --muted: #9aa1a9; --line: #2f353b;
+    --accent: #56b4e9; --accent-fg: #07202e; --user: #1f2d38;
+    --ok: #56b4e9; --err: #ff7aa8; --warn: #ff9a52; --code: #1a1d21;
+    color-scheme: dark;
+  }
+}
+
+/* High contrast: black on white (white on black), borders you can see, the colourblind hues darkened. */
+html[data-theme="contrast"] {
+  --bg: #ffffff; --bg2: #f0f0f0; --card: #ffffff; --fg: #000000; --muted: #404040; --line: #595959;
+  --accent: #0033cc; --accent-fg: #ffffff; --user: #e4ecff;
+  --ok: #004f80; --err: #a0123f; --warn: #8a3a00; --code: #f0f0f0;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  html[data-theme="contrast"] {
+    --bg: #000000; --bg2: #121212; --card: #0a0a0a; --fg: #ffffff; --muted: #c8c8c8; --line: #8c8c8c;
+    --accent: #7fd0ff; --accent-fg: #000000; --user: #14253a;
+    --ok: #7fd0ff; --err: #ff8fb0; --warn: #ffb070; --code: #121212;
+    color-scheme: dark;
+  }
+}
+
+/* Autumn */
+html[data-theme="autumn"] {
+  --bg: #f8f3ec; --bg2: #efe6da; --card: #fffcf7; --fg: #2a2018; --muted: #6b5d50; --line: #e0d4c4;
+  --accent: #a8481c; --accent-fg: #ffffff; --user: #f0e0cd;
+  --ok: #386018; --err: #9c2822; --warn: #85530a; --code: #efe6da;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  html[data-theme="autumn"] {
+    --bg: #181311; --bg2: #201915; --card: #281f1a; --fg: #ece3d8; --muted: #a59585; --line: #3a2e26;
+    --accent: #e8905a; --accent-fg: #2a1206; --user: #3a2a1f;
+    --ok: #9cc46a; --err: #f08272; --warn: #e5b05a; --code: #201915;
+    color-scheme: dark;
+  }
+}
+
+/* Winter */
+html[data-theme="winter"] {
+  --bg: #f3f6f9; --bg2: #e6ecf2; --card: #ffffff; --fg: #17202a; --muted: #596775; --line: #d3dce5;
+  --accent: #2a65a8; --accent-fg: #ffffff; --user: #dde8f3;
+  --ok: #226050; --err: #a02e3b; --warn: #84570c; --code: #e6ecf2;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  html[data-theme="winter"] {
+    --bg: #0f151b; --bg2: #151d25; --card: #1b242d; --fg: #e4ebf2; --muted: #8fa0b0; --line: #2a3744;
+    --accent: #7db4ee; --accent-fg: #07182b; --user: #1d2d3f;
+    --ok: #6cc4a8; --err: #f0838f; --warn: #dcb065; --code: #151d25;
+    color-scheme: dark;
+  }
+}
+
+/* Spring */
+html[data-theme="spring"] {
+  --bg: #f4f7f1; --bg2: #e8eee2; --card: #fdfefb; --fg: #1d261b; --muted: #5d6b58; --line: #d6dfcf;
+  --accent: #34694a; --accent-fg: #ffffff; --user: #e0ecd9;
+  --ok: #225f34; --err: #a02f4a; --warn: #84570a; --code: #e8eee2;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  html[data-theme="spring"] {
+    --bg: #121612; --bg2: #181e17; --card: #1e251d; --fg: #e6ece2; --muted: #93a28d; --line: #2c372a;
+    --accent: #8cc98e; --accent-fg: #0b1a0c; --user: #223020;
+    --ok: #8cd39a; --err: #f08aa4; --warn: #dcb55f; --code: #181e17;
+    color-scheme: dark;
+  }
+}
+
+/* Shape cues. Where status was only a colour (a tool's dot, the connection dot, a job's dot),
+   these two themes also change the shape: a tick or cross for tools, a ring for offline, a
+   diamond for failed, a triangle for caution. Seasonal themes keep the default shapes. */
+html[data-theme="colourblind"] .tool.ok .bullet,
+html[data-theme="colourblind"] .tool.err .bullet,
+html[data-theme="contrast"] .tool.ok .bullet,
+html[data-theme="contrast"] .tool.err .bullet { font-size: 0; }
+html[data-theme="colourblind"] .tool.ok .bullet::before,
+html[data-theme="contrast"] .tool.ok .bullet::before { content: "✓"; font-size: 12px; }
+html[data-theme="colourblind"] .tool.err .bullet::before,
+html[data-theme="contrast"] .tool.err .bullet::before { content: "✕"; font-size: 12px; }
+html[data-theme="colourblind"] .dot:not(.on),
+html[data-theme="contrast"] .dot:not(.on) { background: transparent; border: 2px solid var(--err); }
+html[data-theme="colourblind"] .pdot.failed, html[data-theme="colourblind"] .jdot.failed, html[data-theme="colourblind"] .jdot.killed,
+html[data-theme="contrast"] .pdot.failed, html[data-theme="contrast"] .jdot.failed, html[data-theme="contrast"] .jdot.killed { border-radius: 1px; transform: rotate(45deg) scale(.85); }
+html[data-theme="colourblind"] .pdot.late, html[data-theme="colourblind"] .jdot.stopping,
+html[data-theme="contrast"] .pdot.late, html[data-theme="contrast"] .jdot.stopping { border-radius: 0; clip-path: polygon(50% 0, 100% 100%, 0 100%); }
+html[data-theme="contrast"] .dl.add { background: color-mix(in srgb, var(--ok) 26%, transparent); }
+html[data-theme="contrast"] .dl.del { background: color-mix(in srgb, var(--err) 26%, transparent); }
