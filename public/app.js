@@ -3184,8 +3184,7 @@ async function tunnelSheet() {
 
 // ---------- Viewport (iOS keyboard) ----------
 // #app is as tall as the visible window (--vvh), so a Safari tab keeps the composer
-// above the toolbar. A home-screen app is sized to the whole screen in CSS instead (iOS
-// reports its viewport one status bar short). With the keyboard open, iOS pans a shorter
+// above the toolbar. With the keyboard open, iOS pans a shorter
 // visual viewport over the page to reach the focused field, so #app follows that window
 // (top and height) in both modes.
 const isField = (el) => !!el && (el.tagName === 'TEXTAREA' || el.isContentEditable
@@ -3193,6 +3192,8 @@ const isField = (el) => !!el && (el.tagName === 'TEXTAREA' || el.isContentEditab
 function fitViewport() {
   const vv = window.visualViewport, root = document.documentElement;
   if (!root || !root.classList) return;
+  const standalone = navigator.standalone === true || (window.matchMedia && matchMedia('(display-mode: standalone)').matches);
+  root.classList.toggle('ios-short', standalone && window.screen && screen.height - window.innerHeight >= 40 && screen.height - window.innerHeight <= 80);
   const full = root.clientHeight;
   // Keyboard state comes from the viewport, not focus, so the layout holds until the
   // keyboard has actually gone. A pinch zoom also shrinks the visual viewport; skip it.
