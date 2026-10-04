@@ -3198,8 +3198,14 @@ function fitViewport() {
   // keyboard has actually gone. A pinch zoom also shrinks the visual viewport; skip it.
   const kb = !!vv && Math.abs((vv.scale || 1) - 1) < 0.01 && vv.height < full * 0.85;
   root.classList.toggle('kb', kb);
-  root.classList.toggle('kb-card', kb && isField(document.activeElement) && !!document.activeElement.closest('#pending'));
-  if (vv && Math.abs((vv.scale || 1) - 1) < 0.01) root.style.setProperty('--vvh', vv.height + 'px');
+  // Typing into a card hides the feed (display: none drops its scroll position), so keep it.
+  const card = kb && isField(document.activeElement) && !!document.activeElement.closest('#pending');
+  const feed = document.getElementById('feed');
+  if (feed && card && !root.classList.contains('kb-card')) fitViewport.feedTop = feed.scrollTop;
+  root.classList.toggle('kb-card', card);
+  if (feed && !card && fitViewport.feedTop != null) { feed.scrollTop = fitViewport.feedTop; fitViewport.feedTop = null; }
+  if (!vv) root.style.setProperty('--vvh', window.innerHeight + 'px');
+  else if (Math.abs((vv.scale || 1) - 1) < 0.01) root.style.setProperty('--vvh', vv.height + 'px');
   if (kb) {
     root.style.setProperty('--vvtop', vv.offsetTop + 'px');
     root.style.setProperty('--vvbot', Math.max(0, full - vv.offsetTop - vv.height) + 'px');
