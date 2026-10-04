@@ -46,6 +46,7 @@ input, textarea, select { font: inherit; color: inherit; }
 [hidden] { display: none !important; }
 
 #app { position: fixed; inset: 0; display: flex; flex-direction: column; overflow: hidden; }
+
 /* Keyboard open (app.js sets .kb): follow the visible window rather than the screen. */
 html.kb #app { bottom: auto; top: var(--vvtop); height: var(--vvh); }
 html.kb #dock { padding-bottom: 8px; }
@@ -628,3 +629,13 @@ html[data-theme="contrast"] .dl.del { background: color-mix(in srgb, var(--err) 
 .tool .todo.in_progress .tg { color: var(--accent); }
 .tool .todo.completed .tg { color: var(--ok); }
 .tool .todo.completed .tt { color: var(--muted); text-decoration: line-through; }
+
+/* iOS home-screen apps report a layout viewport one status bar short of the screen
+   (seen: 793 of 852pt), so `inset: 0` ended 59pt above the bottom and the safe-area
+   padding stacked under that. 100lvh is the real screen height there; fixed elements
+   anchored to the bottom drop by the same shortfall. */
+@media (display-mode: standalone) {
+  #app { bottom: auto; height: 100lvh; }
+  #sheet { bottom: calc(100dvh - 100lvh); }
+  #toast { bottom: calc(env(safe-area-inset-bottom) + 90px + 100dvh - 100lvh); }
+}
