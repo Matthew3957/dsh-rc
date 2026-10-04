@@ -3193,7 +3193,16 @@ function fitViewport() {
   const vv = window.visualViewport, root = document.documentElement;
   if (!root || !root.classList) return;
   const standalone = navigator.standalone === true || (window.matchMedia && matchMedia('(display-mode: standalone)').matches);
-  root.classList.toggle('ios-short', standalone && window.screen && screen.height - window.innerHeight >= 40 && screen.height - window.innerHeight <= 80);
+  // Only a page drawn under the status bar (top inset > 0) has the iOS 26 shortfall;
+  // with an opaque status bar the page starts below it and reaches the home indicator.
+  if (!fitViewport.probe && document.body) {
+    fitViewport.probe = document.createElement('div');
+    fitViewport.probe.style.cssText = 'position:fixed;top:0;left:0;width:0;height:env(safe-area-inset-top);visibility:hidden;pointer-events:none;';
+    document.body.append(fitViewport.probe);
+  }
+  const underBar = !!fitViewport.probe && fitViewport.probe.offsetHeight > 0;
+  const short = window.screen ? screen.height - window.innerHeight : 0;
+  root.classList.toggle('ios-short', standalone && underBar && short >= 40 && short <= 80);
   const full = root.clientHeight;
   // Keyboard state comes from the viewport, not focus, so the layout holds until the
   // keyboard has actually gone. A pinch zoom also shrinks the visual viewport; skip it.
