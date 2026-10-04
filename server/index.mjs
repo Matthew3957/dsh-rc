@@ -13,6 +13,7 @@
 //   POST /push/subscribe  PushSubscription JSON
 //   POST /push/unsubscribe { endpoint }
 //   POST /push/test       send a test notification to every subscription
+//   GET  /plugin-changes  {toggle}: whether this client may switch connectors (plugin-changes.mjs)
 //
 // It also watches dsh's event feeds (server/watcher.mjs) and pushes notifications for approvals,
 // questions, finished turns and errors. It never changes anything in dsh on its own.
@@ -44,6 +45,7 @@ import { defaultStateDir, ensureStateDir, writeSecret } from './state.mjs';
 import { DEFAULT_UPSTREAM_HOST, apiMethodOf, checkRequest, createProxy, hostnameOf, isLoopbackHostname, isPrivilegedMethod } from './proxy.mjs';
 import { MIN_PASSPHRASE_LENGTH, createAuth, loadPassphraseRecord, passphraseProblem, savePassphrase } from './auth.mjs';
 import { startTunnel } from './tunnel.mjs';
+import { LIST_METHOD, PLUGIN_CHANGE_METHODS, parseToggle, pluginChangeRefusal, toggleBody, toggleRefusal } from './plugin-changes.mjs';
 import { encode as encodeQr, toTerminalLines } from './qr.mjs';
 
 export { defaultStateDir } from './state.mjs';
@@ -475,6 +477,40 @@ export async function startServer(options = {}) {
     return sendJson(res, 404, { error: 'not found' });
   }
 
+  // A refusal the page can tell from dsh's own 403 (which means "trust this Host"), with the
+  // reason it shows in a toast.
+  function refusePluginChange(res, status, reason) {
+    return sendText(res, status, `Refused: ${reason}`, { 'X-Dsh-Rc-Refused': reason, 'Cache-Control': 'no-store' });
+  }
+
+  async function handlePluginChange(req, res, method) {
+    const refusal = pluginChangeRefusal(req, { authEnabled: auth.enabled });
+    if (refusal) return refusePluginChange(res, 403, refusal);
+    if (req.method !== 'POST') return refusePluginChange(res, 405, 'POST only');
+    if (method === LIST_METHOD) return proxy.proxyHttp(req, res);
+    let raw;
+    try {
+      raw = await readBody(req);
+    } catch (err) {
+      if (err.code === 'too-large') return refusePluginChange(res, 413, 'request body too large');
+      throw err;
+    }
+    const toggle = parseToggle(raw);
+    if (toggle.error) return refusePluginChange(res, 400, toggle.error);
+    let listed;
+    try {
+      listed = await proxy.callUpstream(LIST_METHOD);
+    } catch (err) {
+      logger.error(`[dsh-rc] could not read the plugin list before a switch: ${err.message}`);
+      return refusePluginChange(res, 502, 'could not read the plugin list from dsh');
+    }
+    if (!listed.ok) return refusePluginChange(res, 502, 'dsh would not list its plugins');
+    const problem = toggleRefusal(listed.value, toggle.id);
+    if (problem) return refusePluginChange(res, 403, problem);
+    logger.log(`[dsh-rc] switching ${toggle.id} ${toggle.enabled ? 'on' : 'off'} for a client`);
+    return proxy.proxyHttp(req, res, { body: toggleBody(toggle) });
+  }
+
   function requestHandler(req, res) {
     (async () => {
       const pathname = requestPath(req.url);
@@ -482,6 +518,7 @@ export async function startServer(options = {}) {
       const isApi = pathname === '/api' || pathname.startsWith('/api/');
       const isPush = pathname === '/push' || pathname.startsWith('/push/');
       const isTunnel = pathname === '/tunnel';
+      const isPluginChanges = pathname === '/plugin-changes';
 
       // Cross-site writes are refused everywhere, before auth is looked at.
       if (req.method !== 'GET' && req.method !== 'HEAD') {
@@ -493,7 +530,7 @@ export async function startServer(options = {}) {
       if (pathname === '/logout') return auth.handleLogout(req, res);
 
       if (!auth.isAuthed(req) && !auth.isPublic(req, pathname)) {
-        if (isApi || isPush || isTunnel) {
+        if (isApi || isPush || isTunnel || isPluginChanges) {
           // The header lets the page tell this login 401 from a 401 dsh itself sends (dsh 0.2 wants its own cookie).
           const buf = Buffer.from(JSON.stringify({ error: 'authentication required' }), 'utf8');
           res.writeHead(401, { 'Content-Type': 'application/json; charset=utf-8', 'Content-Length': buf.length, 'Cache-Control': 'no-store', 'X-Dsh-Rc-Login': '1' });
@@ -511,10 +548,16 @@ export async function startServer(options = {}) {
         if (problem) return sendText(res, 403, `Forbidden: ${problem}`);
         const method = apiMethodOf(pathname);
         if (method === null) return sendText(res, 400, 'Bad request');
+        if (PLUGIN_CHANGE_METHODS.has(method)) return handlePluginChange(req, res, method);
         if (isPrivilegedMethod(method)) return sendText(res, 403, 'Forbidden: dsh-rc does not proxy settings or credentials methods');
         return proxy.proxyHttp(req, res);
       }
       if (isPush) return handlePush(req, res, pathname);
+      if (isPluginChanges) {
+        if (req.method !== 'GET' && req.method !== 'HEAD') return sendJson(res, 405, { error: 'method not allowed' });
+        const refusal = checkRequest(req, fence) || pluginChangeRefusal(req, { authEnabled: auth.enabled });
+        return sendJson(res, 200, refusal ? { toggle: false, reason: refusal } : { toggle: true });
+      }
       if (isTunnel) {
         if (req.method !== 'GET' && req.method !== 'HEAD') return sendJson(res, 405, { error: 'method not allowed' });
         return sendJson(res, 200, { url: tunnel ? `${tunnel.url}/` : null });

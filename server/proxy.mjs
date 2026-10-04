@@ -51,7 +51,8 @@ const PRIVILEGED_METHOD = new RegExp(
     '^(settings|credentials)[./]',
     '^host[./](pickDirectory|openPath)$',
     '^agentPreset[./](read|copy|openDocument|remove)$',
-    // dsh 0.2: `<namespace>/<method>`. Nothing the page calls is in this list.
+    // dsh 0.2: `<namespace>/<method>`. The page calls two `pluginManager` methods, which the
+    // server lets through only after its own checks (plugin-changes.mjs); the rest stay refused.
     '^(pluginManager|dynamicCordisRunner|terminal|account|llm|speech)/',
     '^directoryPicker/(pick|createDirectory)$',
     '^agentPresets/read$',
@@ -213,15 +214,57 @@ export function createProxy({ dshUrl, upstreamHost = DEFAULT_UPSTREAM_HOST, logg
     );
   }
 
-  /** Proxy a plain HTTP request (`/api/<method>`, `/api/respond`, ...). */
-  function proxyHttp(req, res) {
-    Promise.resolve(dshAuth ? dshAuth.cookieFor(presentedHost) : null)
-      .catch(() => null)
-      .then((dshCookie) => relayHttp(req, res, dshCookie));
+  const cookie = () => Promise.resolve(dshAuth ? dshAuth.cookieFor(presentedHost) : null).catch(() => null);
+
+  /**
+   * Proxy a plain HTTP request (`/api/<method>`, `/api/respond`, ...). With `body`, that string
+   * goes upstream in place of the request's own body, which the caller has already read.
+   */
+  function proxyHttp(req, res, { body } = {}) {
+    cookie().then((dshCookie) => relayHttp(req, res, dshCookie, body));
   }
 
-  function relayHttp(req, res, dshCookie) {
-    const upstreamReq = mod.request(upstreamOptions(req, { dshCookie }), (upstreamRes) => {
+  /**
+   * Call one dsh 0.2 method on this process's own behalf (with the presented Host and dsh's
+   * cookie) and resolve with its `result`: `{ok, value}` or `{ok: false, error}`.
+   */
+  async function callUpstream(method, args = {}, { limit = 4 * 1024 * 1024 } = {}) {
+    const dshCookie = await cookie();
+    const body = JSON.stringify({ type: 'client-request', rpcId: `dsh-rc-${Date.now()}`, method, payload: { args } });
+    const opts = upstreamOptions({ method: 'POST', url: `/api/${method}`, headers: { 'content-type': 'application/json' } }, { dshCookie });
+    opts.headers['content-length'] = Buffer.byteLength(body);
+    return new Promise((resolve, reject) => {
+      const upstreamReq = mod.request(opts, (upstreamRes) => {
+        if (upstreamRes.statusCode === 401 && dshAuth) dshAuth.invalidate(presentedHost);
+        const chunks = [];
+        let size = 0;
+        upstreamRes.on('data', (c) => {
+          size += c.length;
+          if (size > limit) upstreamReq.destroy(new Error(`${method}: response too large`));
+          else chunks.push(c);
+        });
+        upstreamRes.on('end', () => {
+          if (upstreamRes.statusCode !== 200) return reject(new Error(`${method}: HTTP ${upstreamRes.statusCode}`));
+          try {
+            const j = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+            if (!j || !j.result || typeof j.result !== 'object') throw new Error('no result');
+            resolve(j.result);
+          } catch (err) {
+            reject(new Error(`${method}: unreadable response (${err.message})`));
+          }
+        });
+        upstreamRes.on('error', reject);
+      });
+      upstreamReq.setTimeout(15000, () => upstreamReq.destroy(new Error(`${method}: timed out`)));
+      upstreamReq.on('error', reject);
+      upstreamReq.end(body);
+    });
+  }
+
+  function relayHttp(req, res, dshCookie, body) {
+    const options = upstreamOptions(req, { dshCookie });
+    if (body !== undefined) options.headers['content-length'] = Buffer.byteLength(body);
+    const upstreamReq = mod.request(options, (upstreamRes) => {
       note403(upstreamRes.statusCode);
       if (upstreamRes.statusCode === 401 && dshAuth) dshAuth.invalidate(presentedHost);
       const out = filterHeaders(upstreamRes.headers);
@@ -243,18 +286,17 @@ export function createProxy({ dshUrl, upstreamHost = DEFAULT_UPSTREAM_HOST, logg
     // A client that hangs up mid-request should not leave the upstream socket open.
     res.on('close', () => upstreamReq.destroy());
     req.on('error', () => upstreamReq.destroy());
-    req.pipe(upstreamReq);
+    if (body !== undefined) upstreamReq.end(body);
+    else req.pipe(upstreamReq);
   }
 
   /** Proxy a WebSocket upgrade (`/api/events.mux`, `/api/events.host`, `/api/remote.mux`). */
   function proxyUpgrade(req, socket, head) {
     let gone = false;
     socket.once('close', () => { gone = true; });
-    Promise.resolve(dshAuth ? dshAuth.cookieFor(presentedHost) : null)
-      .catch(() => null)
-      .then((dshCookie) => {
-        if (!gone) relayUpgrade(req, socket, head, dshCookie);
-      });
+    cookie().then((dshCookie) => {
+      if (!gone) relayUpgrade(req, socket, head, dshCookie);
+    });
   }
 
   function relayUpgrade(req, socket, head, dshCookie) {
@@ -296,5 +338,5 @@ export function createProxy({ dshUrl, upstreamHost = DEFAULT_UPSTREAM_HOST, logg
     upstreamReq.end();
   }
 
-  return { proxyHttp, proxyUpgrade, upstream, presentedHost };
+  return { proxyHttp, proxyUpgrade, callUpstream, upstream, presentedHost };
 }

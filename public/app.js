@@ -108,6 +108,9 @@ async function post(method, payload = {}, rpcId = rid()) {
   });
   if (checkLogin(r)) throw Object.assign(new Error('login required'), { code: 'login' });
   if (!r.ok) {
+    // dsh-rc's own refusal (a plugin switch it will not pass on) says why; it is no trust problem.
+    const refused = r.headers.get('x-dsh-rc-refused');
+    if (refused) throw Object.assign(new Error(refused), { code: 'refused' });
     if (r.status === 403) showApi403(r.headers.get('x-dsh-rc-trusted-host'));
     throw Object.assign(new Error(`${method}: HTTP ${r.status}`), { code: 'http-' + r.status });
   }
@@ -2728,15 +2731,55 @@ $('#menuBtn').onclick = () => {
     h('button', { class: 'menuitem', onclick: () => { closeSheet(); loadHistory(); } }, 'Refresh'),
     location.pathname.replace(/\/+$/, '') ? h('a', { class: 'menuitem', href: '/', style: 'color:inherit;text-decoration:none' }, 'Open full dsh web UI') : null);
 };
-// ---------- Plugins (read-only) ----------
+// ---------- Plugins ----------
 // Both APIs answer `pluginInventory/list` (the pluginInventory Typert namespace). The 0.2
 // snapshot also carries display metadata and agent-preset compositions; dsh02.js resolves
-// those into the rows below, and a 0.1 snapshot simply has neither. dsh-plugin-manager does
-// offer per-entry enable/disable (`pluginManager/setPluginEnabled`), but dsh-rc's proxy
-// refuses the whole `pluginManager` namespace, so the phone cannot change the profile and
-// this screen stays read-only.
-async function pluginsSheet() {
-  openSheet(h('h3', {}, 'Plugins & connectors'), h('div', { class: 'note' }, 'Loading…'));
+// those into the rows below, and a 0.1 snapshot simply has neither. On dsh 0.2, an MCP
+// connector or subagent provider already in the profile gets an on/off switch
+// (`pluginManager/setPluginEnabled`) when dsh-rc lets this client change plugins
+// (`./plugin-changes`: its login is on, or the Host is loopback or Tailscale) and
+// `pluginManager/listPlugins` shows dsh will change that row. The proxy checks every switch
+// again (server/plugin-changes.mjs) and refuses the rest of `pluginManager`. Adding a connector
+// stays on the laptop: dsh 0.2 has no remote method that adds one. The older API has no
+// plugin manager, so its sheet stays read-only.
+async function pluginSwitches(snap) {
+  if (!dsh2 || !dsh2.listPlugins || !snap.managementAvailable || !window.dsh02.switchableEntries) return null;
+  try {
+    const r = await fetch('./plugin-changes');
+    const cap = r.ok ? await r.json() : null;
+    if (!cap || !cap.toggle) return null;
+    return window.dsh02.switchableEntries(await dsh2.listPlugins());
+  } catch { return null; }
+}
+// Tap twice, like stopping a job: the first tap arms and says what will happen, the second switches.
+function pluginSwitch(e, label) {
+  const on = e.enabled;
+  const idle = on ? 'on' : 'off';
+  const btn = h('button', { type: 'button', class: 'pswitch' + (on ? ' on' : ''), 'aria-label': `Turn ${label} ${on ? 'off' : 'on'}` }, idle);
+  let armed = false;
+  let timer = null;
+  const reset = () => { armed = false; clearTimeout(timer); btn.textContent = idle; btn.classList.remove('armed'); };
+  btn.onclick = async () => {
+    if (!armed) {
+      armed = true; btn.textContent = on ? 'turn off?' : 'turn on?'; btn.classList.add('armed');
+      timer = setTimeout(reset, 3000);
+      return;
+    }
+    reset();
+    btn.disabled = true; btn.textContent = '…';
+    try {
+      const d = window.dsh02.describeToggle(await dsh2.setPluginEnabled(e.entryId, !on), label, !on);
+      toast(d.text, d.ok ? 2600 : 5000);
+    } catch (err) {
+      toast(`Could not switch ${label}: ${(err && err.message) || 'unknown error'}`, 5000);
+    }
+    // Redraw from dsh's own state, unless the sheet was closed or replaced meanwhile.
+    if (btn.isConnected && !$('#sheet').hidden) pluginsSheet({ quiet: true });
+  };
+  return btn;
+}
+async function pluginsSheet({ quiet = false } = {}) {
+  if (!quiet) openSheet(h('h3', {}, 'Plugins & connectors'), h('div', { class: 'note' }, 'Loading…'));
   let snap;
   try {
     const v = await remote('pluginInventory/list', {});
@@ -2744,6 +2787,8 @@ async function pluginsSheet() {
       ? window.dsh02.fromPluginInventory(v, { locale: navigator.language })
       : { entries: (v && (v.entries || v.items)) || (Array.isArray(v) ? v : []), presets: [], managementAvailable: false };
   } catch (e) { openSheet(h('h3', {}, 'Plugins & connectors'), h('div', { class: 'note err' }, 'Could not read the plugin list: ' + e.message)); return; }
+  const switches = await pluginSwitches(snap);
+  const scrolled = $('#sheet').scrollTop;
   const entries = snap.entries;
   const phase = (e) => e.fiberPhase ?? e.phase ?? null;
   const shortId = (e) => String(e.entryId || '').split(':').pop();
@@ -2751,16 +2796,19 @@ async function pluginsSheet() {
   // package published one that says more than the module specifier.
   const name = (e) => (e.title && e.title !== e.moduleName ? e.title : shortId(e));
   const state = (e) => !e.enabled ? 'off' : (phase(e) === 'failed' ? 'failed' : (phase(e) && phase(e) !== 'active' ? phase(e) : 'on'));
-  const row = (e, label) => {
+  const row = (e, label, canSwitch) => {
     const st = state(e);
+    const shown = label || name(e);
     return h('div', { class: 'plug' },
       h('span', { class: 'pdot ' + st }),
-      h('div', { class: 'pmain' }, h('b', {}, label || name(e)),
+      h('div', { class: 'pmain' }, h('b', {}, shown),
         e.description ? h('small', { class: 'pdesc' }, e.description) : (e.moduleName ? h('small', {}, e.moduleName) : null)),
-      h('span', { class: 'pstate ' + st }, st));
+      canSwitch && (st === 'on' || st === 'off') ? null : h('span', { class: 'pstate ' + st }, st),
+      canSwitch ? pluginSwitch(e, shown) : null);
   };
-  const mcp = entries.filter((e) => /dsh-mcp-client/.test(e.moduleName || ''));
-  const subs = entries.filter((e) => /dsh-subagent-(claude-code|codex|acp|dsh-sdk)/.test(e.moduleName || '') && !/tool-/.test(e.entryId));
+  const kind = window.dsh02 && window.dsh02.pluginKind;
+  const mcp = entries.filter((e) => (kind ? kind(e) === 'connector' : /dsh-mcp-client/.test(e.moduleName || '')));
+  const subs = entries.filter((e) => (kind ? kind(e) === 'subagent' : /dsh-subagent-(claude-code|codex|acp|dsh-sdk)/.test(e.moduleName || '') && !/tool-/.test(e.entryId)));
   const bad = entries.filter((e) => e.enabled && phase(e) === 'failed');
   const all = entries.filter((e) => e.moduleName && !/^cordis:/.test(e.moduleName));
   const list = h('div', { class: 'plist' });
@@ -2771,7 +2819,9 @@ async function pluginsSheet() {
     list.replaceChildren(...hits.slice(0, 200).map((e) => row(e)));
   };
   search.oninput = renderAll;
-  const section = (title, items, label) => items.length ? [h('div', { class: 'grp' }, title), ...items.map((e) => row(e, label && label(e)))] : [];
+  const section = (title, items, label, canSwitch = false) => items.length
+    ? [h('div', { class: 'grp' }, title), ...items.map((e) => row(e, label && label(e), canSwitch && !!switches && switches.get(e.entryId) === true))]
+    : [];
   // A preset's composition is the 0.2 snapshot's other half: a broken or failing one cannot
   // mount a session, so it sorts before the healthy presets and the default one.
   const badness = (p) => (p.broken ? 2 : p.failed ? 1 : 0);
@@ -2788,13 +2838,16 @@ async function pluginsSheet() {
     h('h3', {}, 'Plugins & connectors'),
     bad.length ? h('div', { class: 'note err' }, `${bad.length} plugin${bad.length > 1 ? 's' : ''} failed to load.`) : null,
     ...section('Failed', bad),
-    ...section('Connectors (MCP)', mcp, (e) => shortId(e).replace(/^mcp-/, '')),
-    ...section('Subagent providers', subs, (e) => shortId(e).replace(/^subagent-/, '')),
+    ...section('Connectors (MCP)', mcp, (e) => shortId(e).replace(/^mcp-/, ''), true),
+    ...section('Subagent providers', subs, (e) => shortId(e).replace(/^subagent-/, ''), true),
     ...(presets.length ? [h('div', { class: 'grp' }, 'Presets'), ...presets.map(presetRow)] : []),
     h('div', { class: 'grp' }, 'All plugins'), search, list,
-    h('div', { class: 'note' }, snap.managementAvailable
-      ? 'Read-only. This profile supports plugin changes; dsh-rc leaves them to the laptop.'
-      : 'Read-only. Plugins and connectors are added on the laptop in the dsh profile, then dsh restarts.'));
+    h('div', { class: 'note' }, switches
+      ? 'Tap a switch twice to turn a connector or subagent provider on or off. New connectors and every other plugin change stay on the laptop.'
+      : snap.managementAvailable && dsh2
+        ? 'Read-only here. dsh-rc lets you switch connectors when its login is on, or over loopback or Tailscale.'
+        : 'Read-only. Plugins and connectors are added on the laptop in the dsh profile, then dsh restarts.'));
+  if (quiet) $('#sheet').scrollTop = scrolled;
   renderAll();
 }
 

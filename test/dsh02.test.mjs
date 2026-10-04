@@ -542,6 +542,14 @@ test('killJob posts job/kill for a session that can see the job', async () => {
   assert.deepEqual(calls.at(-1), { endpoint: 'job/kill', payload: { args: { request: { sessionId: 's1', jobId: 'bash-1' } } }, rpcId: undefined });
 });
 
+test('listPlugins and setPluginEnabled post the dsh-plugin-manager endpoints with their declared args', async () => {
+  const { client, calls } = harness();
+  await client.listPlugins();
+  assert.deepEqual(calls.at(-1), { endpoint: 'pluginManager/listPlugins', payload: { args: {} }, rpcId: undefined });
+  await client.setPluginEnabled('include:mcp-docs', false);
+  assert.deepEqual(calls.at(-1), { endpoint: 'pluginManager/setPluginEnabled', payload: { args: { id: 'include:mcp-docs', enabled: false } }, rpcId: undefined });
+});
+
 test('observeJob follows one job on demand, cancels on collapse, and reopens after a reconnect', () => {
   const { client, frames } = harness();
   client.connect();
