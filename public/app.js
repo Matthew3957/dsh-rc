@@ -261,6 +261,28 @@ function linkTargets() {
     DOMPurify.addHook('afterSanitizeAttributes', (n) => { if (n.tagName === 'A') { n.setAttribute('target', '_blank'); n.setAttribute('rel', 'noopener'); } });
   }
 }
+// A tap on a link rendered from a message: links.js says where it points. Only
+// the app page or another origin is followed. A same-origin path the model
+// wrote (research/notes.md) would replace the standalone window with a URL the
+// server has no page for, so show it and copy it instead.
+function showDeadLink(a) {
+  const href = String((a.getAttribute && a.getAttribute('href')) || a.href || '').trim();
+  toast('Not a page here: ' + href, 4200);
+  try {
+    if (href && navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(href).catch(() => {});
+  } catch {}
+}
+function linkClicks() {
+  document.addEventListener('click', (e) => {
+    const a = e.target && e.target.closest ? e.target.closest('a[href]') : null;
+    if (!a || !a.closest('.md')) return; // only links inside rendered markdown
+    const links = window.dshLinks;
+    const verdict = links ? links.classifyLink(a.getAttribute('href'), location.href) : { action: 'external' };
+    if (verdict.action !== 'path') return;
+    e.preventDefault();
+    showDeadLink(a);
+  });
+}
 function rootOf(id) { let x = id, n = 0; while (S.parent.has(x) && n++ < 10) x = S.parent.get(x); return x; }
 function belongsToCur(id) { return S.cur && (id === S.cur.id || rootOf(id) === S.cur.id); }
 function prettyTool(name) {
@@ -2991,6 +3013,7 @@ fitViewport();
 (async function boot() {
   linkTargets();
   window.addEventListener('load', linkTargets);
+  linkClicks();
   if ('serviceWorker' in navigator) {
     navigator.serviceWorker.register('./sw.js', { scope: './' }).catch(() => {});
     navigator.serviceWorker.addEventListener('message', (e) => {
