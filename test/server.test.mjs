@@ -5,7 +5,7 @@ import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 
-import { startServer, validateSubscription, resolveStatic, MAX_SUBSCRIPTIONS } from '../server/index.mjs';
+import { startServer, validateSubscription, resolveStatic, appBasePath, MAX_SUBSCRIPTIONS } from '../server/index.mjs';
 
 const quiet = { log() {}, error() {} };
 
@@ -114,6 +114,51 @@ test('does not list directories', async (t) => {
     assert.equal(res.status, 404, route);
     assert.ok(!/index of/i.test(await res.text()), route);
   }
+});
+
+test('appBasePath finds the app root from the path or a same-origin Referer', () => {
+  assert.equal(appBasePath('/research/notes.md'), '/');
+  assert.equal(appBasePath('/m/research/notes.md'), '/m/');
+  assert.equal(appBasePath('/m'), '/m/');
+  // A proxy that strips /m forwards /research/notes.md; the Referer still names the mount.
+  assert.equal(appBasePath('/research/notes.md', 'http://d.example/m/'), '/m/');
+  assert.equal(appBasePath('/research/notes.md', 'http://d.example/m/index.html'), '/m/');
+  assert.equal(appBasePath('/research/notes.md', 'http://d.example/'), '/');
+  // A Referer from another host must not steer the back link.
+  assert.equal(appBasePath('/research/notes.md', 'http://evil.example/', 'd.example'), '/');
+});
+
+test('a browser navigation to a missing page gets a styled 404 with a way back', async (t) => {
+  const { base } = await tempServer(t);
+  const accept = { Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8' };
+
+  const root = await fetch(base + '/research/notes.md', { headers: accept });
+  assert.equal(root.status, 404);
+  assert.match(root.headers.get('content-type'), /text\/html/);
+  const rootHtml = await root.text();
+  assert.match(rootHtml, /Back to dsh-rc/);
+  assert.match(rootHtml, /href="\/"/);
+  assert.match(rootHtml, /research\/notes\.md/);
+  assert.match(rootHtml, /color-scheme: light dark/);
+
+  const mounted = await fetch(base + '/m/research/notes.md', { headers: accept });
+  assert.equal(mounted.status, 404);
+  const mountedHtml = await mounted.text();
+  assert.match(mountedHtml, /href="\/m\/"/);
+  assert.ok(!mountedHtml.includes('href="/"'), 'under /m/ the way back stays under /m/');
+
+  // The Referer names the mount even when the proxy strips it from the path.
+  const stripped = await fetch(base + '/research/notes.md', { headers: { ...accept, Referer: base + '/m/' } });
+  assert.equal(stripped.status, 404);
+  assert.match(await stripped.text(), /href="\/m\/"/);
+});
+
+test('a missing asset is still a plain-text 404', async (t) => {
+  const { base } = await tempServer(t);
+  const res = await fetch(base + '/research/notes.md'); // no Accept: text/html
+  assert.equal(res.status, 404);
+  assert.match(res.headers.get('content-type'), /text\/plain/);
+  assert.equal(await res.text(), 'Not found');
 });
 
 test('GET /push/key returns the VAPID public key', async (t) => {
