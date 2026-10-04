@@ -598,3 +598,18 @@ html[data-theme="colourblind"] .pdot.late, html[data-theme="colourblind"] .jdot.
 html[data-theme="contrast"] .pdot.late, html[data-theme="contrast"] .jdot.stopping { border-radius: 0; clip-path: polygon(50% 0, 100% 100%, 0 100%); }
 html[data-theme="contrast"] .dl.add { background: color-mix(in srgb, var(--ok) 26%, transparent); }
 html[data-theme="contrast"] .dl.del { background: color-mix(in srgb, var(--err) 26%, transparent); }
+
+/* Read, search, web and todo tool cards: dsh 0.1 attaches these views, dsh02.js rebuilds
+   them for 0.2. The stat sits at the right edge like a diff's delta. */
+.tool .stat { flex-shrink: 0; margin-left: auto; color: var(--muted); font-size: 12px; }
+.tool .srcs { margin: 4px 0; }
+.tool .spath { margin-top: 6px; color: var(--muted); font-family: var(--mono); font-size: 11px; }
+.tool .src { padding: 2px 0; line-height: 1.35; }
+.tool .src .su { display: block; color: var(--muted); word-break: break-all; }
+.tool .src .sn { color: var(--muted); font-size: 11px; }
+.tool .todos { margin: 4px 0; }
+.tool .todo { display: flex; gap: 7px; align-items: baseline; padding: 1px 0; line-height: 1.4; }
+.tool .todo .tg { flex-shrink: 0; width: 1em; color: var(--muted); }
+.tool .todo.in_progress .tg { color: var(--accent); }
+.tool .todo.completed .tg { color: var(--ok); }
+.tool .todo.completed .tt { color: var(--muted); text-decoration: line-through; }

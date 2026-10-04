@@ -285,8 +285,11 @@ function linkClicks() {
 }
 function rootOf(id) { let x = id, n = 0; while (S.parent.has(x) && n++ < 10) x = S.parent.get(x); return x; }
 function belongsToCur(id) { return S.cur && (id === S.cur.id || rootOf(id) === S.cur.id); }
+// Read, search, web and todo rows read better with a label than the raw tool name.
+const TOOL_LABEL = { read: 'Read', grep: 'Grep', glob: 'Glob', web_search: 'Web search', web_fetch: 'Fetch', todo_write: 'Todos' };
 function prettyTool(name) {
   if (!name) return 'tool';
+  if (TOOL_LABEL[name]) return TOOL_LABEL[name];
   const m = /^mcp__(.+?)__(.+)$/.exec(name);
   if (m) return `${m[1]} · ${m[2]}`;
   return name.charAt(0).toUpperCase() + name.slice(1);
@@ -310,6 +313,87 @@ function prettyArgs(argsStr) {
   if (typeof a.command === 'string') return a.command;
   if (typeof a.content === 'string' && a.file_path) return `${a.file_path}\n\n${a.content}`;
   return JSON.stringify(a, null, 2);
+}
+// The settled one-line state at the right edge of a read, search, web or todo card.
+function cardStat(card) {
+  if (!card) return '';
+  switch (card.card) {
+    case 'read': {
+      const n = card.lines.length;
+      const last = n ? card.lines[n - 1].number : card.offset;
+      const whole = card.offset === 1 && n > 0 && last >= card.totalLines;
+      const range = whole ? plural(n, 'line') : `lines ${card.offset}–${last} of ${card.totalLines}`;
+      return card.lang ? `${range} · ${card.lang}` : range;
+    }
+    case 'search':
+      if (card.shape === 'paths') return plural(card.total, 'path') + (card.truncated ? ' (capped)' : '');
+      return plural(card.total, 'match', 'matches') + (card.files.length ? ` in ${plural(card.files.length, 'file')}` : '') + (card.truncated ? ' (capped)' : '');
+    case 'web':
+      if (card.kind === 'fetch') return `HTTP ${card.statusCode}` + (card.truncated ? ' · truncated' : '');
+      return plural(card.sources.length, 'source') + (card.truncated ? ' (capped)' : '');
+    case 'todos': {
+      const done = card.todos.filter((x) => x.status === 'completed').length;
+      const now = card.todos.filter((x) => x.status === 'in_progress').length;
+      return `${done}/${card.todos.length} done` + (now ? ` · ${now} in progress` : '');
+    }
+    default: return '';
+  }
+}
+// The numbered window a read card shows; bounded like the generic output.
+const CARD_MAX_LINES = 1000;
+function fillRead(detail, card) {
+  if (!card.lines.length) { detail.append(h('div', { class: 'lbl' }, 'no lines')); return; }
+  const width = String(card.totalLines).length;
+  const rows = card.lines.slice(0, CARD_MAX_LINES).map((l) => `${String(l.number).padStart(width)}  ${l.text}`);
+  if (card.lines.length > CARD_MAX_LINES) rows.push(`… ${plural(card.lines.length - CARD_MAX_LINES, 'more line')}`);
+  detail.append(h('pre', {}, clip(rows.join('\n'), 20000)));
+}
+// grep's grouped matches, or glob's flat path list.
+function fillSearch(detail, card) {
+  if (card.shape === 'paths') {
+    if (!card.paths.length) { detail.append(h('div', { class: 'lbl' }, 'no paths')); return; }
+    const shown = card.paths.slice(0, CARD_MAX_LINES);
+    detail.append(h('pre', {}, clip(shown.join('\n') + (card.paths.length > shown.length ? `\n… ${plural(card.paths.length - shown.length, 'more path')}` : ''), 20000)));
+    return;
+  }
+  if (!card.files.length) { detail.append(h('div', { class: 'lbl' }, 'no matches')); return; }
+  for (const f of card.files) {
+    detail.append(h('div', { class: 'spath' }, relPath(f.path)));
+    detail.append(h('pre', {}, clip(f.matches.map((m) => `${m.lineNumber}: ${m.line}`).join('\n'), 20000)));
+  }
+}
+// web_search's citeable sources and answer, or web_fetch's fetched body.
+function fillWeb(detail, card, t) {
+  if (card.kind === 'search') {
+    if (card.answer) { detail.append(h('div', { class: 'lbl' }, 'answer')); detail.append(mdNode(card.answer)); }
+    if (card.sources.length) {
+      detail.append(h('div', { class: 'lbl' }, plural(card.sources.length, 'source')));
+      const list = h('div', { class: 'srcs' });
+      for (const s of card.sources) {
+        const row = h('div', { class: 'src' });
+        if (s.title) row.append(h('span', { class: 'st' }, s.title), ' ');
+        row.append(h('span', { class: 'su' }, s.url));
+        if (s.snippet) row.append(h('div', { class: 'sn' }, s.snippet));
+        list.append(row);
+      }
+      detail.append(list);
+    } else if (!card.answer) detail.append(h('div', { class: 'lbl' }, 'no sources'));
+    return;
+  }
+  if (t.result) { detail.append(h('div', { class: 'lbl' }, 'content')); detail.append(h('pre', {}, clip(t.result, 20000))); }
+  else detail.append(h('div', { class: 'lbl' }, 'no content'));
+}
+// The whole list the agent last wrote, with a mark per state.
+function fillTodos(detail, card) {
+  if (!card.todos.length) { detail.append(h('div', { class: 'lbl' }, 'no tasks')); return; }
+  const list = h('div', { class: 'todos' });
+  for (const item of card.todos) {
+    const mark = item.status === 'completed' ? '✓' : item.status === 'in_progress' ? '◐' : '○';
+    list.append(h('div', { class: 'todo ' + item.status },
+      h('span', { class: 'tg', 'aria-hidden': 'true' }, mark),
+      h('span', { class: 'tt' }, item.content)));
+  }
+  detail.append(list);
 }
 const clip = (s, n) => (s.length > n ? s.slice(0, n) + `\n… (${s.length - n} more chars)` : s);
 const textOf = (content) => (content || []).filter((b) => b.type === 'text').map((b) => b.text).join('\n');
@@ -946,10 +1030,19 @@ const R = {
     const cls = t.done ? (t.isError ? 'err' : 'ok') : (t.orphan ? '' : 'run');
     t.el.className = 'tool ' + cls;
     const open = t.el.open;
-    const sum = toolSummary(t.args, t.view, t.name);
+    // dsh 0.1 attaches the presentation view to each event; dsh 0.2 rebuilds it in dsh02.js.
+    // A todo_write row has no result view, so its list comes from the call view or arguments.
+    const todos = t.name === 'todo_write' && window.dsh02 && window.dsh02.todosFrom
+      ? window.dsh02.todosFrom(t.name, t.args, t.view) : null;
+    const card = todos ? { card: 'todos', todos } : (t.done && t.rview ? t.rview : t.view) || null;
+    const kind = card && card.card;
+    const structured = kind === 'read' || kind === 'search' || kind === 'web' || kind === 'todos';
+    let sum = toolSummary(t.args, t.view, t.name);
+    if (kind === 'todos') sum = '';
+    const stat = cardStat(card);
     const first = (t.result || '').split('\n').find((l) => l.trim()) || '';
     const lines = (t.result || '').split('\n').length;
-    const resLine = t.done ? (t.orphan && !t.result ? 'no result' : (first.slice(0, 160) + (lines > 1 ? `  (+${lines - 1} lines)` : ''))) : '';
+    const resLine = t.done && !structured ? (t.orphan && !t.result ? 'no result' : (first.slice(0, 160) + (lines > 1 ? `  (+${lines - 1} lines)` : ''))) : '';
     const detail = h('div', { class: 'detail' });
     const diffs = window.dshReview ? window.dshReview.diffsOf(t) : null;
     let delta = null;
@@ -961,10 +1054,9 @@ const R = {
       }
       delta = deltaEl(adds, dels);
     }
-    t.el.replaceChildren(
-      h('summary', {}, h('span', { class: 'bullet' }, '⏺'), h('span', { class: 'name' }, prettyTool(t.name)), h('span', { class: 'sum' }, sum), delta),
-      t.done && resLine ? h('div', { class: 'res' }, resLine) : null,
-      detail);
+    const summary = h('summary', {}, h('span', { class: 'bullet' }, '⏺'), h('span', { class: 'name' }, prettyTool(t.name)), h('span', { class: 'sum' }, sum), stat ? h('span', { class: 'stat' }, stat) : null, delta);
+    const res = t.done && resLine ? h('div', { class: 'res' }, resLine) : null;
+    t.el.replaceChildren(...[summary, res, detail].filter(Boolean));
     // Build detail lazily when opened (keeps long histories fast)
     const fill = () => {
       if (detail.childElementCount) return;
@@ -973,6 +1065,10 @@ const R = {
         if (t.isError && t.result) detail.append(h('div', { class: 'lbl' }, 'error'), h('pre', {}, clip(t.result, 20000)));
         return;
       }
+      if (kind === 'read') { fillRead(detail, card); return; }
+      if (kind === 'search') { fillSearch(detail, card); return; }
+      if (kind === 'web') { fillWeb(detail, card, t); return; }
+      if (kind === 'todos') { fillTodos(detail, card); return; }
       if (t.args != null) detail.append(h('div', { class: 'lbl' }, 'input'), h('pre', {}, clip(prettyArgs(t.args), 20000)));
       const out = (t.rview && typeof t.rview.output === 'string' && t.rview.output) || t.result;
       if (out) detail.append(h('div', { class: 'lbl' }, t.isError ? 'error' : 'output'), h('pre', {}, clip(out, 20000)));
@@ -994,7 +1090,7 @@ const R = {
 };
 
 // ---------- Review: diffs and turn summaries ----------
-const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
+const plural = (n, word, plurals) => `${n} ${n === 1 ? word : (plurals || word + 's')}`;
 function deltaEl(adds, dels) {
   return h('span', { class: 'delta' }, h('span', { class: 'add' }, '+' + adds), ' ', h('span', { class: 'del' }, '−' + dels));
 }

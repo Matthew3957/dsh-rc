@@ -461,3 +461,104 @@ test('dsh 0.1 frames without a view stay generic (no views are made up there)', 
   assert.equal(byClass(t.el('#msgs'), 'turncard').length, 0);
   assert.equal(byClass(t.R.tools.get('e1').el, 'delta').length, 0);
 });
+
+// --- New tool cards: read, grep/glob, web and todos -------------------------
+// The views come from the adapter on dsh 0.2 and from the server on dsh 0.1; the
+// renderer reads the same card shapes either way. Fixtures are sanitized recordings.
+const TOOLCARDS = JSON.parse(fs.readFileSync(new URL('./fixtures/toolcards.json', import.meta.url), 'utf8'));
+
+const TURN_CARDS_02 = [
+  ev(1, 'turn/start', { turn: 1 }),
+  toolCall(2, 'r1', 'read', TOOLCARDS.read.arguments),
+  result02(3, 'r1', 'file body', TOOLCARDS.read.result.meta),
+  toolCall(4, 'g1', 'grep', TOOLCARDS.grep.arguments),
+  result02(5, 'g1', 'Found 3 matches', TOOLCARDS.grep.result.meta),
+  toolCall(6, 'l1', 'glob', TOOLCARDS.glob.arguments),
+  result02(7, 'l1', 'docs/README.md', TOOLCARDS.glob.result.meta),
+  toolCall(8, 'w1', 'web_search', TOOLCARDS.web_search.arguments),
+  result02(9, 'w1', 'Sources: ...', TOOLCARDS.web_search.result.meta),
+  toolCall(10, 'f1', 'web_fetch', TOOLCARDS.web_fetch.arguments),
+  result02(11, 'f1', 'Fetched https://example.com/docs (HTTP 200)\n\nExample body.', TOOLCARDS.web_fetch.result.meta),
+  toolCall(12, 't1', 'todo_write', TOOLCARDS.todo_write.arguments),
+  result02(13, 't1', 'Updated todo list: 1 pending, 1 in progress, 1 completed.'),
+  ev(14, 'turn/end', { turn: 1, reason: { kind: 'completed' } }),
+];
+
+test('dsh 0.2: read, grep, glob, web and todo rows get their own cards', async () => {
+  const t = await openWith02(TURN_CARDS_02);
+  const row = (id) => t.R.tools.get(id).el;
+
+  const read = row('r1');
+  assert.match(textOf(byClass(read, 'name')[0]), /^Read$/);
+  assert.match(textOf(read), /src\/app\.js/);
+  assert.match(textOf(read), /lines 10–12 of 42 · js/);
+  read.open = true; read.ontoggle();
+  assert.match(textOf(byClass(read, 'detail')[0]), /10 {2}const a = 1;/);
+
+  const grep = row('g1');
+  assert.match(textOf(byClass(grep, 'name')[0]), /^Grep$/);
+  assert.match(textOf(grep), /TODO/);
+  assert.match(textOf(grep), /3 matches in 2 files/);
+  grep.open = true; grep.ontoggle();
+  const grepDetail = textOf(byClass(grep, 'detail')[0]);
+  assert.match(grepDetail, /src\/a\.js/);
+  assert.match(grepDetail, /3: \/\/ TODO: cache/);
+  assert.match(grepDetail, /src\/b\.js/);
+  assert.match(grepDetail, /1: \/\/ TODO: docs/);
+
+  const glob = row('l1');
+  assert.match(textOf(glob), /\*\.md/);
+  assert.match(textOf(glob), /12 paths \(capped\)/);
+  glob.open = true; glob.ontoggle();
+  const globDetail = textOf(byClass(glob, 'detail')[0]);
+  assert.match(globDetail, /docs\/README\.md/);
+  assert.match(globDetail, /docs\/faq\.md/);
+
+  const search = row('w1');
+  assert.match(textOf(byClass(search, 'name')[0]), /^Web search$/);
+  assert.match(textOf(search), /node 22 lts, node release schedule/);
+  assert.match(textOf(search), /2 sources \(capped\)/);
+  search.open = true; search.ontoggle();
+  const searchDetail = textOf(byClass(search, 'detail')[0]);
+  assert.match(searchDetail, /Node 22 is the current LTS\./);
+  assert.match(searchDetail, /Node 22 is now available/);
+  assert.match(searchDetail, /https:\/\/example\.com\/node22/);
+
+  const fetch = row('f1');
+  assert.match(textOf(byClass(fetch, 'name')[0]), /^Fetch$/);
+  assert.match(textOf(fetch), /https:\/\/example\.com\/docs/);
+  assert.match(textOf(fetch), /HTTP 200/);
+  fetch.open = true; fetch.ontoggle();
+  assert.match(textOf(byClass(fetch, 'detail')[0]), /Example body\./);
+
+  const todos = row('t1');
+  assert.match(textOf(byClass(todos, 'name')[0]), /^Todos$/);
+  assert.match(textOf(todos), /1\/3 done · 1 in progress/);
+  todos.open = true; todos.ontoggle();
+  const todoDetail = textOf(byClass(todos, 'detail')[0]);
+  assert.match(todoDetail, /◐Read the files/);
+  assert.match(todoDetail, /○Summarize/);
+  assert.match(todoDetail, /✓Report/);
+});
+
+test('dsh 0.1: the same cards render from the view the server attaches', async () => {
+  const call = (id, name, args) => ({ for: 'call', view: dsh02.toolCallView(name, args) });
+  const res = (name, args, meta) => ({ for: 'result', view: dsh02.toolResultView(name, args, { content: [{ type: 'text', text: 'body' }], isError: false, meta }) });
+  const events = [
+    ev(1, 'turn/start', { turn: 1 }),
+    toolCall(2, 'r1', 'read', TOOLCARDS.read.arguments, call('r1', 'read', TOOLCARDS.read.arguments)),
+    toolResult(3, 'r1', 'file body', res('read', TOOLCARDS.read.arguments, TOOLCARDS.read.result.meta)),
+    toolCall(4, 'g1', 'grep', TOOLCARDS.grep.arguments, call('g1', 'grep', TOOLCARDS.grep.arguments)),
+    toolResult(5, 'g1', 'Found 3 matches', res('grep', TOOLCARDS.grep.arguments, TOOLCARDS.grep.result.meta)),
+    toolCall(6, 't1', 'todo_write', TOOLCARDS.todo_write.arguments, { for: 'call', view: { card: 'generic', title: 'Update todo list', kind: 'other', rawInput: TOOLCARDS.todo_write.arguments.todos } }),
+    toolResult(7, 't1', 'Updated todo list: 1 pending, 1 in progress, 1 completed.'),
+    ev(8, 'turn/end', { turn: 1, reason: { kind: 'completed' } }),
+  ];
+  const t = await openWith(events);
+  assert.match(textOf(t.R.tools.get('r1').el), /lines 10–12 of 42 · js/);
+  assert.match(textOf(t.R.tools.get('g1').el), /3 matches in 2 files/);
+  assert.match(textOf(t.R.tools.get('t1').el), /1\/3 done · 1 in progress/);
+  t.R.tools.get('t1').el.open = true; t.R.tools.get('t1').el.ontoggle();
+  assert.match(textOf(byClass(t.R.tools.get('t1').el, 'detail')[0]), /✓Report/);
+});
+
