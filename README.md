@@ -21,6 +21,9 @@ API that dsh 0.1.7 and 0.2 speak (see Compatibility).
 - Session menu: switch model, rename, fork, export, archive, and on dsh 0.2 set a goal or manage
   scheduled prompts.
 - Web Push for approvals, questions, finished turns and errors.
+- Themes from the menu, saved per device and following light or dark: the default, a
+  colourblind-safe one (blue, orange and crimson with shape cues, no red against green), high
+  contrast, and autumn, winter and spring.
 - Reach it over Tailscale, or as its own front door with a passphrase login, HTTPS or a Cloudflare
   quick tunnel with a QR code.
 
