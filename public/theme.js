@@ -15,6 +15,7 @@
     { id: 'autumn', label: 'Autumn', hint: 'Warm paper and rust', bg: ['#f8f3ec', '#181311'] },
     { id: 'winter', label: 'Winter', hint: 'Cool slate and ice', bg: ['#f3f6f9', '#0f151b'] },
     { id: 'spring', label: 'Spring', hint: 'Soft sage and blossom', bg: ['#f4f7f1', '#121612'] },
+    { id: 'mission', label: 'Mission Tile', hint: 'Warm paper, ink and tile red, set in a book serif', bg: ['#fbf8f4', '#1a1512'] },
   ];
   const byId = (id) => THEMES.find((t) => t.id === id) || THEMES[0];
 
