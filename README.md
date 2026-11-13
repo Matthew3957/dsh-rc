@@ -23,7 +23,7 @@ API that dsh 0.1.7 and 0.2 speak (see Compatibility).
 - Web Push for approvals, questions, finished turns and errors.
 - Themes from the menu, saved per device and following light or dark: the default, a
   colourblind-safe one (blue, orange and crimson with shape cues, no red against green), high
-  contrast, and autumn, winter and spring.
+  contrast, autumn, winter and spring, and Mission Tile (warm paper, ink and tile red, in a serif).
 - Reach it over Tailscale, or as its own front door with a passphrase login, HTTPS or a Cloudflare
   quick tunnel with a QR code.
 
