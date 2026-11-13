@@ -579,6 +579,23 @@ html[data-theme="spring"] {
   }
 }
 
+/* Mission Tile: warm paper, dark ink and a tile red, with a book serif. */
+html[data-theme="mission"] {
+  --bg: #fbf8f4; --bg2: #f4eee6; --card: #ffffff; --fg: #241d18; --muted: #6e635a; --line: #e3dace;
+  --accent: #9c4732; --accent-fg: #fbf8f4; --user: #f1e4da;
+  --ok: #2a6236; --err: #a3162e; --warn: #80590a; --code: #f4eee6;
+  --sans: "EB Garamond", "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  html[data-theme="mission"] {
+    --bg: #1a1512; --bg2: #221c18; --card: #2a231e; --fg: #f1e9df; --muted: #a99c90; --line: #3a312a;
+    --accent: #e08a6e; --accent-fg: #2a130c; --user: #35271f;
+    --ok: #86c08e; --err: #f58aa0; --warn: #e0b060; --code: #221c18;
+    color-scheme: dark;
+  }
+}
+
 /* Shape cues. Where status was only a colour (a tool's dot, the connection dot, a job's dot),
    these two themes also change the shape: a tick or cross for tools, a ring for offline, a
    diamond for failed, a triangle for caution. Seasonal themes keep the default shapes. */

@@ -33,7 +33,7 @@ const sheet = (selector, dark) => {
   return Object.assign({}, ...found.map((b) => tokens(b.body)));
 };
 
-const THEMES = ['default', 'colourblind', 'contrast', 'autumn', 'winter', 'spring'];
+const THEMES = ['default', 'colourblind', 'contrast', 'autumn', 'winter', 'spring', 'mission'];
 const NEEDED = ['bg', 'bg2', 'card', 'fg', 'muted', 'line', 'accent', 'accent-fg', 'user', 'ok', 'err', 'warn', 'code'];
 function palette(id, dark) {
   if (id === 'default') return { ...sheet(':root', false), ...(dark ? sheet(':root', true) : {}) };
