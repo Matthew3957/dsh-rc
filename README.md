@@ -514,7 +514,9 @@ one-shot external tasks. dsh only sees them start and finish, so their rows in t
 say `external` and nothing more. Claude Code writes its own transcript as it works, and dsh-rc
 can read it and show the last few tool calls and lines of text under the run's row
 (`Bash: npm test`, `Read: public/app.js`, `Grep: foo in server`), updating every few seconds
-while the card is open.
+while the card is open. A transcript written in the last five minutes also marks the run as
+working: its dot stays live and its parent stays in Running now after the parent's turn ends,
+whether or not the card is expanded.
 
 Point dsh-rc at the same config dir the provider uses. If your dsh profile sets
 `CLAUDE_CONFIG_DIR` in that provider's `env` block, pass that directory; if it sets none, Claude
@@ -530,13 +532,16 @@ look as before.
 How it works: Claude Code appends `<config dir>/projects/<the run's cwd, encoded>/<session>.jsonl`.
 The page asks `GET ./claude/runs?cwd=<parent session cwd>&since=<run start>` and gets the
 transcripts in that folder whose first prompt landed within a few seconds of the run's
-`createdAt` in the parent's `subagentCatalog`, nearest first, as opaque ids. Each external run
-claims one, preferring the one whose prompt contains the run's label, so concurrent runs do not
-share a feed. It then reads `GET ./claude/runs/<id>?offset=<n>`, which answers only the complete
-lines appended since the last read (a half-written last line waits for the next poll), already
-reduced on the server to short summaries: no thinking, no tool results beyond whether they
-failed, no full tool inputs. Interactive Claude Code sessions in the same folder are skipped.
-Codex and Gemini runs have no such transcript, and a run with no match shows nothing.
+`createdAt` in the parent's `subagentCatalog`, nearest first, as opaque ids. dsh does not say
+which tool ran an external run, so every one is looked up (the eight most recent per session,
+while the session is in Running now, folded or not). Each claims one transcript, preferring the
+one whose prompt contains the run's label, so concurrent runs do not share a feed. It then reads
+`GET ./claude/runs/<id>?offset=<n>` (every 3 seconds under an expanded card, every 6 under a
+folded one), which answers only the complete lines appended since the last read (a half-written
+last line waits for the next poll), already reduced on the server to short summaries: no
+thinking, no tool results beyond whether they failed, no full tool inputs. Interactive Claude Code sessions in the same folder are skipped.
+Codex and Gemini runs have no such transcript, so they never match: a run with no match shows
+nothing and never keeps a card in Running now.
 
 ## Regenerating the screenshots
 

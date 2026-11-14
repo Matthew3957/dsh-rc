@@ -1792,12 +1792,14 @@ function scheduleDashboard() {
 }
 function liveJobs(id) { return (S.jobs.get(id) || []).filter(dashLive); }
 // A catalog row's `activity` is as old as the read; the child's own live status is newer.
-const agentLive = (e) => e.activity === 'running' || S.running.get(e.id) === true;
+// An external run has no session, so its `activity` is always inactive: a Claude Code
+// transcript written lately is what says it is still working (see claudeLive).
+const agentLive = (e, parentId) => e.activity === 'running' || S.running.get(e.id) === true || claudeLive(parentId, e);
 function hasLiveAgent(id, depth = 0) {
   const tree = S.subagents.get(id);
   if (!tree || depth > 3) return false;
   return tree.entries.some((e) => e && e.kind === 'child' &&
-    (agentLive(e) || (e.hasChildren && hasLiveAgent(e.id, depth + 1))));
+    (agentLive(e, id) || (e.hasChildren && hasLiveAgent(e.id, depth + 1))));
 }
 // When the running turn began. Live turn/start events are exact; the list
 // baseline's last human prompt is the best available anchor when the page
@@ -2040,16 +2042,16 @@ function jobRow(j, sessionId) {
   }
   return wrap;
 }
-function agentRow({ e, depth }) {
+function agentRow({ e, depth, parent }) {
   const row = h('div', { class: 'run-agent' });
   row.style.setProperty('--depth', String(depth));
   if (e.kind === 'diagnostic') {
     row.append(h('span', { class: 'adot' }), h('span', { class: 'aname' }, e.id || 'subagent'), h('span', { class: 'afail' }, e.reason || 'unavailable'));
     return row;
   }
-  const live = agentLive(e);
+  const live = agentLive(e, parent);
   row.append(h('span', { class: 'adot ' + (live ? 'running' : 'settled') }));
-  row.append(h('span', { class: 'aname', title: e.id || '' }, e.label || e.id || 'subagent'));
+  row.append(h('span', { class: 'aname', title: e.id || '' }, e.label || e.name || e.id || 'subagent'));
   if (e.mode) row.append(h('span', { class: 'amode' }, e.mode));
   const t = agentTiming(e);
   if (t && t.live) row.append(h('span', { class: 'atime', 'data-since': String(t.since) }, fmtElapsed(Date.now() - t.since)));
@@ -2058,25 +2060,41 @@ function agentRow({ e, depth }) {
 }
 // ----- live Claude Code transcripts for external subagents -----
 // An external subagent (`subagent_claude_opus` and friends) runs the real Claude Code CLI,
-// which sends dsh no progress. When dsh-rc is given the provider's Claude config dir it
-// serves short, read-only summaries of that run's transcript (server/claude-transcripts.mjs).
-// The run is matched by its cwd and start time (one transcript per run, nearest first, the
-// catalog label as a tiebreak), then followed by byte offset while its card is open. A run
-// with no transcript (Codex, Gemini, or no config) shows nothing.
-const CLAUDE_POLL_MS = 3000;      // one round of reads while a matching card is open
-const CLAUDE_FIND_EVERY_MS = 6000; // how often an unmatched run looks for its transcript
-const CLAUDE_FIND_FOR_MS = 60_000; // and for how long after it started
-const CLAUDE_KEEP = 30;           // events kept per run
-const CLAUDE_SHOW = 6;            // events shown per run
-let claudeFeed = null;            // null until the server answers; false when it is not configured
-const claudeRuns = new Map();     // parentId\0entryId -> {runId, offset, events, updatedAt, searchedAt, retry}
-const claudePanels = new Map();   // the same key -> its rendered panel
+// which sends dsh no progress: its catalog row is `external` and its `activity` never leaves
+// inactive. When dsh-rc is given the provider's Claude config dir it serves short, read-only
+// summaries of that run's transcript (server/claude-transcripts.mjs). The page cannot tell
+// which tool ran an external run (the catalog `name` is the sibling name the model chose,
+// `agent-1` and so on), so every external run is looked up by its cwd and start time (one
+// transcript per run, nearest first, the catalog label as a tiebreak). One with no transcript
+// (Codex, Gemini, or no config dir) simply never matches and shows nothing.
+//
+// A matched transcript is followed by byte offset for as long as its session is in Running
+// now, folded or not, because a transcript written in the last few minutes is what keeps the
+// run's dot live and its parent on the dashboard after the parent's turn ends. The activity
+// panel itself is drawn only under an expanded card.
+const CLAUDE_POLL_MS = 3000;        // a round of reads for runs under an expanded card
+const CLAUDE_FIND_EVERY_MS = 6000;  // an unmatched run looks again, and a folded card's run is read, this often
+const CLAUDE_FIND_FOR_MS = 60_000;  // for how long after it started an unmatched run keeps looking
+const CLAUDE_QUIET_MS = 5 * 60_000; // a transcript unwritten this long no longer counts as working
+const CLAUDE_PER_SESSION = 8;       // the most recent external runs per session that are followed
+const CLAUDE_KEEP = 30;             // events kept per run
+const CLAUDE_SHOW = 6;              // events shown per run
+let claudeFeed = null;              // null until the server answers; false when it is not configured
+// parentId\0entryId -> {runId, offset, events, updatedAt, activeAt, checkedAt, searchedAt}.
+// activeAt is when the transcript was last seen written, checkedAt when it was last read.
+const claudeRuns = new Map();
+const claudePanels = new Map();     // the same key -> its rendered panel
 let claudeTimer = null;
 let claudeBusy = false;
 const claudeKey = (parentId, entryId) => parentId + '\u0000' + entryId;
-function isClaudeExternal(e) {
-  if (!e || e.kind !== 'child' || e.mode !== 'external') return false;
-  return !/codex|gemini/i.test(String(e.name || ''));
+const isExternal = (e) => !!e && e.kind === 'child' && e.mode === 'external';
+// Liveness is judged as of the last read, so a feed paused while a chat is open neither
+// expires a working run nor revives a quiet one; the next read settles it.
+function claudeStateLive(st) {
+  return !!st && !!st.runId && st.activeAt != null && st.checkedAt - st.activeAt < CLAUDE_QUIET_MS;
+}
+function claudeLive(parentId, e) {
+  return isExternal(e) && claudeStateLive(claudeRuns.get(claudeKey(parentId, e.id)));
 }
 function externalStart(parentId, e) {
   let v = e.createdAt;
@@ -2088,20 +2106,28 @@ function externalStart(parentId, e) {
   const ms = typeof v === 'number' ? v : typeof v === 'string' ? Date.parse(v) : NaN;
   return Number.isFinite(ms) && ms > 0 ? ms : null;
 }
-// External runs under the expanded cards of a visible, unfolded Running now.
+// The external runs worth matching or following while the list is on screen: the most recent
+// few of every working session (a recently written transcript counts as working), plus those of
+// a session whose external run started a moment ago and has no match yet, so a parent whose
+// turn ends at once still gets its first look before its card can go.
 function claudeTargets() {
-  if (claudeFeed === false || $('#listView').hidden || S.dashCollapsed) return [];
-  const box = $('#running');
-  if (!box || box.hidden) return [];
+  if (claudeFeed === false || $('#listView').hidden) return [];
+  const now = Date.now();
   const out = [];
-  for (const s of activeSessions()) {
-    if (!S.dashOpen.has(s.sessionId)) continue;
+  for (const s of S.sessions || []) {
+    if (!s.cwd) continue;
+    const runs = [];
     for (const { e, parent } of flattenAgents(s.sessionId, 0, [])) {
-      if (!isClaudeExternal(e)) continue;
+      if (!isExternal(e)) continue;
       const since = externalStart(parent, e);
-      if (since == null || !s.cwd) continue;
-      out.push({ key: claudeKey(parent, e.id), parent, label: e.label || '', cwd: s.cwd, since });
+      if (since != null) runs.push({ key: claudeKey(parent, e.id), parent, label: e.label || '', cwd: s.cwd, since });
     }
+    if (!runs.length) continue;
+    const recent = runs.sort((a, b) => b.since - a.since).slice(0, CLAUDE_PER_SESSION);
+    const fresh = (r) => Math.abs(now - r.since) < CLAUDE_FIND_FOR_MS && !(claudeRuns.get(r.key) || {}).runId;
+    if (!sessionIsWorking(s.sessionId) && !recent.some(fresh)) continue;
+    const open = !S.dashCollapsed && S.dashOpen.has(s.sessionId);
+    for (const r of recent) out.push({ ...r, open });
   }
   return out;
 }
@@ -2112,7 +2138,6 @@ async function claudeGet(url) {
 }
 async function findClaudeRun(target, st, claimed) {
   st.searchedAt = Date.now();
-  st.retry = false;
   const q = `cwd=${encodeURIComponent(target.cwd)}&since=${encodeURIComponent(String(target.since))}`;
   const { status, body } = await claudeGet('./claude/runs?' + q);
   if (status !== 200 || !body) return;
@@ -2127,15 +2152,15 @@ async function findClaudeRun(target, st, claimed) {
   st.offset = null;
   claimed.add(st.runId);
 }
+// Reads what was appended since the last offset. Answers 'gone' when the server no longer
+// knows the id (it restarted, or the file went away), so the caller can look again at once.
 async function readClaudeRun(key, st) {
-  const url = './claude/runs/' + encodeURIComponent(st.runId) + (st.offset == null ? '' : '?offset=' + st.offset);
+  const first = st.offset == null;
+  st.checkedAt = Date.now();
+  const url = './claude/runs/' + encodeURIComponent(st.runId) + (first ? '' : '?offset=' + st.offset);
   const { status, body } = await claudeGet(url);
-  if (status === 404) {
-    // The server restarted or the file went away: look again once.
-    st.runId = null; st.offset = null; st.retry = true;
-    return;
-  }
-  if (status !== 200 || !body) return;
+  if (status === 404) { st.runId = null; st.offset = null; return 'gone'; }
+  if (status !== 200 || !body) return null;
   const incoming = Array.isArray(body.events) ? body.events : [];
   let events = body.reset ? [] : st.events.slice();
   for (const ev of incoming) {
@@ -2149,19 +2174,30 @@ async function readClaudeRun(key, st) {
   }
   if (events.length > CLAUDE_KEEP) events = events.slice(-CLAUDE_KEEP);
   st.events = events;
+  const prevOffset = st.offset, prevUpdated = st.updatedAt;
   if (Number.isSafeInteger(body.offset)) st.offset = body.offset;
-  if (typeof body.updatedAt === 'number') st.updatedAt = body.updatedAt;
+  const mtime = typeof body.updatedAt === 'number' ? body.updatedAt : null;
+  if (mtime != null) st.updatedAt = mtime;
+  const now = Date.now();
+  // Growth seen here is timed by this clock. A first read can only go by the file's own time,
+  // never later than now, so a server clock ahead of this one cannot stretch it.
+  if (!first && (st.offset !== prevOffset || (mtime != null && mtime !== prevUpdated))) st.activeAt = now;
+  else if (first && mtime != null) st.activeAt = Math.max(st.activeAt || 0, Math.min(mtime, now));
   updateClaudePanel(key);
+  return null;
 }
-// One round: match what is unmatched, then read what is matched. Never overlaps itself.
+// One round: match what is unmatched, then read what is matched (a folded card's runs at the
+// slower pace). Never overlaps itself. Redraws only when a run turns live or quiet; the panels
+// update in place.
 async function claudeTick() {
   if (claudeBusy) return;
   const targets = claudeTargets();
   if (!targets.length) { stopClaudeFeed(); return; }
   claudeBusy = true;
+  let flipped = false;
   try {
     const now = Date.now();
-    // Forget runs no longer on screen once there are many; reopening one reads its tail again.
+    // Forget runs no longer followed once there are many; following one again reads its tail.
     if (claudeRuns.size > 64) {
       const keep = new Set(targets.map((x) => x.key));
       for (const key of [...claudeRuns.keys()]) if (!keep.has(key)) claudeRuns.delete(key);
@@ -2171,17 +2207,31 @@ async function claudeTick() {
     for (const target of targets) {
       if (claudeFeed === false) break;
       let st = claudeRuns.get(target.key);
-      if (!st) { st = { runId: null, offset: null, events: [], updatedAt: null, searchedAt: 0, retry: false }; claudeRuns.set(target.key, st); }
-      if (!st.runId) {
-        const due = !st.searchedAt || st.retry || (now - target.since < CLAUDE_FIND_FOR_MS && now - st.searchedAt >= CLAUDE_FIND_EVERY_MS);
-        if (due) await findClaudeRun(target, st, claimed);
+      if (!st) {
+        st = { runId: null, offset: null, events: [], updatedAt: null, activeAt: null, checkedAt: 0, searchedAt: 0 };
+        claudeRuns.set(target.key, st);
       }
-      if (st.runId) await readClaudeRun(target.key, st);
+      const was = claudeStateLive(st);
+      if (!st.runId) {
+        const due = !st.searchedAt || (now - target.since < CLAUDE_FIND_FOR_MS && now - st.searchedAt >= CLAUDE_FIND_EVERY_MS);
+        if (due) await findClaudeRun(target, st, claimed);
+      } else if (!target.open && now - st.checkedAt < CLAUDE_FIND_EVERY_MS) {
+        continue;
+      }
+      if (st.runId && await readClaudeRun(target.key, st) === 'gone') {
+        await findClaudeRun(target, st, claimed);
+        if (st.runId) await readClaudeRun(target.key, st);
+      }
+      if (claudeStateLive(st) !== was) flipped = true;
     }
   } catch (e) {
-    if (e && e.code === 'login') stopClaudeFeed();
+    if (e && e.code === 'login') { stopClaudeFeed(); flipped = false; } // a redraw would restart it
   } finally {
     claudeBusy = false;
+  }
+  if (flipped) {
+    if (!$('#listView').hidden && !S.searchMode) renderList();
+    renderDashboard();
   }
 }
 function syncClaudeFeed() {
@@ -2272,7 +2322,8 @@ function sessionCard(s) {
     detail.append(h('div', { class: 'run-sec-title' }, 'Subagents'));
     for (const node of agents.slice(0, 24)) {
       detail.append(agentRow(node));
-      if (isClaudeExternal(node.e)) {
+      // Only an expanded card carries the feed panel; a folded one is still followed for liveness.
+      if (expanded && isExternal(node.e)) {
         const panel = claudePanel(node.parent, node.e.id);
         panel.style.setProperty('--depth', String(node.depth));
         detail.append(panel);
@@ -2289,7 +2340,8 @@ function agentsSig(parentId, depth) {
   if (!tree || depth > 3) return '';
   const out = [];
   for (const e of tree.entries) {
-    out.push([e.kind, e.id, e.activity, e.mode, e.label, e.reason].filter((x) => x != null).join(':'));
+    // An external run's transcript liveness draws its dot, so its turning live or quiet redraws.
+    out.push([e.kind, e.id, e.activity, e.mode, e.label, e.reason, claudeLive(parentId, e) ? 'live' : null].filter((x) => x != null).join(':'));
     const t = agentTiming(e);
     if (t) out.push(t.live ? 's' + t.since : 'd' + t.settledMs);
     if (e.kind === 'child' && e.hasChildren) out.push('(' + agentsSig(e.id, depth + 1) + ')');
@@ -2335,7 +2387,8 @@ function renderDashboard() {
   if (!box) return;
   if ($('#listView').hidden) { stopDashTick(); stopClaudeFeed(); return; }
   const active = activeSessions();
-  if (!active.length) { box.hidden = true; dashSig = null; stopDashTick(); stopClaudeFeed(); return; }
+  // With no card on screen a just-started external run may still be looking for its transcript.
+  if (!active.length) { box.hidden = true; dashSig = null; stopDashTick(); syncClaudeFeed(); return; }
   box.hidden = false;
   const sig = dashboardSignature(active);
   if (sig !== dashSig) {
