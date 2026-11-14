@@ -218,9 +218,10 @@ Environment variables:
 | `DSH_RC_PASSPHRASE` | none | Login passphrase, 12 characters or more (hashed in memory; `--set-passphrase` avoids keeping the plaintext around) |
 | `DSH_RC_TUNNEL` | off | `1` or `true` starts a Cloudflare quick tunnel; requires a passphrase |
 | `DSH_RC_CERT`, `DSH_RC_KEY` | none | Certificate and key files to serve HTTPS directly |
+| `DSH_RC_CLAUDE_CONFIG_DIRS` | none (feature off) | Comma-separated Claude Code config dirs whose transcripts Running now may show for external Claude subagents (see Running now) |
 
 Flags: `--host`, `--port`, `--dsh-url`, `--upstream-host`, `--trusted-host` (repeatable),
-`--dsh-token-file`, `--tunnel`, `--cert`, `--key`, and `--set-passphrase`, which stores a hashed passphrase (from
+`--dsh-token-file`, `--tunnel`, `--cert`, `--key`, `--claude-config-dir` (repeatable), and `--set-passphrase`, which stores a hashed passphrase (from
 `DSH_RC_PASSPHRASE`, or a prompt) and exits. Flags win over environment variables. `--help`
 lists them.
 
@@ -250,6 +251,10 @@ When dsh-rc is the front door, it adds:
   dsh through the proxy.
 - **A Host check without a passphrase**: the proxy only answers loopback or `--trusted-host`
   names (see above).
+- **Read-only transcript views.** With `--claude-config-dir`, `/claude/*` answers GET and HEAD
+  only, behind the same login and Host/Origin checks as `/api`, with `Cache-Control: no-store`.
+  The page never names a file: it gets opaque run ids, each tied to a UUID-named transcript
+  directly under a configured dir's `projects/`, and symlinks there are not followed.
 - **No privileged Host.** The proxy presents `dsh-rc.internal`, never a loopback name, so dsh's
   loopback-only settings and credentials methods stay out of reach. The proxy refuses them as
   well, and drops its own session cookie before forwarding.
@@ -501,6 +506,37 @@ Everything there is read-only except the 0.2 stop. Tapping a card's title opens 
 tapping its summary row expands the jobs and subagent tree, and tapping a 0.2 job row expands its
 output. The section follows the projection and jobs pushes, refetches a subagent catalog only when
 it is stale, and stops while a chat is open.
+
+### External Claude Code subagents
+
+dsh's `subagent_claude_opus` and `subagent_claude_sonnet` tools run the real Claude Code CLI as
+one-shot external tasks. dsh only sees them start and finish, so their rows in the subagent tree
+say `external` and nothing more. Claude Code writes its own transcript as it works, and dsh-rc
+can read it and show the last few tool calls and lines of text under the run's row
+(`Bash: npm test`, `Read: public/app.js`, `Grep: foo in server`), updating every few seconds
+while the card is open.
+
+Point dsh-rc at the same config dir the provider uses. If your dsh profile sets
+`CLAUDE_CONFIG_DIR` in that provider's `env` block, pass that directory; if it sets none, Claude
+Code uses `~/.claude`, so pass its absolute path:
+
+    node server/index.mjs --claude-config-dir /path/to/claude-config
+    # or, for several providers with their own dirs:
+    DSH_RC_CLAUDE_CONFIG_DIRS=/path/to/one,/path/to/two node server/index.mjs
+
+`--claude-config-dir` repeats. Paths must be absolute. Without one, nothing is read and the rows
+look as before.
+
+How it works: Claude Code appends `<config dir>/projects/<the run's cwd, encoded>/<session>.jsonl`.
+The page asks `GET ./claude/runs?cwd=<parent session cwd>&since=<run start>` and gets the
+transcripts in that folder whose first prompt landed within a few seconds of the run's
+`createdAt` in the parent's `subagentCatalog`, nearest first, as opaque ids. Each external run
+claims one, preferring the one whose prompt contains the run's label, so concurrent runs do not
+share a feed. It then reads `GET ./claude/runs/<id>?offset=<n>`, which answers only the complete
+lines appended since the last read (a half-written last line waits for the next poll), already
+reduced on the server to short summaries: no thinking, no tool results beyond whether they
+failed, no full tool inputs. Interactive Claude Code sessions in the same folder are skipped.
+Codex and Gemini runs have no such transcript, and a run with no match shows nothing.
 
 ## Regenerating the screenshots
 
