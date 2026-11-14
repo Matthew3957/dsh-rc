@@ -469,6 +469,14 @@ input, textarea, select { font: inherit; color: inherit; }
 .run-job .jstop { flex-shrink: 0; padding: 0 5px; border: 1px solid var(--line); border-radius: 6px; color: var(--muted); font-family: var(--mono); font-size: 10.5px; line-height: 16px; }
 .run-job .jstop.armed { border-color: var(--err); color: var(--err); }
 .jout { margin: 2px 0 0 14px; padding: 6px 8px; max-height: 132px; overflow: auto; border-radius: 8px; background: var(--bg2); color: var(--muted); font-family: var(--mono); font-size: 10.5px; line-height: 1.4; white-space: pre-wrap; word-break: break-word; }
+/* An external Claude Code subagent: the last few tool calls and lines of text from its transcript. */
+.run-claude { display: flex; flex-direction: column; gap: 2px; margin: 0 0 0 calc(var(--depth, 0) * 14px + 14px); padding: 5px 8px; border-left: 2px solid var(--line); border-radius: 0 8px 8px 0; background: var(--bg2); font-family: var(--mono); font-size: 10.5px; line-height: 1.4; color: var(--muted); min-width: 0; }
+.run-claude .ce { display: flex; gap: 6px; min-width: 0; }
+.run-claude .ce-mark { flex-shrink: 0; width: 1em; text-align: center; }
+.run-claude .ce-tool .ce-text { color: var(--fg); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.run-claude .ce-text { flex: 1; min-width: 0; overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.run-claude .ce-tool .ce-text { display: block; }
+.run-claude .ce.fail .ce-mark { color: var(--err); }
 
 /* Prices sheet */
 #sheetBody textarea { width: 100%; padding: 10px 12px; border-radius: 10px; border: 1px solid var(--line); background: var(--card); font-family: var(--mono); font-size: 16px; /* under 16px iOS zooms on focus */ line-height: 1.45; resize: vertical; }

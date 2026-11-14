@@ -976,7 +976,12 @@ export function createClient({ transport, wsUrl, WebSocketImpl = globalThis.WebS
         if (!catalogs.has(id)) await catalogOf(id);
         const hasChildren = (catalogs.get(id) || []).length > 0;
         const active = running.get(id) === true || !!obj(timings.get(id)).active;
-        return { kind: 'child', id, mode: e.mode, label: e.label, activity: active ? 'running' : 'inactive', hasChildren };
+        const entry = { kind: 'child', id, mode: e.mode, label: e.label, activity: active ? 'running' : 'inactive', hasChildren };
+        // An external run has no session of its own; when it started and which tool ran it are
+        // what Running now matches a Claude Code transcript against.
+        if (e.createdAt != null) entry.createdAt = e.createdAt;
+        if (typeof e.name === 'string') entry.name = e.name;
+        return entry;
       }));
       return { entries, parentAvailable };
     },

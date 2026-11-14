@@ -77,7 +77,7 @@ const plain = (o) => JSON.parse(JSON.stringify(o));
 const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
 async function settle(n = 6) { for (let i = 0; i < n; i++) await tick(); }
 
-function harness({ respond } = {}) {
+function harness({ respond, http } = {}) {
   const els = new Map();
   const document = {
     visibilityState: 'visible',
@@ -99,6 +99,7 @@ function harness({ respond } = {}) {
     scrollTo() {},
   };
   const fetchCalls = [];
+  const httpCalls = [];
   const context = {
     window,
     document,
@@ -111,6 +112,13 @@ function harness({ respond } = {}) {
     matchMedia: window.matchMedia,
     crypto: { randomUUID: () => 'rpc-' + fetchCalls.length },
     fetch: async (url, init) => {
+      // dsh-rc's own read-only endpoints (the Claude transcript views) answer plain JSON.
+      if (/^\.\/claude\//.test(String(url))) {
+        httpCalls.push(String(url));
+        const r = http ? http(String(url)) : undefined;
+        const status = r ? r.status || 200 : 404;
+        return { ok: status >= 200 && status < 300, status, headers: { get: () => null }, json: async () => (r ? r.body : null) };
+      }
       const method = String(url).replace(/^.*\/api\//, '');
       const payload = init && init.body ? JSON.parse(init.body) : {};
       fetchCalls.push({ method, payload });
@@ -126,13 +134,14 @@ function harness({ respond } = {}) {
   };
   context.globalThis = context;
   vm.createContext(context);
-  const epilogue = '\n;globalThis.__t = { S, renderDashboard, scheduleDashboard, onMux, onHost, loadSessions, fmtElapsed, activeSessions, liveJobs, toggleDashCard, jobRow, handleJobOutput, mergeJob, watchDashJobs, post, get dsh2() { return dsh2; }, setDsh2(v) { dsh2 = v; } };';
+  const epilogue = '\n;globalThis.__t = { S, renderDashboard, scheduleDashboard, onMux, onHost, loadSessions, fmtElapsed, activeSessions, liveJobs, toggleDashCard, jobRow, handleJobOutput, mergeJob, watchDashJobs, post, claudeTick, claudeRuns, get claudeFeed() { return claudeFeed; }, get claudeTimer() { return claudeTimer; }, stopClaudeFeed, get dsh2() { return dsh2; }, setDsh2(v) { dsh2 = v; } };';
   vm.runInContext(APP + epilogue, context, { filename: 'public/app.js' });
   const t = context.__t;
   t.el = (sel) => document.querySelector(sel);
   t.cards = () => elementKids(document.querySelector('#runningCards'));
   t.card = (id) => t.cards().find((c) => c.getAttribute('data-session') === id);
   t.fetchCalls = fetchCalls;
+  t.httpCalls = httpCalls;
   return t;
 }
 
@@ -591,4 +600,174 @@ test('a terminal output status never resurrects a job the roster no longer has',
   assert.equal(t.S.jobs.get('s1')[0].status, 'completed');
   assert.equal(t.S.jobs.get('s1')[0].detail, 'exit code: 0');
   assert.equal(t.S.jobs.get('s1')[0].label, 'x', 'the roster row keeps its other fields');
+});
+
+// --- external Claude Code subagents: a live feed from dsh-rc's transcript views ---
+
+const RUN_A = 'RunAAAAAAAAAAAAA';
+const RUN_B = 'RunBBBBBBBBBBBBB';
+const extEntry = (over = {}) => childEntry({ id: 'ext-1', mode: 'external', label: 'Review the parser module', activity: 'inactive', createdAt: T0, name: 'subagent_claude_opus', ...over });
+
+// A tiny dsh-rc: /claude/runs lists transcripts by start time, /claude/runs/<id> answers
+// events from an offset, the way server/claude-transcripts.mjs does.
+function claudeServer({ enabled = true, runs = [], feeds = {} } = {}) {
+  const srv = { enabled, runs, feeds, reads: [] };
+  srv.http = (url) => {
+    const u = new URL(url, 'http://x/');
+    if (u.pathname === '/claude/runs') {
+      if (!srv.enabled) return { body: { enabled: false, runs: [] } };
+      const since = Number(u.searchParams.get('since'));
+      const list = srv.runs.filter((r) => r.cwd === u.searchParams.get('cwd') && Math.abs(r.startedAt - since) <= 30_000)
+        .sort((a, b) => Math.abs(a.startedAt - since) - Math.abs(b.startedAt - since))
+        .map(({ id, startedAt, prompt }) => ({ id, startedAt, updatedAt: startedAt, prompt }));
+      return { body: { enabled: true, runs: list } };
+    }
+    const m = /^\/claude\/runs\/([^/]+)$/.exec(u.pathname);
+    const feed = m && srv.feeds[m[1]];
+    if (!feed) return { status: 404, body: { error: 'unknown run' } };
+    const offset = u.searchParams.has('offset') ? Number(u.searchParams.get('offset')) : null;
+    srv.reads.push([m[1], offset]);
+    return { body: { events: feed.slice(offset == null ? 0 : offset), offset: feed.length, size: feed.length, updatedAt: T0, reset: offset == null } };
+  };
+  return srv;
+}
+function externalWorld(entries, srv) {
+  return harness({
+    http: srv.http,
+    respond: (m) => {
+      if (m === 'session.list') return { items: [summary()] };
+      if (m === 'subagent.list') return { entries, parentAvailable: true };
+      return undefined;
+    },
+  });
+}
+async function openExternal(t) {
+  await t.loadSessions();
+  await settle();
+  t.renderDashboard();
+  t.toggleDashCard('s1');
+  await settle(10);
+}
+const feedLines = (card) => allByClass(card, 'ce').map((el) => textOf(el));
+
+test('an expanded card shows an external Claude run\'s recent tool calls and text, and follows it by offset', async () => {
+  const srv = claudeServer({
+    runs: [{ id: RUN_A, cwd: '/work/project', startedAt: T0 + 2_000, prompt: 'Review the parser module for bugs' }],
+    feeds: { [RUN_A]: [
+      { k: 'tool', id: 'tu1', text: 'Read: server/parser.mjs', at: T0 },
+      { k: 'result', id: 'tu1', ok: true, at: T0 },
+      { k: 'text', text: 'The parser drops the last token.', at: T0 },
+    ] },
+  });
+  const t = externalWorld([extEntry()], srv);
+  await openExternal(t);
+  const card = t.card('s1');
+  assert.equal(textOf(oneByClass(card, 'aname')), 'Review the parser module');
+  const panel = oneByClass(card, 'run-claude');
+  assert.ok(panel, 'the external row carries a feed panel');
+  assert.equal(panel.hidden, false);
+  assert.deepEqual(feedLines(card), ['✓Read: server/parser.mjs', '“The parser drops the last token.']);
+  assert.ok(t.httpCalls[0].startsWith('./claude/runs?cwd=%2Fwork%2Fproject&since=' + T0));
+  assert.deepEqual(srv.reads, [[RUN_A, null]]);
+
+  // New lines arrive; the next round asks only for what follows the last offset.
+  srv.feeds[RUN_A].push({ k: 'tool', id: 'tu2', text: 'Bash: npm test', at: T0 }, { k: 'result', id: 'tu2', ok: false, text: 'Exit code 1', at: T0 });
+  await t.claudeTick();
+  assert.deepEqual(srv.reads.at(-1), [RUN_A, 3]);
+  assert.equal(feedLines(t.card('s1')).at(-1), '✗Bash: npm test');
+  assert.equal(t.card('s1'), card, 'the feed updates in place without rebuilding the card');
+  assert.ok(t.claudeTimer, 'polling runs while the card is open');
+  t.stopClaudeFeed();
+});
+
+test('folding the card, folding the section or opening a chat stops the feed', async () => {
+  const srv = claudeServer({ runs: [{ id: RUN_A, cwd: '/work/project', startedAt: T0, prompt: 'x' }], feeds: { [RUN_A]: [{ k: 'text', text: 'hi' }] } });
+  const t = externalWorld([extEntry()], srv);
+  await openExternal(t);
+  assert.ok(t.claudeTimer);
+  t.toggleDashCard('s1');
+  assert.equal(t.claudeTimer, null, 'a folded card is not polled');
+  const before = t.httpCalls.length;
+  await t.claudeTick();
+  assert.equal(t.httpCalls.length, before);
+
+  t.toggleDashCard('s1');
+  await settle(10);
+  assert.ok(t.claudeTimer);
+  t.el('#runningHead').onclick();
+  assert.equal(t.claudeTimer, null, 'a folded section is not polled');
+  t.el('#runningHead').onclick();
+  await settle(10);
+  assert.ok(t.claudeTimer);
+  t.el('#listView').hidden = true;
+  t.renderDashboard();
+  assert.equal(t.claudeTimer, null, 'an open chat is not polled');
+});
+
+test('without a configured Claude dir nothing appears and nothing more is asked', async () => {
+  const srv = claudeServer({ enabled: false });
+  const t = externalWorld([extEntry()], srv);
+  await openExternal(t);
+  assert.equal(t.claudeFeed, false);
+  assert.equal(oneByClass(t.card('s1'), 'run-claude').hidden, true);
+  assert.equal(t.httpCalls.length, 1);
+  t.renderDashboard();
+  await t.claudeTick();
+  assert.equal(t.httpCalls.length, 1);
+  assert.equal(t.claudeTimer, null);
+});
+
+test('a Codex run is never matched, and a run with no transcript shows nothing', async () => {
+  const srv = claudeServer({ runs: [{ id: RUN_A, cwd: '/work/project', startedAt: T0 + 500_000, prompt: 'far away' }], feeds: { [RUN_A]: [{ k: 'text', text: 'not this one' }] } });
+  const codex = extEntry({ id: 'ext-2', name: 'subagent_codex', label: 'Second opinion' });
+  const t = externalWorld([codex, extEntry()], srv);
+  await openExternal(t);
+  const card = t.card('s1');
+  assert.equal(allByClass(card, 'run-claude').length, 1, 'only the Claude row gets a panel');
+  assert.equal(oneByClass(card, 'run-claude').hidden, true);
+  assert.ok(t.httpCalls.every((u) => u.startsWith('./claude/runs?')), 'no events were read');
+  assert.deepEqual(srv.reads, []);
+  t.stopClaudeFeed();
+});
+
+test('two concurrent external runs each get their own transcript', async () => {
+  const srv = claudeServer({
+    runs: [
+      { id: RUN_A, cwd: '/work/project', startedAt: T0 + 1_000, prompt: 'Review the parser module' },
+      { id: RUN_B, cwd: '/work/project', startedAt: T0 + 3_000, prompt: 'Write the release notes draft' },
+    ],
+    feeds: { [RUN_A]: [{ k: 'text', text: 'parser work' }], [RUN_B]: [{ k: 'text', text: 'notes work' }] },
+  });
+  // Both started within a few seconds; the second's label names its own prompt.
+  const t = externalWorld([extEntry(), extEntry({ id: 'ext-2', label: 'Write the release notes draft', createdAt: T0 + 2_500, name: 'subagent_claude_sonnet' })], srv);
+  await openExternal(t);
+  const panels = allByClass(t.card('s1'), 'run-claude');
+  assert.deepEqual(panels.map((p) => textOf(p)), ['“parser work', '“notes work']);
+  assert.notEqual(t.claudeRuns.get('s1\u0000ext-1').runId, t.claudeRuns.get('s1\u0000ext-2').runId);
+  t.stopClaudeFeed();
+});
+
+test('a start time is read from the raw catalog when the list row lacks it', async () => {
+  const srv = claudeServer({ runs: [{ id: RUN_A, cwd: '/work/project', startedAt: T0 + 1_000, prompt: 'x' }], feeds: { [RUN_A]: [{ k: 'tool', id: 'a', text: 'Grep: foo in server' }] } });
+  const bare = extEntry();
+  delete bare.createdAt;
+  const t = externalWorld([bare], srv);
+  t.onMux({ type: 'session/projection', sessionId: 's1', key: 'subagentCatalog', value: [{ id: 'ext-1', mode: 'external', label: 'Review the parser module', createdAt: new Date(T0).toISOString() }], seq: 30 }, {});
+  await openExternal(t);
+  assert.deepEqual(feedLines(t.card('s1')), ['›Grep: foo in server']);
+  t.stopClaudeFeed();
+});
+
+test('a run id the server forgot is looked up again', async () => {
+  const srv = claudeServer({ runs: [{ id: RUN_A, cwd: '/work/project', startedAt: T0, prompt: 'x' }], feeds: { [RUN_A]: [{ k: 'text', text: 'one' }] } });
+  const t = externalWorld([extEntry()], srv);
+  await openExternal(t);
+  // dsh-rc restarted: the old id is unknown and the same transcript has a new one.
+  srv.feeds = { [RUN_B]: [{ k: 'text', text: 'one' }, { k: 'text', text: 'two' }] };
+  srv.runs = [{ id: RUN_B, cwd: '/work/project', startedAt: T0, prompt: 'x' }];
+  await t.claudeTick();
+  await t.claudeTick();
+  assert.equal(t.claudeRuns.get('s1\u0000ext-1').runId, RUN_B);
+  assert.deepEqual(feedLines(t.card('s1')), ['“one', '“two']);
+  t.stopClaudeFeed();
 });

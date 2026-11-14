@@ -275,6 +275,21 @@ test('subagent.list follows the catalog down and probes a child the control feed
   assert.equal(calls.slice(0, before).filter(([, sessionId]) => sessionId === 'c1').length, 1);
 });
 
+test('subagent.list keeps an external run\'s start time and tool name for the transcript feed', async () => {
+  const bySession = {
+    s1: { values: { subagentCatalog: [{ id: 'ext-1', mode: 'external', label: 'Review', name: 'subagent_claude_opus', createdAt: 1_700_000_000_000 }, { id: 'c1', mode: 'one-shot', label: 'plain' }] } },
+  };
+  const client = createClient({
+    transport: async (endpoint, payload) => bySession[payload.args.request.sessionId] || { values: {} },
+    wsUrl: 'ws://x', WebSocketImpl: FakeSocket, onFrame() {},
+  });
+  const v = await client.rpc('subagent.list', { parentSessionId: 's1' });
+  assert.deepEqual(v.entries, [
+    { kind: 'child', id: 'ext-1', mode: 'external', label: 'Review', activity: 'inactive', hasChildren: false, createdAt: 1_700_000_000_000, name: 'subagent_claude_opus' },
+    { kind: 'child', id: 'c1', mode: 'one-shot', label: 'plain', activity: 'inactive', hasChildren: false },
+  ]);
+});
+
 test('a status frame fills in a child activity the timing probe did not know', async () => {
   const { client, frames } = harness();
   client.connect();

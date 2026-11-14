@@ -1880,7 +1880,7 @@ function flattenAgents(parentId, depth, out) {
   const tree = S.subagents.get(parentId);
   if (!tree || depth > 3) return out;
   for (const e of tree.entries) {
-    out.push({ e, depth });
+    out.push({ e, depth, parent: parentId });
     if (e && e.kind === 'child' && e.hasChildren) flattenAgents(e.id, depth + 1, out);
   }
   return out;
@@ -2056,6 +2056,165 @@ function agentRow({ e, depth }) {
   else if (t) row.append(h('span', { class: 'atime' }, fmtElapsed(t.settledMs)));
   return row;
 }
+// ----- live Claude Code transcripts for external subagents -----
+// An external subagent (`subagent_claude_opus` and friends) runs the real Claude Code CLI,
+// which sends dsh no progress. When dsh-rc is given the provider's Claude config dir it
+// serves short, read-only summaries of that run's transcript (server/claude-transcripts.mjs).
+// The run is matched by its cwd and start time (one transcript per run, nearest first, the
+// catalog label as a tiebreak), then followed by byte offset while its card is open. A run
+// with no transcript (Codex, Gemini, or no config) shows nothing.
+const CLAUDE_POLL_MS = 3000;      // one round of reads while a matching card is open
+const CLAUDE_FIND_EVERY_MS = 6000; // how often an unmatched run looks for its transcript
+const CLAUDE_FIND_FOR_MS = 60_000; // and for how long after it started
+const CLAUDE_KEEP = 30;           // events kept per run
+const CLAUDE_SHOW = 6;            // events shown per run
+let claudeFeed = null;            // null until the server answers; false when it is not configured
+const claudeRuns = new Map();     // parentId\0entryId -> {runId, offset, events, updatedAt, searchedAt, retry}
+const claudePanels = new Map();   // the same key -> its rendered panel
+let claudeTimer = null;
+let claudeBusy = false;
+const claudeKey = (parentId, entryId) => parentId + '\u0000' + entryId;
+function isClaudeExternal(e) {
+  if (!e || e.kind !== 'child' || e.mode !== 'external') return false;
+  return !/codex|gemini/i.test(String(e.name || ''));
+}
+function externalStart(parentId, e) {
+  let v = e.createdAt;
+  if (v == null) {
+    const cat = projectionValue(parentId, 'subagentCatalog');
+    const row = Array.isArray(cat) ? cat.find((r) => r && r.id === e.id) : null;
+    v = row ? row.createdAt : null;
+  }
+  const ms = typeof v === 'number' ? v : typeof v === 'string' ? Date.parse(v) : NaN;
+  return Number.isFinite(ms) && ms > 0 ? ms : null;
+}
+// External runs under the expanded cards of a visible, unfolded Running now.
+function claudeTargets() {
+  if (claudeFeed === false || $('#listView').hidden || S.dashCollapsed) return [];
+  const box = $('#running');
+  if (!box || box.hidden) return [];
+  const out = [];
+  for (const s of activeSessions()) {
+    if (!S.dashOpen.has(s.sessionId)) continue;
+    for (const { e, parent } of flattenAgents(s.sessionId, 0, [])) {
+      if (!isClaudeExternal(e)) continue;
+      const since = externalStart(parent, e);
+      if (since == null || !s.cwd) continue;
+      out.push({ key: claudeKey(parent, e.id), parent, label: e.label || '', cwd: s.cwd, since });
+    }
+  }
+  return out;
+}
+async function claudeGet(url) {
+  const r = await fetch(url, { headers: { Accept: 'application/json' } });
+  if (checkLogin(r)) throw Object.assign(new Error('login required'), { code: 'login' });
+  return { status: r.status, body: r.ok ? await r.json() : null };
+}
+async function findClaudeRun(target, st, claimed) {
+  st.searchedAt = Date.now();
+  st.retry = false;
+  const q = `cwd=${encodeURIComponent(target.cwd)}&since=${encodeURIComponent(String(target.since))}`;
+  const { status, body } = await claudeGet('./claude/runs?' + q);
+  if (status !== 200 || !body) return;
+  if (body.enabled === false) { claudeFeed = false; return; }
+  claudeFeed = true;
+  const runs = (Array.isArray(body.runs) ? body.runs : []).filter((r) => r && typeof r.id === 'string' && !claimed.has(r.id));
+  if (!runs.length) return;
+  // The server lists nearest start first; the catalog label inside the prompt beats that.
+  const label = target.label.trim().toLowerCase();
+  const byLabel = label.length >= 8 ? runs.find((r) => typeof r.prompt === 'string' && r.prompt.toLowerCase().includes(label)) : null;
+  st.runId = (byLabel || runs[0]).id;
+  st.offset = null;
+  claimed.add(st.runId);
+}
+async function readClaudeRun(key, st) {
+  const url = './claude/runs/' + encodeURIComponent(st.runId) + (st.offset == null ? '' : '?offset=' + st.offset);
+  const { status, body } = await claudeGet(url);
+  if (status === 404) {
+    // The server restarted or the file went away: look again once.
+    st.runId = null; st.offset = null; st.retry = true;
+    return;
+  }
+  if (status !== 200 || !body) return;
+  const incoming = Array.isArray(body.events) ? body.events : [];
+  let events = body.reset ? [] : st.events.slice();
+  for (const ev of incoming) {
+    if (!ev || typeof ev !== 'object') continue;
+    if (ev.k === 'result') {
+      const call = events.find((x) => x.k === 'tool' && x.id && x.id === ev.id);
+      if (call) { call.ok = ev.ok !== false; if (ev.text) call.err = String(ev.text); }
+      continue;
+    }
+    if (ev.k === 'tool' || ev.k === 'text') events.push({ k: ev.k, id: ev.id || '', text: String(ev.text || ''), at: ev.at || null });
+  }
+  if (events.length > CLAUDE_KEEP) events = events.slice(-CLAUDE_KEEP);
+  st.events = events;
+  if (Number.isSafeInteger(body.offset)) st.offset = body.offset;
+  if (typeof body.updatedAt === 'number') st.updatedAt = body.updatedAt;
+  updateClaudePanel(key);
+}
+// One round: match what is unmatched, then read what is matched. Never overlaps itself.
+async function claudeTick() {
+  if (claudeBusy) return;
+  const targets = claudeTargets();
+  if (!targets.length) { stopClaudeFeed(); return; }
+  claudeBusy = true;
+  try {
+    const now = Date.now();
+    // Forget runs no longer on screen once there are many; reopening one reads its tail again.
+    if (claudeRuns.size > 64) {
+      const keep = new Set(targets.map((x) => x.key));
+      for (const key of [...claudeRuns.keys()]) if (!keep.has(key)) claudeRuns.delete(key);
+    }
+    const claimed = new Set();
+    for (const st of claudeRuns.values()) if (st.runId) claimed.add(st.runId);
+    for (const target of targets) {
+      if (claudeFeed === false) break;
+      let st = claudeRuns.get(target.key);
+      if (!st) { st = { runId: null, offset: null, events: [], updatedAt: null, searchedAt: 0, retry: false }; claudeRuns.set(target.key, st); }
+      if (!st.runId) {
+        const due = !st.searchedAt || st.retry || (now - target.since < CLAUDE_FIND_FOR_MS && now - st.searchedAt >= CLAUDE_FIND_EVERY_MS);
+        if (due) await findClaudeRun(target, st, claimed);
+      }
+      if (st.runId) await readClaudeRun(target.key, st);
+    }
+  } catch (e) {
+    if (e && e.code === 'login') stopClaudeFeed();
+  } finally {
+    claudeBusy = false;
+  }
+}
+function syncClaudeFeed() {
+  if (!claudeTargets().length) { stopClaudeFeed(); return; }
+  if (claudeTimer) return;
+  claudeTimer = setInterval(() => { claudeTick(); }, CLAUDE_POLL_MS);
+  if (claudeTimer && claudeTimer.unref) claudeTimer.unref();
+  claudeTick();
+}
+function stopClaudeFeed() { if (claudeTimer) { clearInterval(claudeTimer); claudeTimer = null; } }
+function fillClaudePanel(el, st) {
+  const shown = st ? st.events.slice(-CLAUDE_SHOW) : [];
+  el.replaceChildren(...shown.map((ev) => {
+    const failed = ev.k === 'tool' && ev.ok === false;
+    const mark = ev.k === 'text' ? '“' : failed ? '✗' : ev.ok === true ? '✓' : '›';
+    return h('div', { class: 'ce ce-' + ev.k + (failed ? ' fail' : ''), title: failed && ev.err ? ev.err : null },
+      h('span', { class: 'ce-mark', 'aria-hidden': 'true' }, mark),
+      h('span', { class: 'ce-text' }, ev.text));
+  }));
+  el.hidden = !shown.length;
+}
+function claudePanel(parentId, entryId) {
+  const key = claudeKey(parentId, entryId);
+  const el = h('div', { class: 'run-claude', 'aria-label': 'Recent Claude Code activity' });
+  el.style.setProperty('--depth', '0');
+  fillClaudePanel(el, claudeRuns.get(key));
+  claudePanels.set(key, el);
+  return el;
+}
+function updateClaudePanel(key) {
+  const el = claudePanels.get(key);
+  if (el) fillClaudePanel(el, claudeRuns.get(key));
+}
 function sessionCard(s) {
   const id = s.sessionId;
   const running = !!S.running.get(id);
@@ -2111,7 +2270,14 @@ function sessionCard(s) {
   }
   if (agents.length) {
     detail.append(h('div', { class: 'run-sec-title' }, 'Subagents'));
-    for (const node of agents.slice(0, 24)) detail.append(agentRow(node));
+    for (const node of agents.slice(0, 24)) {
+      detail.append(agentRow(node));
+      if (isClaudeExternal(node.e)) {
+        const panel = claudePanel(node.parent, node.e.id);
+        panel.style.setProperty('--depth', String(node.depth));
+        detail.append(panel);
+      }
+    }
     if (agents.length > 24) detail.append(h('div', { class: 'run-empty' }, `+${agents.length - 24} more`));
   }
   if (!jobs.length && !agents.length) detail.append(h('div', { class: 'run-empty' }, 'No jobs or subagents.'));
@@ -2167,13 +2333,14 @@ function tickDashboard() {
 function renderDashboard() {
   const box = $('#running');
   if (!box) return;
-  if ($('#listView').hidden) { stopDashTick(); return; }
+  if ($('#listView').hidden) { stopDashTick(); stopClaudeFeed(); return; }
   const active = activeSessions();
-  if (!active.length) { box.hidden = true; dashSig = null; stopDashTick(); return; }
+  if (!active.length) { box.hidden = true; dashSig = null; stopDashTick(); stopClaudeFeed(); return; }
   box.hidden = false;
   const sig = dashboardSignature(active);
   if (sig !== dashSig) {
     dashSig = sig;
+    claudePanels.clear();
     $('#runningCards').replaceChildren(...active.map(sessionCard));
     $('#runningCount').textContent = String(active.length);
   }
@@ -2182,6 +2349,7 @@ function renderDashboard() {
   $('#runningCards').hidden = !open;
   startDashTick();
   ensureAgentTrees(active);
+  syncClaudeFeed();
 }
 $('#runningHead').onclick = () => { S.dashCollapsed = !S.dashCollapsed; renderDashboard(); };
 
