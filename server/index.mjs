@@ -13,6 +13,9 @@
 //   POST /push/subscribe  PushSubscription JSON
 //   POST /push/unsubscribe { endpoint }
 //   POST /push/test       send a test notification to every subscription
+//   GET  /claude/runs, /claude/runs/<id>  read-only Claude Code transcript views for
+//                         external subagents (server/claude-transcripts.mjs; off unless
+//                         --claude-config-dir is given)
 //
 // It also watches dsh's event feeds (server/watcher.mjs) and pushes notifications for approvals,
 // questions, finished turns and errors. It never changes anything in dsh on its own.
@@ -44,6 +47,7 @@ import { defaultStateDir, ensureStateDir, writeSecret } from './state.mjs';
 import { DEFAULT_UPSTREAM_HOST, apiMethodOf, checkRequest, createProxy, hostnameOf, isLoopbackHostname, isPrivilegedMethod } from './proxy.mjs';
 import { MIN_PASSPHRASE_LENGTH, createAuth, loadPassphraseRecord, passphraseProblem, savePassphrase } from './auth.mjs';
 import { startTunnel } from './tunnel.mjs';
+import { createClaudeTranscripts } from './claude-transcripts.mjs';
 import { encode as encodeQr, toTerminalLines } from './qr.mjs';
 
 export { defaultStateDir } from './state.mjs';
@@ -367,6 +371,7 @@ export async function startServer(options = {}) {
   const keyFile = options.keyFile || env.DSH_RC_KEY;
   if (!certFile !== !keyFile) throw new Error('https needs both a certificate and a key (--cert and --key)');
   const useHttps = !!certFile;
+  const claude = createClaudeTranscripts({ configDirs: listOption(options.claudeConfigDirs ?? env.DSH_RC_CLAUDE_CONFIG_DIRS), logger });
 
   ensureStateDir(stateDir);
 
@@ -482,6 +487,7 @@ export async function startServer(options = {}) {
       const isApi = pathname === '/api' || pathname.startsWith('/api/');
       const isPush = pathname === '/push' || pathname.startsWith('/push/');
       const isTunnel = pathname === '/tunnel';
+      const isClaude = pathname === '/claude' || pathname.startsWith('/claude/');
 
       // Cross-site writes are refused everywhere, before auth is looked at.
       if (req.method !== 'GET' && req.method !== 'HEAD') {
@@ -493,7 +499,7 @@ export async function startServer(options = {}) {
       if (pathname === '/logout') return auth.handleLogout(req, res);
 
       if (!auth.isAuthed(req) && !auth.isPublic(req, pathname)) {
-        if (isApi || isPush || isTunnel) {
+        if (isApi || isPush || isTunnel || isClaude) {
           // The header lets the page tell this login 401 from a 401 dsh itself sends (dsh 0.2 wants its own cookie).
           const buf = Buffer.from(JSON.stringify({ error: 'authentication required' }), 'utf8');
           res.writeHead(401, { 'Content-Type': 'application/json; charset=utf-8', 'Content-Length': buf.length, 'Cache-Control': 'no-store', 'X-Dsh-Rc-Login': '1' });
@@ -515,6 +521,12 @@ export async function startServer(options = {}) {
         return proxy.proxyHttp(req, res);
       }
       if (isPush) return handlePush(req, res, pathname);
+      if (isClaude) {
+        // Transcripts can be private: the same Host and Origin fence as /api, read-only.
+        const problem = checkRequest(req, fence);
+        if (problem) return sendText(res, 403, `Forbidden: ${problem}`, { 'Cache-Control': 'no-store' });
+        return claude.handle(req, res, pathname);
+      }
       if (isTunnel) {
         if (req.method !== 'GET' && req.method !== 'HEAD') return sendJson(res, 405, { error: 'method not allowed' });
         return sendJson(res, 200, { url: tunnel ? `${tunnel.url}/` : null });
@@ -584,6 +596,7 @@ export async function startServer(options = {}) {
   logger.log(`[dsh-rc] listening on ${useHttps ? 'https' : 'http'}://${shownHost}:${actualPort}, state in ${stateDir}`);
   logger.log(`[dsh-rc] proxying /api to ${dshUrl} as Host ${proxy.presentedHost}; start dsh with --trusted-host ${hostnameOf(proxy.presentedHost)}`);
   logger.log(auth.enabled ? '[dsh-rc] passphrase login is on' : '[dsh-rc] no passphrase configured: login is off (loopback only)');
+  if (claude.enabled) logger.log(`[dsh-rc] reading Claude Code transcripts from ${claude.dirCount} config dir${claude.dirCount === 1 ? '' : 's'} for Running now`);
 
   return {
     server,
@@ -675,6 +688,8 @@ const USAGE = `Usage: node server/index.mjs [options]
   --tunnel                start a Cloudflare quick tunnel (needs cloudflared and a passphrase)
   --cert <file>           certificate for serving https directly (with --key)
   --key <file>            private key for --cert
+  --claude-config-dir <dir>  a Claude Code config dir (CLAUDE_CONFIG_DIR) whose transcripts
+                          Running now may show for external Claude subagents (repeatable)
   --set-passphrase        store a hashed passphrase in the state dir and exit`;
 
 export function parseCliArgs(argv) {
@@ -699,6 +714,7 @@ export function parseCliArgs(argv) {
     else if (arg === '--upstream-host') options.upstreamHost = value(++i, arg);
     else if (arg === '--dsh-token-file') options.dshTokenFile = value(++i, arg);
     else if (arg === '--trusted-host') (options.trustedHosts ||= []).push(value(++i, arg));
+    else if (arg === '--claude-config-dir') (options.claudeConfigDirs ||= []).push(value(++i, arg));
     else throw new Error(`unknown option ${arg}\n${USAGE}`);
   }
   return options;
