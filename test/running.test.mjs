@@ -606,12 +606,15 @@ test('a terminal output status never resurrects a job the roster no longer has',
 
 const RUN_A = 'RunAAAAAAAAAAAAA';
 const RUN_B = 'RunBBBBBBBBBBBBB';
-const extEntry = (over = {}) => childEntry({ id: 'ext-1', mode: 'external', label: 'Review the parser module', activity: 'inactive', createdAt: T0, name: 'subagent_claude_opus', ...over });
+// The catalog's `name` is the sibling name the model chose, never the tool that ran the run, and
+// an external row's `activity` is always inactive: it has no session of its own.
+const extEntry = (over = {}) => childEntry({ id: 'ext-1', mode: 'external', label: 'Review the parser module', activity: 'inactive', createdAt: T0, name: 'agent-1', ...over });
 
 // A tiny dsh-rc: /claude/runs lists transcripts by start time, /claude/runs/<id> answers
-// events from an offset, the way server/claude-transcripts.mjs does.
-function claudeServer({ enabled = true, runs = [], feeds = {} } = {}) {
-  const srv = { enabled, runs, feeds, reads: [] };
+// events from an offset, the way server/claude-transcripts.mjs does. `mtimes` is each file's
+// modification time (an old one by default, so a run is quiet unless a test says otherwise).
+function claudeServer({ enabled = true, runs = [], feeds = {}, mtimes = {} } = {}) {
+  const srv = { enabled, runs, feeds, mtimes, reads: [] };
   srv.http = (url) => {
     const u = new URL(url, 'http://x/');
     if (u.pathname === '/claude/runs') {
@@ -627,7 +630,7 @@ function claudeServer({ enabled = true, runs = [], feeds = {} } = {}) {
     if (!feed) return { status: 404, body: { error: 'unknown run' } };
     const offset = u.searchParams.has('offset') ? Number(u.searchParams.get('offset')) : null;
     srv.reads.push([m[1], offset]);
-    return { body: { events: feed.slice(offset == null ? 0 : offset), offset: feed.length, size: feed.length, updatedAt: T0, reset: offset == null } };
+    return { body: { events: feed.slice(offset == null ? 0 : offset), offset: feed.length, size: feed.length, updatedAt: srv.mtimes[m[1]] ?? T0, reset: offset == null } };
   };
   return srv;
 }
@@ -641,14 +644,30 @@ function externalWorld(entries, srv) {
     },
   });
 }
-async function openExternal(t) {
+// The list loads, the subagent tree arrives, and the first round of matching runs, with
+// the card left folded.
+async function loadExternal(t) {
   await t.loadSessions();
   await settle();
   t.renderDashboard();
+  await settle(10);
+}
+async function openExternal(t) {
+  await loadExternal(t);
   t.toggleDashCard('s1');
   await settle(10);
 }
 const feedLines = (card) => allByClass(card, 'ce').map((el) => textOf(el));
+const extDot = (t, name) => {
+  const row = allByClass(t.card('s1'), 'run-agent').find((r) => textOf(oneByClass(r, 'aname')) === name);
+  return oneByClass(row, 'adot').className;
+};
+const turnEnd = (t) => t.onMux({ type: 'session/event', sessionId: 's1', event: { seq: 50, time: T0, type: 'turn/end', data: { turn: 1, reason: { kind: 'completed' } } } }, {});
+// Pretend `ms` passed since the page last looked at a run: every time it holds moves back.
+const elapse = (t, key, ms) => {
+  const st = t.claudeRuns.get(key);
+  for (const k of ['checkedAt', 'activeAt', 'searchedAt']) if (typeof st[k] === 'number') st[k] -= ms;
+};
 
 test('an expanded card shows an external Claude run\'s recent tool calls and text, and follows it by offset', async () => {
   const srv = claudeServer({
@@ -658,6 +677,7 @@ test('an expanded card shows an external Claude run\'s recent tool calls and tex
       { k: 'result', id: 'tu1', ok: true, at: T0 },
       { k: 'text', text: 'The parser drops the last token.', at: T0 },
     ] },
+    mtimes: { [RUN_A]: Date.now() },
   });
   const t = externalWorld([extEntry()], srv);
   await openExternal(t);
@@ -680,28 +700,40 @@ test('an expanded card shows an external Claude run\'s recent tool calls and tex
   t.stopClaudeFeed();
 });
 
-test('folding the card, folding the section or opening a chat stops the feed', async () => {
+test('a folded card or section drops the panel and reads only at the slower pace, and an open chat stops the feed', async () => {
   const srv = claudeServer({ runs: [{ id: RUN_A, cwd: '/work/project', startedAt: T0, prompt: 'x' }], feeds: { [RUN_A]: [{ k: 'text', text: 'hi' }] } });
   const t = externalWorld([extEntry()], srv);
   await openExternal(t);
   assert.ok(t.claudeTimer);
-  t.toggleDashCard('s1');
-  assert.equal(t.claudeTimer, null, 'a folded card is not polled');
-  const before = t.httpCalls.length;
+  const key = 's1\u0000ext-1';
+  // Expanded: every round reads.
+  let before = srv.reads.length;
   await t.claudeTick();
-  assert.equal(t.httpCalls.length, before);
+  assert.equal(srv.reads.length, before + 1);
 
   t.toggleDashCard('s1');
-  await settle(10);
-  assert.ok(t.claudeTimer);
+  assert.equal(allByClass(t.card('s1'), 'run-claude').length, 0, 'a folded card has no feed panel');
+  assert.ok(t.claudeTimer, 'a folded card is still followed for liveness');
+  before = t.httpCalls.length;
+  await t.claudeTick();
+  assert.equal(t.httpCalls.length, before, 'a folded card is not read every 3s round');
+  elapse(t, key, 6_000);
+  await t.claudeTick();
+  assert.equal(t.httpCalls.length, before + 1, 'it is read again once the slower pace has passed');
+
+  t.toggleDashCard('s1');
   t.el('#runningHead').onclick();
-  assert.equal(t.claudeTimer, null, 'a folded section is not polled');
+  before = t.httpCalls.length;
+  await t.claudeTick();
+  assert.equal(t.httpCalls.length, before, 'a folded section reads at the slower pace too');
+
   t.el('#runningHead').onclick();
-  await settle(10);
-  assert.ok(t.claudeTimer);
   t.el('#listView').hidden = true;
   t.renderDashboard();
   assert.equal(t.claudeTimer, null, 'an open chat is not polled');
+  before = t.httpCalls.length;
+  await t.claudeTick();
+  assert.equal(t.httpCalls.length, before);
 });
 
 test('without a configured Claude dir nothing appears and nothing more is asked', async () => {
@@ -717,16 +749,100 @@ test('without a configured Claude dir nothing appears and nothing more is asked'
   assert.equal(t.claudeTimer, null);
 });
 
-test('a Codex run is never matched, and a run with no transcript shows nothing', async () => {
-  const srv = claudeServer({ runs: [{ id: RUN_A, cwd: '/work/project', startedAt: T0 + 500_000, prompt: 'far away' }], feeds: { [RUN_A]: [{ k: 'text', text: 'not this one' }] } });
-  const codex = extEntry({ id: 'ext-2', name: 'subagent_codex', label: 'Second opinion' });
-  const t = externalWorld([codex, extEntry()], srv);
+test('an external run with no Claude transcript (a Codex or Gemini run) shows nothing and never keeps its card', async () => {
+  // The only transcript in the folder started long after either run, so neither matches.
+  const srv = claudeServer({ runs: [{ id: RUN_A, cwd: '/work/project', startedAt: T0 + 500_000, prompt: 'far away' }], feeds: { [RUN_A]: [{ k: 'text', text: 'not this one' }] }, mtimes: { [RUN_A]: Date.now() } });
+  const other = extEntry({ id: 'ext-2', name: 'agent-2', label: 'Second opinion' });
+  const t = externalWorld([other, extEntry()], srv);
   await openExternal(t);
   const card = t.card('s1');
-  assert.equal(allByClass(card, 'run-claude').length, 1, 'only the Claude row gets a panel');
-  assert.equal(oneByClass(card, 'run-claude').hidden, true);
+  for (const panel of allByClass(card, 'run-claude')) assert.equal(panel.hidden, true, 'an unmatched run draws no feed');
   assert.ok(t.httpCalls.every((u) => u.startsWith('./claude/runs?')), 'no events were read');
   assert.deepEqual(srv.reads, []);
+  assert.match(extDot(t, 'Second opinion'), /settled/);
+  turnEnd(t);
+  t.renderDashboard();
+  assert.equal(t.el('#running').hidden, true, 'an unmatched external run does not keep the parent on the dashboard');
+  t.stopClaudeFeed();
+});
+
+test('a matched transcript being written shows the external row live', async () => {
+  const srv = claudeServer({
+    runs: [{ id: RUN_A, cwd: '/work/project', startedAt: T0 + 2_000, prompt: 'Review the parser module for bugs' }],
+    feeds: { [RUN_A]: [{ k: 'tool', id: 'tu1', text: 'Read: server/parser.mjs', at: T0 }] },
+    mtimes: { [RUN_A]: Date.now() },
+  });
+  const t = externalWorld([extEntry()], srv);
+  await openExternal(t);
+  assert.match(extDot(t, 'Review the parser module'), /running/, 'the transcript, not the inactive catalog row, decides the dot');
+  assert.deepEqual(feedLines(t.card('s1')), ['›Read: server/parser.mjs']);
+  t.stopClaudeFeed();
+});
+
+test('external runs are matched while the card is still folded, and the panel waits for it to open', async () => {
+  const srv = claudeServer({
+    runs: [{ id: RUN_A, cwd: '/work/project', startedAt: T0 + 2_000, prompt: 'Review the parser module for bugs' }],
+    feeds: { [RUN_A]: [{ k: 'text', text: 'Looking at the tokenizer.' }] },
+    mtimes: { [RUN_A]: Date.now() },
+  });
+  const t = externalWorld([extEntry()], srv);
+  await loadExternal(t);
+  assert.equal(t.S.dashOpen.has('s1'), false);
+  assert.equal(t.claudeRuns.get('s1\u0000ext-1').runId, RUN_A, 'matched without the card ever opening');
+  assert.deepEqual(srv.reads, [[RUN_A, null]]);
+  assert.equal(allByClass(t.card('s1'), 'run-claude').length, 0, 'no panel under a folded card');
+  assert.match(extDot(t, 'Review the parser module'), /running/);
+  const calls = t.httpCalls.length;
+  t.toggleDashCard('s1');
+  assert.deepEqual(feedLines(t.card('s1')), ['“Looking at the tokenizer.'], 'opening shows what was already read');
+  assert.equal(t.httpCalls.length, calls, 'opening alone asks nothing new');
+  t.stopClaudeFeed();
+});
+
+test('a Claude run still writing keeps its parent in Running now after the parent turn ends, until it goes quiet', async () => {
+  const srv = claudeServer({
+    runs: [{ id: RUN_A, cwd: '/work/project', startedAt: T0 + 2_000, prompt: 'Review the parser module for bugs' }],
+    feeds: { [RUN_A]: [{ k: 'tool', id: 'tu1', text: 'Read: server/parser.mjs', at: T0 }] },
+    mtimes: { [RUN_A]: Date.now() },
+  });
+  const t = externalWorld([extEntry()], srv);
+  const key = 's1\u0000ext-1';
+  await loadExternal(t);
+  turnEnd(t);
+  t.renderDashboard();
+  assert.equal(t.S.running.get('s1'), false);
+  assert.equal(t.el('#running').hidden, false, 'the parent stays while the transcript is live');
+  assert.ok(t.card('s1'));
+  assert.match(oneByClass(t.card('s1'), 'run-dot').className, /idle/, 'the parent turn itself is over');
+
+  // The transcript keeps growing: the folded card's next read sees it and the card stays.
+  srv.feeds[RUN_A].push({ k: 'tool', id: 'tu2', text: 'Bash: npm test', at: T0 });
+  srv.mtimes[RUN_A] = Date.now();
+  elapse(t, key, 6_000);
+  await t.claudeTick();
+  assert.deepEqual(srv.reads.at(-1), [RUN_A, 1]);
+  t.renderDashboard();
+  assert.equal(t.el('#running').hidden, false);
+  assert.ok(t.claudeTimer);
+
+  // Five quiet minutes later, with nothing appended, the run settles and the card goes.
+  elapse(t, key, 6 * 60_000);
+  await t.claudeTick();
+  assert.equal(t.el('#running').hidden, true, 'a transcript that stopped being written no longer keeps the card');
+  await t.claudeTick();
+  assert.equal(t.claudeTimer, null, 'and nothing is followed any more');
+});
+
+test('only the eight most recent external runs of a session are looked up', async () => {
+  const srv = claudeServer();
+  const entries = Array.from({ length: 10 }, (_, i) => extEntry({ id: 'ext-' + i, label: 'Task number ' + i, name: 'agent-' + (i + 1), createdAt: T0 + i * 1_000 }));
+  const t = externalWorld(entries, srv);
+  await loadExternal(t);
+  const looked = t.httpCalls.filter((u) => u.startsWith('./claude/runs?')).map((u) => Number(new URL(u, 'http://x/').searchParams.get('since')));
+  assert.deepEqual(looked.sort((a, b) => a - b), [2, 3, 4, 5, 6, 7, 8, 9].map((i) => T0 + i * 1_000));
+  // Long-started runs with no match are not asked about again.
+  await t.claudeTick();
+  assert.equal(t.httpCalls.length, looked.length);
   t.stopClaudeFeed();
 });
 
@@ -739,7 +855,7 @@ test('two concurrent external runs each get their own transcript', async () => {
     feeds: { [RUN_A]: [{ k: 'text', text: 'parser work' }], [RUN_B]: [{ k: 'text', text: 'notes work' }] },
   });
   // Both started within a few seconds; the second's label names its own prompt.
-  const t = externalWorld([extEntry(), extEntry({ id: 'ext-2', label: 'Write the release notes draft', createdAt: T0 + 2_500, name: 'subagent_claude_sonnet' })], srv);
+  const t = externalWorld([extEntry(), extEntry({ id: 'ext-2', label: 'Write the release notes draft', createdAt: T0 + 2_500, name: 'agent-2' })], srv);
   await openExternal(t);
   const panels = allByClass(t.card('s1'), 'run-claude');
   assert.deepEqual(panels.map((p) => textOf(p)), ['“parser work', '“notes work']);
