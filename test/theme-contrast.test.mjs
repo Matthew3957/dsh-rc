@@ -93,6 +93,19 @@ function textPairs(p) {
   pairs.push(['board: context chip (fg on bg2)', c('fg'), c('bg2')]);
   pairs.push(['board: context chip at 85% (fg on warn tint over bg)', c('fg'), mix(c('warn'), 0.14, c('bg'))]);
   pairs.push(['board: context chip at 95% (fg on err tint over bg)', c('fg'), mix(c('err'), 0.14, c('bg'))]);
+  // The transcript (PR 4). The receipt's verdict word stays in --text; only its
+  // glyph carries a status colour, so the word is readable in the default theme
+  // where the green and amber primitives are below AA on a card. Activity text
+  // and the failed word sit on the card surface; the header's high-context chip
+  // is the same fg-on-warn-tint pair the live board already uses.
+  pairs.push(['receipt: verdict and activity (fg on card)', c('fg'), c('card')]);
+  pairs.push(['receipt: meta and narration (muted on card)', c('muted'), c('card')]);
+  pairs.push(['receipt: failed word (err on card)', c('err'), c('card')]);
+  pairs.push(['details: label and value (fg on card)', c('fg'), c('card')]);
+  pairs.push(['details: note (muted on card)', c('muted'), c('card')]);
+  pairs.push(['details: Copy action (accent on card)', c('accent'), c('card')]);
+  pairs.push(['header: high-context chip (fg on warn tint over bg)', c('fg'), mix(c('warn'), 0.14, c('bg'))]);
+  pairs.push(['header: very-high-context chip (fg on err tint over bg)', c('fg'), mix(c('err'), 0.14, c('bg'))]);
   return pairs;
 }
 

@@ -12,14 +12,14 @@ API that dsh 0.1.7 and 0.2 speak (see Compatibility).
   for every active session shows the current step, a running clock, todo progress, context when
   it is nearly full, background jobs (stop them from the phone) and its subagent tree.
 - Chat with streaming replies, tool rows you tap to expand, file edits as line diffs, and a
-  summary card at the end of each turn (files changed, commands run, passed or failed).
+  compact review receipt at the end of each turn (files changed, commands run, passed or failed).
 - Approval, question and plan-review cards above the composer; stop, steer or queue a message;
   edit or remove queued messages.
-- A status line per session: model and route, context fill, tokens and an estimated cost.
+- Session details one tap away: model and route, context fill, tokens, estimated cost and session facts.
 - Composer extras: slash commands, @-mention files, saved prompt templates, image attachments,
   dictation where the browser has speech recognition.
-- Session menu: switch model, rename, fork, export, archive, and on dsh 0.2 set a goal or manage
-  scheduled prompts.
+- Session menu: session details, switch model, rename, fork, export, archive, and on dsh 0.2 set
+  a goal or manage scheduled prompts.
 - Web Push for approvals, questions, finished turns and errors.
 - Themes from the menu, saved per device and following light or dark: the default, a
   colourblind-safe one (blue, orange and crimson with shape cues, no red against green), high
@@ -37,10 +37,10 @@ dsh. Every project, path and conversation in them is invented.
 
 | | | | |
 |:-:|:-:|:-:|:-:|
-| <img src="docs/screenshots/sessions.png" width="180" alt="The session board in attention order"> | <img src="docs/screenshots/running.png" width="180" alt="Running now with a live row's jobs and subagents open"> | <img src="docs/screenshots/chat.png" width="180" alt="A chat with tool rows"> | <img src="docs/screenshots/diff.png" width="180" alt="A file edit opened as a line diff"> |
-| The board | Running now, jobs and subagents open | Chat with tool rows | Edit as a line diff |
-| <img src="docs/screenshots/summary.png" width="180" alt="Turn summary card"> | <img src="docs/screenshots/status.png" width="180" alt="Status line with the per-turn breakdown open"> | <img src="docs/screenshots/plan.png" width="180" alt="Plan review card"> | <img src="docs/screenshots/approval.png" width="180" alt="Approval card above the composer"> |
-| Turn summary | Status line, per-turn breakdown | Plan review | Approval while a turn runs |
+| <img src="docs/screenshots/sessions.png" width="180" alt="The session board in attention order"> | <img src="docs/screenshots/running.png" width="180" alt="Running now with a live row's jobs and subagents open"> | <img src="docs/screenshots/chat.png" width="180" alt="A prose chat with the turn receipt"> | <img src="docs/screenshots/diff.png" width="180" alt="A file edit opened as a line diff"> |
+| The board | Running now, jobs and subagents open | Chat with the turn receipt | Edit as a line diff |
+| <img src="docs/screenshots/summary.png" width="180" alt="A completed turn's receipt opened to its activity"> | <img src="docs/screenshots/status.png" width="180" alt="Session details with route, context and per-turn usage"> | <img src="docs/screenshots/plan.png" width="180" alt="Plan review card"> | <img src="docs/screenshots/approval.png" width="180" alt="Approval card above the composer"> |
+| Receipt opened to its activity | Session details and per-turn usage | Plan review | Approval while a turn runs |
 
 ## Setup
 
@@ -322,7 +322,7 @@ Everything below comes from the generated `typert.remote-client.d.ts` contracts 
   status and errors, and the approval and question requests), `session/control` (every session's
   projections: title, queue, usage), `workspace/follow` (the archive set) and, for the open session,
   `session/follow` (snapshot, durable events, live assistant chunks). Each item is converted into
-  the 0.1 frame the page already renders, so the chat, status line and dashboard code is shared.
+  the 0.1 frame the page already renders, so the chat, session details and dashboard code is shared.
 - **Goals** (`dsh-goal`). The `goal` projection arrives on `session/control` like any other and
   drives the goal line under the header; `goals/get` adds whether continuation is armed, and
   `goals/create`, `edit`, `pause`, `resume`, `complete` and `clear` change it, each carrying the
@@ -349,8 +349,7 @@ Everything below comes from the generated `typert.remote-client.d.ts` contracts 
   `todo_write` the checklist with a mark per item. Each carries a one-line summary — file and line
   range, pattern and match count, query and source count, URL and status, todo progress — and
   opens to the full result. A malformed or missing `meta` falls back to the generic row, and since
-  0.1 already sends these views, the same cards render there. The diff rows, the turn summary card
-  and the verdict then work as on 0.1.
+  0.1 already sends these views, the same cards render there. The diff rows, receipt and verdict work as they do on 0.1.
 
 **Background jobs.** 0.2 has no host-wide jobs feed, so `public/dsh02.js` opens one `job/list`
 stream per listed session (the first 64, since the list is activity-ordered; its own jobs plus
@@ -391,14 +390,14 @@ and shows nothing. The older API has no schedules and never sees the entry.
 ### Not ported yet (dsh 0.2)
 
 - **`str_replace_editor`** shows its diff while it runs and a plain row once settled, as in dsh's
-  web client, so it is not counted in the turn summary. A command whose output was spilled to a
+  web client, so it is not counted in the turn receipt. A command whose output was spilled to a
   file has no exit code to show.
 - **Session search** answers as dsh does: on a deployment with the session-query index off it fails.
 - **File uploads**, terminals and settings are not touched (refused by the proxy, as before).
 
 Checked in headless Chromium with real DeepSeek turns against 0.1.1-rc.2, 0.1.7-rc.2 and
-0.2.0-rc.2: streaming, reasoning blocks, tool calls and results, diffs and the turn summary,
-background jobs (shown and stopped), the status line, goals, and an approval card answered from
+0.2.0-rc.2: streaming, reasoning blocks, tool calls and results, diffs and turn receipts,
+background jobs (shown and stopped), session details, goals, and an approval card answered from
 the page. Images in the live stream are still read from the contracts only. The adapter is also
 covered in Node (`test/dsh02.test.mjs`).
 
@@ -440,12 +439,12 @@ listed in the output as not called, so a rename there still takes a live phone t
   unchanged stretches folded. It draws the hunk dsh reports once the call has finished (the
   change as applied) and the intended change while it runs. dsh sends hunks without line
   numbers, so none are shown, and a new file or an overwrite reads as all additions.
-- **Turn summary.** A turn that changed files or ran commands ends with a card listing both;
-  tap a row to open that tool call. The verdict is **failed** when the turn errored or was
-  blocked, or when its last command exited non-zero, **stopped** when it was interrupted or hit
-  the output limit, and **passed** otherwise. Only the last command decides, so a test that
-  failed and then passed within the turn reads as passed. When the loaded history starts
-  mid-turn the card says so.
+- **Turn receipt.** A completed turn ends with one compact row. Tap it to review its files,
+  commands and activity; each tool row opens its detail or diff. The verdict glyph and word are
+  **failed** when the turn errored or was blocked, or when its last command exited non-zero,
+  **stopped** when it was interrupted or hit the output limit, and **passed** otherwise. Only the
+  last command decides, so a test that failed and then passed within the turn reads as passed. A
+  failed receipt opens itself. When the loaded history starts mid-turn the receipt says so.
 - **Plan review.** When plan mode presents a plan, it appears above the composer as the plan
   itself with **Approve**, **Keep planning** (optional feedback goes back to the model) and
   **Reply instead** (closes the review, stays in plan mode and waits for your message). The push
@@ -453,7 +452,7 @@ listed in the output as not called, so a rename there still takes a live phone t
 
 ## Estimated cost
 
-The status line shows what a session has cost, but dsh reports tokens and never dollars, so the page
+Session details shows the estimated cost. dsh reports tokens and never dollars, so the page
 multiplies the reported buckets by a price table shipped in `public/prices.js`. That table is a
 transcription of the vendors' published rates for the models this dsh routes to, in USD per million
 tokens. Prices change, so treat the numbers as a snapshot and override them when they drift.
