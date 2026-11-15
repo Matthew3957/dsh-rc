@@ -17,7 +17,7 @@ const tagWithId = (id) => (HTML.match(new RegExp(`<[a-z]+[^>]*\\bid="${id}"[^>]*
 test('index.html keeps every id the scripts and tests query', () => {
   const ids = ['app', 'listView', 'chatView', 'listScroll', 'pendingGlobal', 'api403', 'running', 'runningHead',
     'runningCount', 'runningCards', 'sessions', 'moreBtn', 'listDock', 'dockActions', 'searchBtn', 'newBtn',
-    'searchRow', 'q', 'searchClose', 'menuListBtn', 'filterBtn', 'backBtn', 'title', 'subtitle', 'menuBtn',
+    'searchRow', 'q', 'searchClose', 'menuListBtn', 'listTitle', 'listLargeTitle', 'searchResults', 'backBtn', 'title', 'subtitle', 'menuBtn',
     'statusBar', 'statusLine', 'statusSummary', 'statusCaret', 'statusBreakdown', 'goalBar', 'feed', 'olderBtn',
     'msgs', 'working', 'workingText', 'jumpBtn', 'dock', 'pending', 'queueLine', 'cmdpop', 'attachments',
     'composer', 'attachBtn', 'fileInput', 'tmplBtn', 'input', 'micBtn', 'steerBtn', 'sendBtn', 'stopBtn',
@@ -46,9 +46,24 @@ test('both views have a nav bar with leading and trailing slots, and the list a 
 });
 
 test('every icon-only bar button has an accessible name', () => {
-  for (const id of ['menuListBtn', 'filterBtn', 'searchBtn', 'backBtn', 'menuBtn', 'sheetBack']) {
+  for (const id of ['menuListBtn', 'searchBtn', 'backBtn', 'menuBtn', 'sheetBack']) {
     assert.match(tagWithId(id), /aria-label="[^"]+"/, `#${id}`);
   }
+});
+
+test('the list has two bar actions, menu and search, and one bottom action, New session', () => {
+  // The sections are the filter: no filter button and no filter sheet.
+  assert.equal(tagWithId('filterBtn'), null);
+  assert.doesNotMatch(APP, /filterBtn|filterSheet|filteredSessions/);
+  const nav = HTML.slice(HTML.indexOf('<header class="nav" id="listNav">'), HTML.indexOf('</header>'));
+  assert.deepEqual([...nav.matchAll(/<button id="([^"]+)" class="navbtn"/g)].map((m) => m[1]), ['menuListBtn', 'searchBtn']);
+  assert.match(nav, /id="searchRow"[\s\S]*id="q"[\s\S]*id="searchClose"[^>]*>Cancel</, 'search opens in the bar with Cancel');
+  const dock = HTML.slice(HTML.indexOf('<footer id="listDock"'), HTML.indexOf('</footer>'));
+  assert.deepEqual([...dock.matchAll(/<button id="([^"]+)"/g)].map((m) => m[1]), ['newBtn']);
+  assert.match(tagWithId('newBtn'), /class="btn btn-primary"/);
+  // The large title is the page heading; the compact one is its scrolled echo.
+  assert.match(HTML, /<h1 class="largetitle" id="listLargeTitle">Sessions<\/h1>/);
+  assert.match(tagWithId('listTitle'), /aria-hidden="true"/);
 });
 
 // ---- behaviour ----

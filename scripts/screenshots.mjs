@@ -12,10 +12,11 @@
 //
 // Usage:
 //   PLAYWRIGHT_CORE=... node scripts/screenshots.mjs [--out docs/screenshots] [--scale 2] [--only sessions,chat]
-//                                                    [--scheme dark|light] [--theme <id>]
+//                                                    [--scheme dark|light] [--theme <id>] [--width 390]
 //
-// The README set is the default: dark scheme, default theme. --scheme and --theme render the
-// same scenes in any theme and either scheme, for review, without committing them:
+// The README set is the default: dark scheme, default theme, 390px wide. --scheme, --theme and
+// --width render the same scenes in any theme, either scheme and another phone width (320 and
+// 430 are worth a look), for review, without committing them:
 //   for s in light dark; do for t in default colourblind contrast; do
 //     node scripts/screenshots.mjs --scheme $s --theme $t --out /tmp/shots/$t-$s; done; done
 
@@ -41,11 +42,15 @@ function themeIds() {
 }
 
 function parseArgs(argv) {
-  const out = { out: path.join(ROOT, 'docs', 'screenshots'), scale: 2, only: null, scheme: 'dark', theme: 'default' };
+  const out = { out: path.join(ROOT, 'docs', 'screenshots'), scale: 2, only: null, scheme: 'dark', theme: 'default', width: WIDTH };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--out') out.out = path.resolve(argv[++i]);
     else if (a === '--scale') out.scale = Number(argv[++i]);
+    else if (a === '--width') {
+      out.width = Number(argv[++i]);
+      if (!(out.width >= 320 && out.width <= 1280)) throw new Error('--width must be between 320 and 1280');
+    }
     else if (a === '--scheme') {
       out.scheme = String(argv[++i]);
       if (!['dark', 'light'].includes(out.scheme)) throw new Error('--scheme must be dark or light');
@@ -75,21 +80,33 @@ function loadChromium() {
 
 // Each scene opens the page fresh and leaves it at the state worth a picture.
 // `pending` raises the approval and plan cards the mock replays when the page connects.
+// `storage` is this device's saved state before first paint, as app.js reads it.
 const SCENES = [
   {
+    // The whole board: the approval and the plan review in Needs you, the TOML migration in
+    // Running now, one finished session not yet read, one that failed earlier today, and the
+    // rest under Earlier.
     name: 'sessions',
+    pending: { approval: true, plan: true },
+    storage: (now) => {
+      const seen = Object.fromEntries(Object.values(ID).filter((id) => id !== ID.offByOne).map((id) => [id, now]));
+      return { 'dshm.seen': JSON.stringify(seen), 'dshm.seededAt': String(now - 2 * 3600_000), 'dshm.failed': JSON.stringify({ [ID.lint]: now - 3 * 3600_000 }) };
+    },
     async run(page, ctx) {
       await ctx.open('/');
-      await page.waitForSelector('#sessions .sess >> nth=7');
-      await page.waitForSelector('.run-card .run-more-txt:has-text("subagent")');
+      await page.waitForSelector('#pendingGlobal .sess >> nth=1');
+      await page.waitForSelector('#pendingGlobal .ask-sum:has-text("npm run build && npm test")');
+      await page.waitForSelector(`#runningCards .run-row[data-session="${ID.toml}"]`);
+      await page.waitForSelector('#sessions .sess >> nth=4');
     },
   },
   {
+    // Running now with the pagination session's jobs and subagents open under its live row.
     name: 'running',
     async run(page, ctx) {
       await ctx.open('/');
-      await page.waitForSelector('.run-card .run-more-txt:has-text("subagent")');
-      await page.click(`.run-card[data-session="${ID.pagination}"] .run-more`);
+      await page.waitForSelector('.run-row .run-more-txt:has-text("subagent")');
+      await page.click(`.run-row[data-session="${ID.pagination}"] .run-more`);
       await page.waitForSelector('.run-agent');
     },
   },
@@ -177,7 +194,7 @@ async function main() {
       if (args.only && !args.only.has(scene.name)) continue;
       mock.setPending({ approval: false, plan: false, ...scene.pending });
       const context = await browser.newContext({
-        viewport: { width: WIDTH, height: HEIGHT },
+        viewport: { width: args.width, height: HEIGHT },
         deviceScaleFactor: args.scale,
         isMobile: true,
         hasTouch: true,
@@ -189,6 +206,11 @@ async function main() {
       // The saved theme, as public/theme.js reads it before first paint. The default is no entry.
       if (args.theme !== 'default') {
         await context.addInitScript((id) => { try { localStorage.setItem('dsh-rc.theme', id); } catch {} }, args.theme);
+      }
+      if (scene.storage) {
+        await context.addInitScript((entries) => {
+          try { for (const [k, v] of Object.entries(entries)) localStorage.setItem(k, v); } catch {}
+        }, scene.storage(NOW));
       }
       const page = await context.newPage();
       // Date.now() stands still at NOW, so "4m 12s" and "23m" read the same on every run.
