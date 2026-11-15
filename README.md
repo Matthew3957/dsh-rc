@@ -13,11 +13,13 @@ API that dsh 0.1.7 and 0.2 speak (see Compatibility).
   it is nearly full, background jobs (stop them from the phone) and its subagent tree.
 - Chat with streaming replies, tool rows you tap to expand, file edits as line diffs, and a
   compact review receipt at the end of each turn (files changed, commands run, passed or failed).
-- Approval, question and plan-review cards above the composer; stop, steer or queue a message;
-  edit or remove queued messages.
+- Approval, question and plan-review cards above the composer, with the full command shown
+  before Allow; the send button turns into stop while a turn runs, a message queues by default
+  and can steer the running turn instead; edit or remove queued messages.
 - Session details one tap away: model and route, context fill, tokens, estimated cost and session facts.
-- Composer extras: slash commands, @-mention files, saved prompt templates, image attachments,
-  dictation where the browser has speech recognition.
+- Composer extras: slash commands, @-mention files, and a plus menu for photos and image files,
+  saved prompt templates and the command list; dictation where the browser has speech
+  recognition.
 - Session menu: session details, switch model, rename, fork, export, archive, and on dsh 0.2 set
   a goal or manage scheduled prompts.
 - Web Push for approvals, questions, finished turns and errors.
@@ -39,7 +41,7 @@ dsh. Every project, path and conversation in them is invented.
 |:-:|:-:|:-:|:-:|
 | <img src="docs/screenshots/sessions.png" width="180" alt="The session board in attention order"> | <img src="docs/screenshots/running.png" width="180" alt="Running now with a live row's jobs and subagents open"> | <img src="docs/screenshots/chat.png" width="180" alt="A prose chat with the turn receipt"> | <img src="docs/screenshots/diff.png" width="180" alt="A file edit opened as a line diff"> |
 | The board | Running now, jobs and subagents open | Chat with the turn receipt | Edit as a line diff |
-| <img src="docs/screenshots/summary.png" width="180" alt="A completed turn's receipt opened to its activity"> | <img src="docs/screenshots/status.png" width="180" alt="Session details with route, context and per-turn usage"> | <img src="docs/screenshots/plan.png" width="180" alt="Plan review card"> | <img src="docs/screenshots/approval.png" width="180" alt="Approval card above the composer"> |
+| <img src="docs/screenshots/summary.png" width="180" alt="A completed turn's receipt opened to its activity"> | <img src="docs/screenshots/status.png" width="180" alt="Session details with route, context and per-turn usage"> | <img src="docs/screenshots/plan.png" width="180" alt="Plan review sheet"> | <img src="docs/screenshots/approval.png" width="180" alt="Approval card above the composer"> |
 | Receipt opened to its activity | Session details and per-turn usage | Plan review | Approval while a turn runs |
 
 ## Setup
@@ -363,8 +365,9 @@ calls `job/kill`. There is no `job/kill` in the older API, so the stop control i
 page's recursion reaches grandchildren. A tree is read again as soon as it changes (a subagent
 added, a child starting or settling, the parent's catalog growing), so a parent whose turn ended
 while a background child works stays in Running now until the child settles. The `userQuestions`
-projection is mirrored as question frames: a `continued` row (the timed wait ran out and the agent moved on) shows as an expired
-card and is still answered through `userQuestions/answer`.
+projection is mirrored as question frames: a `continued` row (the timed wait ran out and the agent
+moved on) shows as an expired card that says so, with one action back to the session and nothing
+left to answer. Dismissing it only drops the card on the phone.
 
 ### Scheduled prompts (dsh 0.2 with the schedule plugin)
 
@@ -445,10 +448,11 @@ listed in the output as not called, so a rename there still takes a live phone t
   **stopped** when it was interrupted or hit the output limit, and **passed** otherwise. Only the
   last command decides, so a test that failed and then passed within the turn reads as passed. A
   failed receipt opens itself. When the loaded history starts mid-turn the receipt says so.
-- **Plan review.** When plan mode presents a plan, it appears above the composer as the plan
-  itself with **Approve**, **Keep planning** (optional feedback goes back to the model) and
-  **Reply instead** (closes the review, stays in plan mode and waits for your message). The push
-  notification reads "Plan ready for review".
+- **Plan review.** When plan mode presents a plan, a compact card above the composer shows its
+  goal and first two steps. **Review plan** opens the whole plan in a sheet with **Approve**,
+  **Keep planning** (optional feedback goes back to the model) and **Reply instead** (closes the
+  review, stays in plan mode and waits for your message). Closing the sheet leaves the card in
+  place. The push notification reads "Plan ready for review".
 
 ## Estimated cost
 

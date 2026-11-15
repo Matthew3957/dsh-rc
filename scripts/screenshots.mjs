@@ -163,20 +163,24 @@ const SCENES = [
     },
   },
   {
+    // The plan review sheet, opened from the compact card in the dock.
     name: 'plan',
     pending: { plan: true },
     async run(page, ctx) {
       await ctx.open('/#s/' + ID.router);
       await page.waitForSelector('.card.plan');
-      await page.evaluate(() => { const box = document.querySelector('#pending'); box.scrollTop = box.scrollHeight; });
+      await page.click('.card.plan .dec-btn');
+      await page.waitForSelector('#sheet:not([hidden]) .plan-doc');
+      await page.waitForTimeout(400); // let the sheet finish rising
     },
   },
   {
+    // The approval card with the whole command, above the composer while the turn waits on it.
     name: 'approval',
     pending: { approval: true },
     async run(page, ctx) {
       await ctx.open('/#s/' + ID.pagination);
-      await page.waitForSelector('.card.approval');
+      await page.waitForSelector('.card.approval .cmd-text');
       await page.waitForSelector('#working:not([hidden])');
     },
   },
