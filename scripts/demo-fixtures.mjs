@@ -399,7 +399,7 @@ export function buildDemo(now = Date.now()) {
   };
   const pressure = {
     [ID.pagination]: { pressureTokens: 83_500, projectedTokens: 84_200, contextWindow: 200_000 },
-    [ID.toml]: { pressureTokens: 154_000, projectedTokens: 156_400, contextWindow: 200_000 },
+    [ID.toml]: { pressureTokens: 169_000, projectedTokens: 171_200, contextWindow: 200_000 },
     [ID.offByOne]: { pressureTokens: 38_400, projectedTokens: 39_100, contextWindow: 200_000 },
   };
 
