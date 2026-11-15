@@ -623,28 +623,28 @@ test('a waiting card keeps its node, and its chosen option, when another card ar
   assert.equal(byClass(card, 'opt')[1].getAttribute('aria-checked'), 'true');
 });
 
-test('an expired request is a muted card with one action back to the session', async () => {
+test('an expired question says so and can still be answered', async () => {
   const t = await openWith([]);
   t.onMux({ type: 'question/requested', sessionId: 's1', callId: 'c1', expired: true, questions: [{ id: 'q', question: 'Which branch?', options: [{ label: 'main' }] }] }, { rpcId: 'question:s1:c1' });
   const card = byClass(t.el('#pending'), 'expired')[0];
   assert.ok(card, 'expired card rendered');
-  assert.equal(textOf(byClass(card, 'dec-title')[0]), 'This request expired');
-  const buttons = find(card, (n) => n.tagName === 'BUTTON');
-  assert.deepEqual(buttons.map(textOf), ['Back to the session'], 'no dead answer buttons');
-  assert.doesNotMatch(buttons[0].className, /btn-primary/);
-  assert.equal(byClass(card, 'opt').length, 0);
-  buttons[0].onclick();
+  assert.match(textOf(byClass(card, 'kicker')[0]), /^Expired question/);
+  assert.match(textOf(byClass(card, 'expired-note')[0]), /You can still answer/);
+  assert.deepEqual(find(card, (n) => n.tagName === 'BUTTON' && !/\bopt\b/.test(n.className)).map(textOf), ['Send answer', 'Dismiss']);
+  byClass(card, 'opt')[0].onclick();
+  buttonNamed(card, 'Send answer').onclick();
   await tick(); await tick();
-  assert.equal(responds(t)[0].body.result.ok, false, 'dismissed, not answered');
-  assert.equal(byClass(t.el('#pending'), 'expired').length, 0);
+  const r = responds(t)[0].body.result;
+  assert.equal(r.ok, true, 'a late answer still goes to dsh');
+  assert.deepEqual(r.value.answer.answers[0].selected, ['main']);
 });
 
-test('an expired plan review offers no Approve', async () => {
+test('an expired plan review keeps Review plan and says it expired', async () => {
   const t = await openWith([]);
   t.onMux({ type: 'question/requested', sessionId: 's1', callId: 'c2', expired: true, questions: [PLAN_QUESTION] }, { rpcId: 'question:s1:c2' });
   const card = byClass(t.el('#pending'), 'expired')[0];
-  assert.match(textOf(byClass(card, 'kicker')[0]), /^Plan review/);
-  assert.deepEqual(find(card, (n) => n.tagName === 'BUTTON').map(textOf), ['Back to the session']);
+  assert.match(textOf(byClass(card, 'kicker')[0]), /^Expired plan review/);
+  assert.ok(buttonNamed(card, 'Review plan'));
 });
 
 // --- Composer (PR 5): one send/stop control and Queue by default -------------
