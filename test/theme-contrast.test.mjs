@@ -106,6 +106,19 @@ function textPairs(p) {
   pairs.push(['details: Copy action (accent on card)', c('accent'), c('card')]);
   pairs.push(['header: high-context chip (fg on warn tint over bg)', c('fg'), mix(c('warn'), 0.14, c('bg'))]);
   pairs.push(['header: very-high-context chip (fg on err tint over bg)', c('fg'), mix(c('err'), 0.14, c('bg'))]);
+  // Settings and the session menu (PR 6). A grouped sheet is the page colour; its groups are
+  // card-surface rows. Headers and footers sit on the page, labels and values on the card, the
+  // link-style rows (Send a test, Copy, Share, About links) in the accent and Archive in red.
+  pairs.push(['settings: row label (fg on card)', c('fg'), c('card')]);
+  pairs.push(['settings: row value (muted on card)', c('muted'), c('card')]);
+  pairs.push(['settings: group header and footer (muted on bg)', c('muted'), c('bg')]);
+  pairs.push(['settings: sheet title and Done (fg and accent on bg)', c('accent'), c('bg')]);
+  pairs.push(['settings: action row (accent on card)', c('accent'), c('card')]);
+  pairs.push(['settings: Archive row (err on card)', c('err'), c('card')]);
+  // An inline error keeps its words in --text; the red is in its cross glyph and the tint.
+  pairs.push(['settings: inline error (fg on err tint over bg)', c('fg'), mix(c('err'), 0.1, c('bg'))]);
+  pairs.push(['appearance: theme name (fg on card)', c('fg'), c('card')]);
+  pairs.push(['appearance: selected check (accent-fg on accent)', c('accent-fg'), c('accent')]);
   return pairs;
 }
 
@@ -222,6 +235,24 @@ test('status glyphs stay visible on the page and on cards (3:1, non-text contras
   }
 });
 
+test('the notifications switch and the Appearance ring stay visible (3:1, non-text contrast)', () => {
+  // The fallback switch (style.css input.switch-fb): off is a muted track and a card-coloured
+  // thumb, on is the accent track and an on-accent thumb, all on a card row. The selected theme
+  // card's ring is the accent, outside a page-coloured gap, and its check sits on the card.
+  for (const id of THEMES) for (const dark of [false, true]) {
+    const p = palette(id, dark), m = `${id} ${dark ? 'dark' : 'light'}`;
+    const pairs = [
+      ['switch off: track on its row', 'muted', 'card'], ['switch off: thumb on its track', 'card', 'muted'],
+      ['switch on: track on its row', 'accent', 'card'], ['switch on: thumb on its track', 'accent-fg', 'accent'],
+      ['selected ring on the page', 'accent', 'bg'], ['selected check on its card', 'accent', 'card'],
+    ];
+    for (const [what, a, b] of pairs) {
+      const r = ratio(hex(p[a]), hex(p[b]));
+      assert.ok(r >= 3, `${m}: ${what} is ${r.toFixed(2)}`);
+    }
+  }
+});
+
 // ---- public/theme.js ----
 function load({ stored, metas, throwStore = false } = {}) {
   const store = new Map(stored ? [['dsh-rc.theme', stored]] : []);
@@ -250,6 +281,23 @@ test('theme.js lists the same themes as the stylesheet and the page background m
     assert.equal(t.bg[0].toLowerCase(), palette(t.id, false).bg, `${t.id} light bg`);
     assert.equal(t.bg[1].toLowerCase(), palette(t.id, true).bg, `${t.id} dark bg`);
   }
+});
+
+test('theme.js swatches paint each theme with its own page, card and accent, light and dark', () => {
+  const { api } = load();
+  assert.equal(api.THEMES.length, THEMES.length, 'every theme has a card in Appearance');
+  for (const t of api.THEMES) {
+    for (const [scheme, dark] of [['light', false], ['dark', true]]) {
+      const p = palette(t.id, dark), s = t.swatch && t.swatch[scheme];
+      assert.ok(s, `${t.id} has a ${scheme} swatch`);
+      for (const k of ['bg', 'card', 'accent']) assert.equal(String(s[k]).toLowerCase(), p[k], `${t.id} ${scheme} swatch ${k}`);
+    }
+    assert.equal(t.swatch.light.bg, t.bg[0], `${t.id} light swatch and status bar agree`);
+    assert.equal(t.swatch.dark.bg, t.bg[1], `${t.id} dark swatch and status bar agree`);
+  }
+  // Seven different previews: no two themes may draw the same swatch.
+  const key = (t) => JSON.stringify(t.swatch);
+  assert.equal(new Set(api.THEMES.map(key)).size, api.THEMES.length, 'every swatch is distinct');
 });
 
 test('index.html carries the default status-bar colours and loads theme.js before first paint', async () => {

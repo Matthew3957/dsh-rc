@@ -175,6 +175,31 @@ const SCENES = [
     },
   },
   {
+    // Settings, opened from the gear on the Sessions bar. No tunnel runs in the demo, so the
+    // QR row (and with it a real address) never appears.
+    name: 'settings',
+    async run(page, ctx) {
+      await ctx.open('/');
+      await page.click('#settingsBtn');
+      await page.waitForSelector('#sheet:not([hidden]) .set-group');
+      // The notification value fills in once the page has asked the browser.
+      await page.waitForFunction(() => [...document.querySelectorAll('#sheet .set-row')].some((r) => /Notifications/.test(r.textContent) && /\S/.test(r.querySelector('.set-val').textContent)));
+      await page.waitForTimeout(400); // let the sheet finish rising
+    },
+  },
+  {
+    // Settings > Appearance: the seven theme cards, the current one ringed and ticked.
+    name: 'appearance',
+    async run(page, ctx) {
+      await ctx.open('/');
+      await page.click('#settingsBtn');
+      await page.waitForSelector('#sheet:not([hidden]) .set-group');
+      await page.click('#sheet .set-row:has-text("Appearance")');
+      await page.waitForSelector('#sheet .theme-grid .theme-card[aria-checked="true"]');
+      await page.waitForTimeout(400);
+    },
+  },
+  {
     // The approval card with the whole command, above the composer while the turn waits on it.
     name: 'approval',
     pending: { approval: true },

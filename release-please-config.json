@@ -19,7 +19,10 @@
   "packages": {
     ".": {
       "release-type": "node",
-      "package-name": "dsh-rc"
+      "package-name": "dsh-rc",
+      "extra-files": [
+        { "type": "generic", "path": "public/app.js" }
+      ]
     }
   }
 }

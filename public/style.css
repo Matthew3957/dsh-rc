@@ -385,7 +385,7 @@ html[data-theme="contrast"] .field:focus { box-shadow: none; outline: 2px solid 
 .sess .ask-sum { display: block; margin-top: 2px; font-family: var(--font-mono); font-size: var(--text-mono); line-height: var(--text-mono-lh); color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .sess.unread .t { font-weight: var(--weight-semibold); }
 .failed-word { color: var(--danger); font-weight: var(--weight-semibold); }
-.sess-chev {
+.sess-chev, .set-chev {
   flex-shrink: 0; align-self: center; width: 12px; height: 12px; background: var(--text-2);
   -webkit-mask: var(--chev) center / 12px 12px no-repeat; mask: var(--chev) center / 12px 12px no-repeat;
   --chev: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'><path d='M4.25 1.75 8.5 6l-4.25 4.25' fill='none' stroke='black' stroke-width='1.75' stroke-linecap='round' stroke-linejoin='round'/></svg>");
@@ -844,6 +844,129 @@ html[data-theme="contrast"] #sheetBody :is(input, select, textarea):focus { box-
 @media (hover: hover) { .menuitem:hover { background: var(--surface-fill); } }
 .menuitem:active { background: var(--surface-fill); }
 .grp { font-size: var(--text-section); line-height: var(--text-section-lh); font-weight: var(--weight-semibold); color: var(--text-2); margin: var(--s-6) 0 var(--s-1); }
+
+/* Grouped sheets: Settings, its pages and the session menu. The sheet takes the page colour, so
+   each group reads as one inset card-surface list: 52px rows, separators inset to the text, a
+   13px value and a chevron. A 13px header sits above a group and its one explanation in a quiet
+   footer below, instead of a subtitle on every row. */
+#sheet[data-grouped], #sheet[data-grouped] .sheetfoot { background: var(--canvas); }
+.set-sec { margin: 0 0 var(--s-6); }
+.set-sec:last-child { margin-bottom: var(--s-2); }
+.set-head {
+  margin: 0; padding: 0 var(--s-4) var(--s-2);
+  font-size: var(--text-section); line-height: var(--text-section-lh); font-weight: var(--weight-semibold); color: var(--text-2);
+}
+.set-group { background: var(--surface); border: 1px solid var(--card-border); border-radius: var(--r-md); overflow: hidden; }
+.set-group > * { position: relative; }
+.set-group > * + *::before { content: ''; position: absolute; top: 0; left: var(--s-4); right: 0; border-top: 1px solid var(--separator); pointer-events: none; }
+.set-foot {
+  margin: var(--s-2) 0 0; padding: 0 var(--s-4);
+  font-size: var(--text-caption); line-height: var(--text-caption-lh); color: var(--text-2); overflow-wrap: anywhere;
+}
+.set-foot-alone { margin: 0 0 var(--s-4); }
+.set-row {
+  display: flex; align-items: center; gap: var(--s-3); width: 100%;
+  min-height: max(52px, calc(52rem / 17)); padding: var(--s-3) var(--s-4);
+  text-align: left; color: var(--text); text-decoration: none;
+  font-size: var(--text-body); line-height: var(--text-nav-lh); font-weight: var(--weight-regular);
+  -webkit-user-select: none; user-select: none;
+}
+:is(button, a, label).set-row { cursor: pointer; }
+:is(button, a, label).set-row:active { background: var(--surface-fill); }
+@media (hover: hover) { :is(button, a).set-row:hover { background: var(--surface-fill); } }
+.set-row:disabled { opacity: .5; cursor: default; }
+.set-row:focus-visible { outline-offset: -2px; }
+.set-label { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.set-label.quiet { color: var(--text-2); }
+.set-val {
+  flex: 0 1 auto; min-width: 0; max-width: 60%; text-align: right;
+  font-size: var(--text-caption); line-height: var(--text-caption-lh); color: var(--text-2);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.set-val.mono-val { font-family: var(--font-mono); font-size: var(--text-mono); line-height: var(--text-mono-lh); font-variant-numeric: tabular-nums; }
+.set-row.action { color: var(--tint); }
+.set-row.danger { color: var(--danger); }
+/* An outside link: a small arrow out of the box instead of the chevron. */
+.set-ext {
+  flex-shrink: 0; width: 12px; height: 12px; background: var(--text-2);
+  -webkit-mask: var(--ext) center / 12px 12px no-repeat; mask: var(--ext) center / 12px 12px no-repeat;
+  --ext: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'><path d='M4.5 2H10v5.5M10 2 2.5 9.5' fill='none' stroke='black' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/></svg>");
+}
+/* The switch row is a label, so the whole 52px row toggles it. */
+#sheetBody label.set-row {
+  display: flex; margin: 0; color: var(--text);
+  font-size: var(--text-body); line-height: var(--text-nav-lh); font-weight: var(--weight-regular);
+}
+/* Switch: Safari 17.4+ draws its own for input[switch]; elsewhere app.js adds .switch-fb and this
+   draws a 44 by 28 one. Off is a muted track with a card-coloured thumb on the left; on is the
+   accent with the on-accent thumb on the right, so position says it as well as colour. */
+input[switch] { flex-shrink: 0; margin: 0; accent-color: var(--tint); }
+input.switch-fb {
+  -webkit-appearance: none; appearance: none; width: 44px; height: 28px; border-radius: var(--r-pill);
+  background: radial-gradient(circle at 14px 50%, var(--surface) 0 11px, transparent 12px), var(--text-2);
+  cursor: pointer;
+}
+input.switch-fb:checked { background: radial-gradient(circle at 30px 50%, var(--on-tint) 0 11px, transparent 12px), var(--tint); }
+input.switch-fb:disabled { opacity: .5; cursor: default; }
+input.switch-fb:focus-visible { outline: 2px solid var(--tint); outline-offset: 2px; }
+/* Ordered steps and a short list inside a group, at the callout size. */
+.set-steps { margin: 0; padding: var(--s-3) var(--s-4) var(--s-3) calc(var(--s-4) + 1.25em); font-size: var(--text-callout); line-height: var(--text-callout-lh); color: var(--text); }
+.set-steps li { padding: 2px 0; }
+/* An inline error: the words stay in --text on a light red tint; the cross carries the red. */
+.set-error {
+  display: flex; align-items: flex-start; gap: var(--s-3); margin: var(--s-2) 0 0; padding: var(--s-3) var(--s-4);
+  border-radius: var(--r-md); background: color-mix(in srgb, var(--danger) 10%, var(--canvas)); color: var(--text);
+  font-size: var(--text-callout); line-height: var(--text-callout-lh);
+}
+.set-error .glyph { margin-top: 2px; }
+.set-error p { margin: 0; overflow-wrap: anywhere; }
+.set-error .set-error-detail { margin-top: var(--s-1); font-family: var(--font-mono); font-size: var(--text-mono); line-height: var(--text-mono-lh); }
+.set-note-slot:empty { display: none; }
+/* Fields on a grouped page take the card surface, like the rows around them. */
+#sheet[data-grouped] #sheetBody :is(input[type="search"], textarea) { background: var(--surface); border-color: var(--separator); }
+html[data-theme="contrast"] #sheet[data-grouped] #sheetBody :is(input[type="search"], textarea) { border-color: var(--line); }
+/* Plugins: the same glyph, name and state word, now as rows of a group. */
+.set-group .plug { min-height: max(52px, calc(52rem / 17)); padding: var(--s-2) var(--s-4); border-bottom: 0; }
+.set-group .plug + .plug::before { left: calc(var(--s-4) + 28px); }
+.set-group .pmain b { font-weight: var(--weight-regular); font-size: var(--text-body); line-height: var(--text-nav-lh); }
+
+/* Appearance: a two-column grid of theme cards. Each card is a split swatch (the light scheme on
+   the left, the dark on the right: page, a card and the accent) over the theme's name. The
+   selected card has a ring and a check. */
+.theme-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--s-3); }
+.theme-card {
+  display: flex; flex-direction: column; gap: var(--s-2); min-width: 0; padding: var(--s-2);
+  border-radius: var(--r-md); border: 1px solid var(--card-border);
+  background: var(--surface); color: var(--text); text-align: left;
+}
+.theme-card:active { background: var(--surface-fill); }
+.theme-card[aria-checked="true"] { box-shadow: 0 0 0 2px var(--canvas), 0 0 0 4px var(--tint); }
+.theme-card:focus-visible { outline-offset: 6px; }
+.swatch { display: grid; grid-template-columns: 1fr 1fr; height: max(64px, calc(64rem / 17)); border-radius: var(--r-sm); overflow: hidden; border: 1px solid var(--separator); }
+.sw-half { display: flex; align-items: flex-end; min-width: 0; padding: var(--s-2) var(--s-1); background: var(--sw-bg); }
+.sw-card {
+  display: flex; align-items: center; gap: var(--s-1); width: 100%; min-width: 0; height: 28px; padding: 0 var(--s-2);
+  border-radius: var(--r-sm); background: var(--sw-card);
+}
+.sw-light .sw-card { color: #000; box-shadow: 0 0 0 1px rgb(0 0 0 / .08); }
+.sw-dark .sw-card { color: #fff; box-shadow: 0 0 0 1px rgb(255 255 255 / .08); }
+.sw-line { flex: 1 1 0; min-width: 10px; height: 6px; border-radius: var(--r-pill); background: currentColor; opacity: .22; }
+.sw-dot { flex: 0 1 22px; min-width: 14px; height: 12px; border-radius: var(--r-pill); background: var(--sw-accent); }
+.theme-meta { display: flex; align-items: center; gap: var(--s-2); min-height: 24px; padding: 0 var(--s-1); }
+.theme-name { flex: 1; min-width: 0; font-size: var(--text-callout); line-height: var(--text-callout-lh); overflow-wrap: anywhere; }
+/* The check reserves its space even when unselected, and the label keeps one weight, so
+   selecting a theme never reflows the row or wraps a name that fitted before. */
+.theme-check { visibility: hidden; flex-shrink: 0; width: 22px; height: 22px; border-radius: 50%; background: var(--tint); position: relative; }
+.theme-check::before {
+  content: ''; position: absolute; inset: 0; background: var(--on-tint);
+  -webkit-mask: var(--check) center / 14px 14px no-repeat; mask: var(--check) center / 14px 14px no-repeat;
+  --check: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><path d='M3.2 8.5l3 3 6.6-6.8' fill='none' stroke='black' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'/></svg>");
+}
+.theme-card[aria-checked="true"] .theme-check { visibility: visible; }
+.theme-grid + .set-foot { margin-top: var(--s-3); }
+/* QR: Copy and Share under the address. */
+.qr-acts { display: flex; justify-content: center; gap: var(--s-2); margin: var(--s-3) 0 var(--s-4); }
+.qr-acts .btn { flex: 1; max-width: 168px; }
 
 /* Toast: one at a time, 13px, a pill above the bar, a short rise and fade. */
 #toast {

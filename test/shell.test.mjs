@@ -17,7 +17,8 @@ const tagWithId = (id) => (HTML.match(new RegExp(`<[a-z]+[^>]*\\bid="${id}"[^>]*
 test('index.html keeps every id the scripts and tests query', () => {
   const ids = ['app', 'listView', 'chatView', 'listScroll', 'pendingGlobal', 'api403', 'running', 'runningHead',
     'runningCount', 'runningCards', 'sessions', 'moreBtn', 'listDock', 'dockActions', 'searchBtn', 'newBtn',
-    'searchRow', 'q', 'searchClose', 'menuListBtn', 'listTitle', 'listLargeTitle', 'searchResults', 'backBtn', 'title', 'subtitle', 'menuBtn',
+    // PR 6: the list bar's menu button became the Settings gear (#settingsBtn), trailing.
+    'searchRow', 'q', 'searchClose', 'settingsBtn', 'listTitle', 'listLargeTitle', 'searchResults', 'backBtn', 'title', 'subtitle', 'menuBtn',
     'sessionTitleButton', 'goalBar', 'feed', 'olderBtn',
     'msgs', 'working', 'workingText', 'jumpBtn', 'dock', 'pending', 'queueLine', 'cmdpop', 'attachments',
     // PR 5: the composer is one field. #tmplBtn moved into the plus menu (#attachBtn), the
@@ -49,17 +50,24 @@ test('both views have a nav bar with leading and trailing slots, and the list a 
 });
 
 test('every icon-only bar button has an accessible name', () => {
-  for (const id of ['menuListBtn', 'searchBtn', 'backBtn', 'menuBtn', 'sheetBack']) {
+  for (const id of ['settingsBtn', 'searchBtn', 'backBtn', 'menuBtn', 'sheetBack']) {
     assert.match(tagWithId(id), /aria-label="[^"]+"/, `#${id}`);
   }
 });
 
-test('the list has two bar actions, menu and search, and one bottom action, New session', () => {
+test('the list has two bar actions, search and Settings, and one bottom action, New session', () => {
   // The sections are the filter: no filter button and no filter sheet.
   assert.equal(tagWithId('filterBtn'), null);
   assert.doesNotMatch(APP, /filterBtn|filterSheet|filteredSessions/);
   const nav = HTML.slice(HTML.indexOf('<header class="nav" id="listNav">'), HTML.indexOf('</header>'));
-  assert.deepEqual([...nav.matchAll(/<button id="([^"]+)" class="navbtn"/g)].map((m) => m[1]), ['menuListBtn', 'searchBtn']);
+  assert.deepEqual([...nav.matchAll(/<button id="([^"]+)" class="navbtn"/g)].map((m) => m[1]), ['searchBtn', 'settingsBtn']);
+  // Both trailing, as bare glyphs: the leading slot is empty so the compact title stays centred.
+  const lead = nav.slice(nav.indexOf('class="nav-lead"'), nav.indexOf('id="listTitle"'));
+  assert.doesNotMatch(lead, /<button/);
+  const trail = nav.slice(nav.indexOf('class="nav-trail"'), nav.indexOf('id="searchRow"'));
+  assert.match(trail, /id="searchBtn"[\s\S]*id="settingsBtn"/);
+  assert.match(tagWithId('settingsBtn'), /aria-label="Settings"/);
+  assert.doesNotMatch(HTML, /id="menuListBtn"/, 'no second menu on the Sessions bar');
   assert.match(nav, /id="searchRow"[\s\S]*id="q"[\s\S]*id="searchClose"[^>]*>Cancel</, 'search opens in the bar with Cancel');
   const dock = HTML.slice(HTML.indexOf('<footer id="listDock"'), HTML.indexOf('</footer>'));
   assert.deepEqual([...dock.matchAll(/<button id="([^"]+)"/g)].map((m) => m[1]), ['newBtn']);
