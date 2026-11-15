@@ -171,11 +171,15 @@ input, textarea, select { font: inherit; color: inherit; }
 /* Keyboard open (app.js sets .kb): follow the visible window rather than the screen. */
 html.kb #app { top: var(--vvtop); height: var(--vvh); }
 html.kb #dock { padding-bottom: var(--s-2); }
-html.kb #input { max-height: calc(var(--vvh) * .4); }
-html.kb #queueLine { max-height: calc(var(--vvh) * .25); }
-/* Typing into a question or plan card: the card gets the room, the composer steps aside. */
+/* With the keyboard up the window is short: the field keeps its five lines only if they fit, and
+   the queue editor and the decision stack shrink so the composer always stays in view. */
+html.kb #input { max-height: min(calc(max(16px, var(--text-body)) * var(--text-body-lh) * 5 + 20px), calc(var(--vvh) * .3)); }
+html.kb .qlist { max-height: calc(var(--vvh) * .22); }
 html.kb #pending { max-height: calc(var(--vvh) * .3); }
-html.kb-card #feed, html.kb-card #goalBar, html.kb-card #jumpBtn,
+html.kb #cmdpop { max-height: calc(var(--vvh) * .3); }
+/* Typing into a question card's own field: the card gets the room, the composer steps aside.
+   (The plan's feedback field is in its sheet, which follows the keyboard on its own.) */
+html.kb-card #feed, html.kb-card #goalBar, html.kb-card #jumpBtn, html.kb-card #cmdpop, html.kb-card #modeRow,
 html.kb-card #composer, html.kb-card #queueLine, html.kb-card #attachments { display: none; }
 html.kb-card #dock { flex: 1; min-height: 0; }
 html.kb-card #pending { flex: 1; min-height: 0; max-height: none; }
@@ -251,14 +255,6 @@ html.kb #toast { bottom: calc(var(--vvbot) + 90px); }
 .btn .ico { width: 20px; height: 20px; stroke-width: 2; }
 .textbtn { min-height: var(--hit); padding: 0 var(--s-2); }
 
-/* The older names the transcript and composer still use (PR 4 and 5 rebuild them). */
-.icon { min-width: 40px; height: 40px; display: grid; place-items: center; font-size: 22px; border-radius: var(--r-sm); }
-.icon:active { background: var(--surface-fill); }
-.round { position: relative; border-radius: 50%; width: 38px; height: 38px; min-width: 38px; font-size: 18px; flex-shrink: 0; }
-/* The 38px circles keep their look; the hit box is 44px, and the composer's 6px gap means
-   neighbouring boxes meet without overlapping. */
-.round::after { content: ''; position: absolute; inset: -3px; }
-.accent { background: var(--tint); color: var(--on-tint); }
 .ghost { color: var(--text-2); padding: 10px; font-size: 14px; }
 .wide { width: 100%; }
 .chip { font-size: var(--text-caption); line-height: var(--text-caption-lh); padding: var(--s-1) var(--s-3); border-radius: var(--r-pill); border: 1px solid var(--separator); color: var(--text-2); flex-shrink: 0; }
@@ -592,36 +588,96 @@ html[data-theme="contrast"] .field:focus { box-shadow: none; outline: 2px solid 
 #olderBtn:active { opacity: .72; }
 
 
-/* Dock / composer */
-#dock { flex-shrink: 0; border-top: 1px solid var(--separator); background: var(--canvas); padding: var(--s-2) max(10px, calc((100% - var(--col)) / 2 + 10px)) calc(var(--safe-b) + 8px); display: flex; flex-direction: column; gap: var(--s-2); }
-/* Two rows, as in Claude's app: the text box gets the full width, the controls sit under it
-   (attach, templates and mic on the left; queue, send or stop on the right). */
-#composer { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
-#composer #input { order: -1; flex: 1 1 100%; }
-#composer #steerBtn { margin-left: auto; }
-#composer #steerBtn[hidden] + #sendBtn { margin-left: auto; }
-#composer #sendBtn[hidden] + #stopBtn { margin-left: auto; }
-#input { flex: 1; resize: none; border: 1px solid var(--card-border); background: var(--surface-sunk); border-radius: var(--r-bubble); padding: var(--s-2) var(--s-3); font-size: max(16px, var(--text-body)); line-height: 1.35; max-height: 40vh; min-height: var(--hit); outline: none; }
-#input:focus { border-color: var(--tint); }
-/* Dictation is live: the mic button pulses red until it is tapped off again. */
-#micBtn.live { background: var(--danger); color: var(--on-tint); animation: pulse 1.2s ease-in-out infinite; }
-@media (prefers-reduced-motion: reduce) { #micBtn.live { animation: none; } }
-.stop { background: var(--text); color: var(--canvas); font-size: 13px; }
-#queueLine { font-size: 12px; color: var(--text-2); padding: 0 var(--s-1); max-height: 30vh; overflow-y: auto; }
-.qcount { margin-bottom: 2px; }
-.qitem { display: flex; align-items: center; gap: 6px; padding: var(--s-1) 2px; border-top: 1px solid var(--separator); }
-.qitem .qtext { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.qitem .qact { flex: 0 0 32px; height: 32px; border-radius: var(--r-sm); font-size: 13px; background: var(--surface-fill); border: 0; color: inherit; }
-.qitem .qact.wide { flex: 0 0 auto; padding: 0 14px; }
-.qitem .qact.accent { background: var(--tint); color: var(--on-tint); }
+/* Dock: a hairline top on the canvas, 8 by 12 padding plus the home indicator. No floating dock
+   and no shadow. It stacks the decision cards, the queued banner, the slash list, attachments,
+   the Queue/Steer row and the composer. */
+#dock {
+  flex-shrink: 0; display: flex; flex-direction: column; gap: var(--s-2);
+  border-top: 1px solid var(--separator); background: var(--canvas);
+  padding: var(--s-2) max(var(--s-3), calc((100% - var(--col)) / 2 + var(--s-3)), calc(env(safe-area-inset-left) + var(--s-2)), calc(env(safe-area-inset-right) + var(--s-2))) calc(var(--safe-b) + var(--s-2));
+}
+
+/* Composer: one field between a plus and the send control, the mic beside it where dictation
+   exists. Each control is a 32px circle inside a 44px hit box; the row hugs the field's bottom
+   edge so the controls stay put while the field grows. */
+#composer { display: flex; align-items: flex-end; gap: var(--s-2); }
+.cbtn {
+  position: relative; flex: none; display: grid; place-items: center;
+  width: var(--hit); height: var(--hit); padding: 0; border-radius: 50%; color: var(--text);
+}
+.cbtn-ink {
+  display: grid; place-items: center; width: 32px; height: 32px; border-radius: 50%;
+  transition: transform var(--dur-fast) var(--ease-standard), background-color var(--dur-fast) var(--ease-standard);
+}
+.cbtn:active .cbtn-ink { transform: scale(.94); }
+.cbtn svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 2.25; stroke-linecap: round; stroke-linejoin: round; }
+.cbtn.plus .cbtn-ink { background: var(--surface-fill); }
+.cbtn.mic { color: var(--text-2); }
+/* Dictation is live: the mic fills red and pulses until it is tapped off again. */
+#micBtn.live .cbtn-ink { background: var(--danger); color: var(--on-tint); animation: pulse 1.2s ease-in-out infinite; }
+@media (prefers-reduced-motion: reduce) { #micBtn.live .cbtn-ink { animation: none; } }
+/* Send: accent when there is something to send, muted when empty, quiet (filled-quiet, not the
+   accent) while a decision waits. Stop: the same control as a square on the text colour. */
+.cbtn.send .cbtn-ink { background: var(--tint); color: var(--on-tint); }
+.cbtn.send:disabled { cursor: default; }
+.cbtn.send:disabled .cbtn-ink { background: var(--surface-fill); color: var(--text-2); }
+.cbtn.send.quiet .cbtn-ink { background: var(--surface-fill); color: var(--text); }
+.cbtn.send[data-state="stop"] .cbtn-ink { background: var(--text); color: var(--canvas); }
+/* While a decision waits the same stop control steps back to a quiet fill, so Allow is the only
+   prominent action on screen; the square still says what it does. */
+.cbtn.send[data-state="stop"].quiet .cbtn-ink { background: var(--surface-fill); color: var(--text); }
+.cbtn.send .i-stop { fill: currentColor; stroke: none; }
+.cbtn.send[data-state="send"] .i-stop, .cbtn.send[data-state="stop"] .i-send { display: none; }
+html[data-theme="contrast"] .cbtn.plus .cbtn-ink, html[data-theme="contrast"] .cbtn.send:is(:disabled, .quiet) .cbtn-ink { box-shadow: inset 0 0 0 1px var(--separator); }
+/* One field: 44px and up, 22px corners, sunken, 17px text. About five lines, then it scrolls. */
+#input {
+  flex: 1 1 auto; min-width: 0; resize: none; margin: 0;
+  min-height: var(--hit); max-height: calc(max(16px, var(--text-body)) * var(--text-body-lh) * 5 + 20px); overflow-y: auto;
+  padding: 9px var(--s-4); border: 1px solid var(--card-border); border-radius: var(--r-bubble);
+  background: var(--surface-sunk); color: var(--text);
+  font-size: max(16px, var(--text-body)); line-height: var(--text-body-lh);
+  outline: none; transition: box-shadow var(--dur-fast) var(--ease-standard);
+}
+#input::placeholder { color: var(--text-2); }
+#input:focus { box-shadow: 0 0 0 3px var(--focus); }
+html[data-theme="contrast"] #input:focus { box-shadow: none; outline: 2px solid var(--tint); outline-offset: 0; }
+
+/* Queue or Steer: a labelled segmented at the trailing edge, only while a turn runs and there is
+   something to send. The hint says what the current choice does. */
+.mode-row { justify-content: flex-end; gap: var(--s-3); }
+.mode-hint { min-width: 0; font-size: var(--text-caption); line-height: var(--text-caption-lh); color: var(--text-2); text-align: right; }
+
+/* Queued messages: one 13px line, "2 queued · Review". Review opens the editor in place, the one
+   nested scroll in the dock. */
+#queueLine { font-size: var(--text-caption); line-height: var(--text-caption-lh); color: var(--text-2); }
+.qbanner { display: flex; align-items: center; gap: 6px; min-height: 36px; padding: 0 var(--s-1); white-space: nowrap; }
+.qcount { color: var(--text); font-weight: var(--weight-semibold); }
+.qreview { position: relative; padding: 0 var(--s-1); color: var(--tint); font-weight: var(--weight-semibold); }
+.qreview::after { content: ''; position: absolute; inset: -4px -8px; } /* the 44px hit box */
+.qlist { max-height: 30vh; overflow-y: auto; overscroll-behavior: contain; border-top: 1px solid var(--separator); }
+.qitem { display: flex; align-items: center; gap: var(--s-2); min-height: var(--hit); padding: 0 0 0 var(--s-1); border-bottom: 1px solid var(--separator); }
+.qitem .qtext { flex: 1; min-width: 0; color: var(--text); font-size: var(--text-callout); line-height: var(--text-callout-lh); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.qitem .qimgs { margin-left: var(--s-2); color: var(--text-2); font-size: var(--text-caption); }
+.qitem .qact { flex: none; display: grid; place-items: center; width: var(--hit); height: var(--hit); border-radius: var(--r-sm); color: var(--text-2); }
+.qitem .qact .ico { width: 20px; height: 20px; }
+.qitem .qact:active { background: var(--surface-fill); }
+.qitem .qact.wide { width: auto; padding: 0 var(--s-3); color: var(--text); font-size: var(--text-callout); font-weight: var(--weight-semibold); }
+.qitem .qact.accent { color: var(--tint); }
 .qitem .qact:disabled { opacity: .5; }
-.qitem.editing { flex-direction: column; align-items: stretch; }
-.qitem.editing .row { display: flex; justify-content: flex-end; gap: 6px; }
-.qedit { width: 100%; font-size: 16px; border: 1px solid var(--separator); border-radius: var(--r-sm); padding: var(--s-2); background: var(--surface); resize: vertical; }
-#attachments { display: flex; gap: var(--s-2); overflow-x: auto; }
-.thumb { position: relative; flex-shrink: 0; }
+.qitem.editing { flex-direction: column; align-items: stretch; padding: var(--s-2) 0; }
+.qitem.editing .row { display: flex; justify-content: flex-end; gap: var(--s-1); }
+.qedit { width: 100%; min-height: var(--hit); font-size: max(16px, var(--text-body)); line-height: var(--text-body-lh); border: 1px solid var(--card-border); border-radius: var(--r-sm); padding: var(--s-2) var(--s-3); background: var(--surface-sunk); color: var(--text); resize: vertical; outline: none; }
+.qedit:focus { box-shadow: 0 0 0 3px var(--focus); }
+.ico-wrap { display: inline-grid; place-items: center; }
+
+/* Attachments: 56px thumbnails, each with a 22px remove glyph inside a 44px hit box that
+   overhangs the corner (the row's top and end padding keep that box inside the scroller). */
+#attachments { display: flex; gap: var(--s-3); overflow-x: auto; padding: var(--s-3) var(--s-3) 0 0; }
+.thumb { position: relative; flex-shrink: 0; width: 56px; height: 56px; }
 .thumb img { width: 56px; height: 56px; object-fit: cover; border-radius: var(--r-sm); border: 1px solid var(--separator); display: block; }
-.thumb button { position: absolute; top: -6px; right: -6px; width: 20px; height: 20px; border-radius: 50%; background: var(--text); color: var(--canvas); font-size: 12px; line-height: 20px; }
+.thumb-x { position: absolute; top: -14px; right: -14px; width: var(--hit); height: var(--hit); display: grid; place-items: center; padding: 0; }
+.thumb-x-ink { display: grid; place-items: center; width: 22px; height: 22px; border-radius: 50%; background: var(--text); color: var(--canvas); box-shadow: 0 0 0 2px var(--canvas); }
+.thumb-x-ink .ico { width: 14px; height: 14px; stroke-width: 2.5; }
 
 #cmdpop { background: var(--surface); border: 1px solid var(--separator); border-radius: var(--r-md); max-height: 40vh; overflow-y: auto; }
 .cmd { display: block; width: 100%; min-height: var(--hit); text-align: left; padding: 9px var(--s-3); border-bottom: 1px solid var(--separator); }
@@ -629,44 +685,86 @@ html[data-theme="contrast"] .field:focus { box-shadow: none; outline: 2px solid 
 .cmd b { font-family: var(--font-mono); font-size: 14px; }
 .cmd span { display: block; font-size: var(--text-caption); line-height: var(--text-caption-lh); color: var(--text-2); margin-top: 2px; }
 
-/* Card: a surface, 14px corners, no shadow. A border only where it means something (the
-   decision kinds below) or in the contrast theme, through --card-border. Fields inside take
-   the page colour. The decision cards themselves are rebuilt in PR 5. */
+/* Card: a surface, 14px corners, no shadow. A border only where it means something (a decision
+   waiting) or in the contrast theme, through --card-border. */
 .card { background: var(--surface); border: 1px solid var(--card-border); border-radius: var(--r-md); padding: var(--s-3) var(--s-4); }
-.card.approval { border-color: color-mix(in srgb, var(--warning) 60%, var(--separator)); }
-.card h4 { margin: 0 0 var(--s-1); font-size: 13px; }
-.card .why { font-size: 12px; color: var(--text-2); margin-bottom: 6px; white-space: pre-wrap; }
-.card pre { font-family: var(--font-mono); font-size: 12px; background: var(--surface-sunk); border-radius: var(--r-sm); padding: var(--s-2); max-height: 22vh; overflow: auto; white-space: pre-wrap; word-break: break-word; margin: 6px 0; }
-.card .row { display: flex; gap: var(--s-2); margin-top: var(--s-2); }
-.card .row button { flex: 1; padding: 10px; border-radius: var(--r-sm); font-weight: 600; border: 1px solid var(--separator); }
-.card .row .yes { background: var(--tint); color: var(--on-tint); border-color: var(--tint); }
-.card .q { font-size: 14px; margin: var(--s-2) 0 6px; font-weight: 600; }
-.card .opts { display: flex; flex-direction: column; gap: 6px; }
-.opt { text-align: left; padding: 9px 11px; border-radius: var(--r-sm); border: 1px solid var(--separator); font-size: 14px; }
-.opt small { display: block; color: var(--text-2); font-size: 12px; }
-.opt.sel { border-color: var(--tint); background: color-mix(in srgb, var(--tint) 10%, transparent); }
-.card input[type=text] { width: 100%; margin-top: 6px; padding: 9px 11px; border-radius: var(--r-sm); border: 1px solid var(--separator); background: var(--canvas); font-size: 16px; }
-.card.plan { border-color: color-mix(in srgb, var(--warning) 60%, var(--separator)); }
-.card.expired { border-color: color-mix(in srgb, var(--text-2) 55%, var(--separator)); }
-.card .expired-note { font-style: italic; }
-.card.plan .plan-body { max-height: 36vh; overflow-y: auto; overscroll-behavior: contain; font-size: 14px; border: 1px solid var(--separator); border-radius: var(--r-sm); padding: var(--s-1) 10px; background: var(--canvas); }
-.card.plan .plan-body .plain { white-space: pre-wrap; }
-.card.plan .plan-fb { width: 100%; margin-top: var(--s-2); padding: 9px 11px; border-radius: var(--r-sm); border: 1px solid var(--separator); background: var(--canvas); font-size: 16px; resize: vertical; }
-/* Approve gets its own full-width row; the two ways of not approving share the next. */
-.card.plan .row { flex-wrap: wrap; }
-.card.plan .row .yes { flex-basis: 100%; }
-/* Cards fold to a slim header so the message being answered stays readable.
-   Tapping the header, or swiping it down / up, toggles the fold. */
-.card-head { display: flex; align-items: center; gap: var(--s-2); width: 100%; margin: -2px 0 6px; padding: 2px 0; text-align: left; }
-.card-title { font-size: 13px; font-weight: 600; }
-.card-caret { margin-left: auto; color: var(--text-2); font-size: 12px; transition: transform .15s ease; }
-.card-wait { color: var(--warning); font-size: 12px; font-weight: 600; }
-.card:not(.collapsed) .card-wait { display: none; }
-.card.collapsed .card-caret { transform: rotate(-90deg); }
-.card.collapsed { padding: 9px var(--s-3); }
-.card.collapsed > :not(.card-head) { display: none; }
-#pending { display: flex; flex-direction: column; gap: var(--s-2); max-height: 55vh; overflow-y: auto; }
+/* The board's API help card (403 or no dsh): scoped, so none of it reaches a decision card. */
+.api403 h4 { margin: 0 0 var(--s-1); font-size: 13px; }
+.api403 .why { font-size: 12px; color: var(--text-2); margin-bottom: 6px; white-space: pre-wrap; }
+.api403 pre { font-family: var(--font-mono); font-size: 12px; background: var(--surface-sunk); border-radius: var(--r-sm); padding: var(--s-2); max-height: 22vh; overflow: auto; white-space: pre-wrap; word-break: break-word; margin: 6px 0; }
+.api403 .row { display: flex; gap: var(--s-2); margin-top: var(--s-2); }
+.api403 .row button { flex: 1; padding: 10px; border-radius: var(--r-sm); font-weight: 600; border: 1px solid var(--separator); }
+
+/* Decision cards: approval, question, plan review, expired. A kicker row (11px tracked caps and
+   the time it has waited), a 17px title, 13px detail, then one filled primary and one escape.
+   No fold: the stack scrolls instead, capped so the composer never moves. */
+#pending { display: flex; flex-direction: column; gap: var(--s-2); max-height: 55vh; max-height: 55dvh; overflow-y: auto; overscroll-behavior: contain; }
 #pending:empty { display: none; }
+.card.decision { flex-shrink: 0; padding: var(--s-3) var(--s-4) var(--s-2); }
+.card.decision.expired { border-color: var(--card-border); }
+.card.decision.expired .dec-title { color: var(--text-2); }
+html[data-theme="contrast"] .card.decision { border-color: var(--warning); }
+html[data-theme="contrast"] .card.decision.expired { border-color: var(--separator); }
+.dec-kick { display: flex; align-items: baseline; justify-content: space-between; gap: var(--s-2); margin-bottom: var(--s-1); }
+.kicker {
+  min-width: 0; font-size: var(--text-kicker); line-height: var(--text-kicker-lh); letter-spacing: var(--track-kicker);
+  font-weight: var(--weight-semibold); text-transform: uppercase; color: var(--text-2);
+}
+.kicker.warn { color: var(--warning); }
+.dec-wait {
+  flex: none; font-family: var(--font-mono); font-size: var(--text-mono-sm); line-height: var(--text-mono-sm-lh);
+  letter-spacing: var(--track-mono-sm); color: var(--text-2); font-variant-numeric: tabular-nums;
+}
+.vh { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
+.dec-title { margin: 0 0 var(--s-1); font-size: var(--text-body); line-height: var(--text-body-lh); font-weight: var(--weight-semibold); overflow-wrap: anywhere; }
+.dec-why { margin: 0 0 var(--s-2); font-size: var(--text-caption); line-height: var(--text-caption-lh); color: var(--text-2); white-space: pre-wrap; overflow-wrap: anywhere; }
+.dec-actions { display: flex; flex-direction: column; gap: var(--s-2); margin-top: var(--s-3); }
+.dec-btn { width: 100%; }
+/* The command block: 13px mono, sunken, the whole text wrapped (no max height, no ellipsis, no
+   sideways scroll hiding the end). Copy floats at its top edge, so only the first line wraps
+   around it. */
+.cmd-block { margin: var(--s-2) 0 0; border-radius: var(--r-sm); background: var(--surface-sunk); border: 1px solid var(--card-border); }
+.cmd-block::after { content: ''; display: block; clear: both; }
+.cmd-text {
+  margin: 0; padding: var(--s-3); font-family: var(--font-mono); font-size: var(--text-mono); line-height: var(--text-mono-lh);
+  color: var(--text); white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word;
+}
+.cmd-copy {
+  float: right; min-height: var(--hit); min-width: var(--hit); padding: 0 var(--s-3);
+  color: var(--tint); font-size: var(--text-caption); line-height: var(--text-caption-lh); font-weight: var(--weight-semibold);
+}
+.cmd-block.loading { padding: var(--s-3); }
+.cmd-wait { font-size: var(--text-caption); line-height: var(--text-caption-lh); color: var(--text-2); }
+/* Options: 44px rows. The check is an empty ring (a box for multi-select) until chosen, then a
+   filled tick, so the choice reads without colour. */
+.opts { display: flex; flex-direction: column; gap: var(--s-2); margin: var(--s-2) 0; }
+.opt {
+  display: flex; align-items: center; gap: var(--s-3); width: 100%; min-height: var(--hit);
+  padding: var(--s-2) var(--s-3); border-radius: var(--r-sm); text-align: left;
+  background: var(--surface-sunk); border: 1px solid var(--card-border);
+}
+.opt-main { flex: 1; min-width: 0; }
+.opt-label { display: block; font-size: var(--text-body); line-height: var(--text-nav-lh); }
+.opt small { display: block; color: var(--text-2); font-size: var(--text-caption); line-height: var(--text-caption-lh); }
+.opt-check { flex: none; position: relative; width: 22px; height: 22px; border-radius: 50%; border: 2px solid var(--text-2); }
+.opt-check.multi { border-radius: 6px; }
+.opt[aria-checked="true"] { border-color: var(--tint); box-shadow: inset 0 0 0 1px var(--tint); }
+.opt[aria-checked="true"] .opt-check { background: var(--tint); border-color: var(--tint); }
+.opt[aria-checked="true"] .opt-check::after {
+  content: ''; position: absolute; inset: 0; background: var(--on-tint);
+  -webkit-mask: var(--tick) center / 14px 14px no-repeat; mask: var(--tick) center / 14px 14px no-repeat;
+  --tick: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><path d='M3.2 8.5l3 3 6.6-6.8' fill='none' stroke='black' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'/></svg>");
+}
+.dec-field { display: block; width: 100%; margin-top: var(--s-2); }
+/* Plan review: the goal at 17px and the first two steps at 13px; the plan itself is in a sheet. */
+.plan-steps { margin: var(--s-1) 0 0; padding-left: 1.4em; font-size: var(--text-caption); line-height: var(--text-caption-lh); color: var(--text); }
+.plan-steps li { margin: 2px 0; overflow-wrap: anywhere; }
+.plan-more { margin: var(--s-1) 0 0; }
+.plan-ask { margin: 0 0 var(--s-3); font-size: var(--text-callout); line-height: var(--text-callout-lh); color: var(--text-2); }
+.plan-doc { font-size: var(--text-body); line-height: var(--text-body-lh); }
+.plan-doc :is(h1, h2, h3, h4) { font-size: var(--text-body); line-height: var(--text-body-lh); font-weight: var(--weight-semibold); }
+#sheetBody .plan-fb { display: block; width: 100%; min-height: var(--hit); max-height: 30vh; resize: none; field-sizing: content; }
+.sheetfoot .btn { width: 100%; }
 
 /* Sheet: one shell. A grabber, a title row (back while a sub-sheet is open, Done or Cancel), a
    scrolling body and a footer that stays put for the primary action. Medium hugs its content up

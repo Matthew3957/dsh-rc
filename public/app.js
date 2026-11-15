@@ -542,16 +542,18 @@ function onMux(p, env) {
       if (S.cur && p.sessionId === S.cur.id && !S.cur.loading && p.lastSeq > S.cur.lastSeq) loadHistory();
       break;
     case 'approval/requested': {
-      const a = { ...p, rpcId: env.rpcId };
-      S.approvals.set(p.approvalId, a); renderPending(); badge();
-      lookupApprovalArgs(a).catch(() => {});
+      const prev = S.approvals.get(p.approvalId);
+      const a = { ...p, rpcId: env.rpcId, seenAt: (prev && prev.seenAt) || Date.now() };
+      S.approvals.set(p.approvalId, a);
+      lookupApprovalArgs(a).catch(() => {}); // marks a lookup in flight before the card is drawn
+      renderPending(); badge();
       break;
     }
     case 'approval/resolved':
       S.approvals.delete(p.approvalId); approvalLookups.delete(p.approvalId); renderPending(); badge();
       break;
     case 'question/requested':
-      S.questions.set(env.rpcId, { ...p, rpcId: env.rpcId }); renderPending(); badge();
+      S.questions.set(env.rpcId, { ...p, rpcId: env.rpcId, seenAt: (S.questions.get(env.rpcId) || {}).seenAt || Date.now() }); renderPending(); badge();
       break;
     case 'question/resolved':
       S.questions.delete(p.questionRpcId); planDrafts.delete(p.questionRpcId); renderPending(); badge();
@@ -813,20 +815,30 @@ function drawnCallArgs(a) {
   const t = R.tools.get(a.callId);
   return t && t.args != null ? t.args : null;
 }
+// The same argument also fills the session's approval card, which repaints when it lands, so the
+// command is on screen whenever dsh has it.
 async function lookupApprovalArgs(a) {
   if (!a || !a.approvalId || !a.callId || a.args != null || a.input != null) return;
   const drawn = drawnCallArgs(a);
   if (drawn != null) { a.args = drawn; return; }
   if (approvalLookups.has(a.approvalId)) return;
   approvalLookups.add(a.approvalId);
+  a.lookup = 'pending';
+  const settle = (state) => {
+    if (S.approvals.get(a.approvalId) !== a) return; // answered or replaced meanwhile
+    a.lookup = state;
+    if (S.cur && belongsToCur(a.sessionId)) renderPending();
+  };
   try {
     const v = await rpc('session.history', { sessionId: a.sessionId, maxMessages: 24 });
     const call = (v.events || []).map((f) => f.event)
       .find((e) => e && e.type === 'tool/call' && e.data && e.data.callId === a.callId);
-    if (!call || S.approvals.get(a.approvalId) !== a) return; // answered or replaced meanwhile
+    if (!call || S.approvals.get(a.approvalId) !== a) { settle('missing'); return; }
     a.args = call.data.arguments;
+    if (typeof call.time === 'number' && call.time <= Date.now()) a.since = call.time; // waiting since the call, not since this page saw it
+    settle('done');
     if (!$('#listView').hidden && !S.searchMode) renderList(); else paintNeedsYou();
-  } catch {} // a history read is a nicety; the reason still answers the row
+  } catch { settle('missing'); } // a history read is a nicety; the reason still answers the row
 }
 // The sessions waiting on an approval or a question, by root session, in the order they asked.
 function waitingSessions() {
@@ -1544,7 +1556,7 @@ async function openSession(id, { push = true } = {}) {
   if (S.cur && S.cur.id !== id) markSeen(S.cur.id);
   markSeen(id);
   S.cur = { id, events: [], lastSeq: -1, loading: false, buffer: [], hasMore: false, gen: 0 };
-  S.images = []; renderAttachments(); S.steer = false; queueEditing = null;
+  S.images = []; renderAttachments(); S.steer = false; queueEditing = null; queueOpen = false;
   $('#listView').hidden = true; $('#chatView').hidden = false;
   stopDashTick(); // the dashboard is off screen while a chat is open
   const m = sessionMeta(id);
@@ -1595,6 +1607,7 @@ async function loadHistory() {
     rerender(true);
     for (const f of v.live || []) R.apply(f); // dsh 0.2: the reply that was mid-stream at the snapshot
     renderRunning(); // the turn's start time is only known once history is in
+    if (S.approvals.size) renderPending(); // an approval's call may only now be drawn
     renderStatusLine(); renderGoalBar();
   } catch (e) {
     R.note('Could not load history: ' + e.message, 'err');
@@ -1671,15 +1684,56 @@ function turnStartTime(cur) {
   if (firstMsg) return firstMsg;
   return !ended && cur.hasMore ? oldest : null;
 }
-// While a turn runs: an empty composer offers Stop; once there is something to send, Send and the
-// queue/steer choice take its place (Stop stays reachable with the box cleared).
-function paintComposer() {
+// A decision (an approval, or a question whose wait has not run out) is waiting in this session.
+// While one is, it holds the only primary on screen: the composer stays usable but quiet, and
+// whatever is typed queues behind the decision rather than steering past it.
+function decisionWaiting() {
+  if (!S.cur) return false;
+  for (const a of S.approvals.values()) if (belongsToCur(a.sessionId)) return true;
+  for (const q of S.questions.values()) if (!q.expired && belongsToCur(q.sessionId)) return true;
+  return false;
+}
+// The composer's one trailing control. It sends; while a turn runs and the field is empty it is
+// a stop square in the same place, so there is never a second button beside it. Queue is the
+// default while running; Steer is a choice that appears only when there is something to send.
+function composerState() {
   const cur = S.cur;
   const running = !!(cur && S.running.get(cur.id));
   const hasText = !!$('#input').value.trim() || S.images.length > 0;
-  $('#sendBtn').hidden = running && !hasText;
-  $('#steerBtn').hidden = !(running && hasText);
-  $('#stopBtn').hidden = !running || hasText;
+  const waiting = decisionWaiting();
+  const stop = running && !hasText;
+  const steer = running && hasText && !waiting && S.steer;
+  return { running, hasText, waiting, stop, steer };
+}
+const STEER_OPTIONS = [{ value: 'queue', label: 'Queue' }, { value: 'steer', label: 'Steer' }];
+let modeSeg = null;
+function paintComposer() {
+  const st = composerState();
+  const btn = $('#sendBtn');
+  btn.setAttribute('data-state', st.stop ? 'stop' : 'send');
+  btn.setAttribute('aria-label', st.stop ? 'Stop' : !st.running ? 'Send' : st.steer ? 'Steer the running turn' : 'Queue message');
+  btn.title = st.stop ? 'Stop this turn' : st.steer ? 'Send into the running turn' : st.running ? 'Send after this turn' : 'Send';
+  btn.disabled = !st.stop && !st.hasText;
+  // Quiet while a decision waits: Allow, Approve or Send answer is the one filled accent.
+  // That includes Stop, which stays available but stops competing with the decision.
+  btn.className = 'cbtn send' + (st.waiting ? ' quiet' : '');
+  // Queue / Steer: only while a turn runs, there is something to send, and no decision waits.
+  const row = $('#modeRow');
+  const show = st.running && st.hasText && !st.waiting;
+  row.hidden = !show;
+  if (!show) return;
+  const want = S.steer ? 'steer' : 'queue';
+  if (!modeSeg || modeSeg.segValue() !== want) {
+    modeSeg = segmented(STEER_OPTIONS, want, (v) => { S.steer = v === 'steer'; paintComposer(); }, 'When to send');
+  }
+  const hint = S.steer ? 'Joins the running turn' : 'Sends when this turn ends';
+  const label = row.querySelector && row.querySelector('.mode-hint');
+  if (label && row.contains && row.contains(modeSeg)) label.textContent = hint;
+  else row.replaceChildren(h('span', { class: 'mode-hint' }, hint), modeSeg);
+}
+function stopTurn() {
+  if (!S.cur) return;
+  rpc('session.cancel', { sessionId: S.cur.id }).then(() => toast('Stopping…'), (e) => toast('Stop failed: ' + e.message));
 }
 function renderRunning() {
   const cur = S.cur; if (!cur) return;
@@ -1687,13 +1741,12 @@ function renderRunning() {
   $('#working').hidden = !running;
   updateJump();
   paintComposer();
-  $('#steerBtn').classList.toggle('on', S.steer);
-  $('#steerBtn').textContent = S.steer ? 'steer' : 'queue';
   clearInterval(workTimer);
   if (running) {
     const t0 = turnStartTime(cur) || Date.now();
     const tick = () => { $('#workingText').textContent = fmtClock(Date.now() - t0); }; // clamp: phone and laptop clocks can differ slightly
     tick(); workTimer = setInterval(tick, 1000);
+    if (workTimer && workTimer.unref) workTimer.unref();
     stick();
   }
 }
@@ -1703,6 +1756,9 @@ function renderRunning() {
 // session/queue event re-renders it.
 let queueEditing = null; // {sessionId, id} of the item being edited, so a queue event mid-edit keeps the editor
 let queueDraft = '';      // its unsaved text, which survives those re-renders
+let queueOpen = false;    // the banner's Review is open: the queue editor shows under it
+// One 13px line while messages wait: "2 queued · Review". Review opens the queue editor in place
+// (the only nested scroll in the dock); edit and remove work there as before.
 function renderQueue() {
   const cur = S.cur; if (!cur) return;
   const all = S.queues.get(cur.id) || [];
@@ -1715,20 +1771,34 @@ function renderQueue() {
     if (!all.some((it) => it.id === queueEditing.id)) toast('That message was already sent');
     queueEditing = null;
   }
-  if (!items.length) { el.replaceChildren(); return; }
+  if (!items.length) { queueOpen = false; el.replaceChildren(); return; }
+  const open = queueOpen || !!queueEditing;
+  const toggle = h('button', { type: 'button', class: 'qreview', 'aria-expanded': String(open), 'aria-controls': open ? 'queueList' : null }, open ? 'Done' : 'Review');
+  toggle.onclick = () => { queueOpen = !open; if (!queueOpen) queueEditing = null; renderQueue(); };
+  const head = h('div', { class: 'qbanner' },
+    h('span', { class: 'qcount' }, `${items.length} queued`), h('span', { class: 'qsep', 'aria-hidden': 'true' }, '·'), toggle);
+  if (!open) { el.replaceChildren(head); return; }
   // Keep the open editor's node rather than rebuilding it: re-focusing a new textarea
   // outside a tap would drop the iOS keyboard and the caret.
   const keep = queueEditing && el.querySelector(`.qitem.editing[data-id="${CSS.escape(queueEditing.id)}"]`);
-  el.replaceChildren(h('div', { class: 'qcount' }, `${items.length} message${items.length > 1 ? 's' : ''} queued`),
-    ...items.map((it) => (queueEditing && it.id === queueEditing.id ? (keep || queueEditor(cur.id, it)) : queueRow(cur.id, it))));
+  el.replaceChildren(head, h('div', { class: 'qlist', id: 'queueList' },
+    ...items.map((it) => (queueEditing && it.id === queueEditing.id ? (keep || queueEditor(cur.id, it)) : queueRow(cur.id, it)))));
 }
 function queueText(it) { return textOf((it.message && it.message.content) || []); }
+const PENCIL = '<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20h4L18.5 9.5a2.1 2.1 0 0 0-4-4L4 16z"/></svg>';
+const CROSS = '<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M6.5 6.5l11 11M17.5 6.5l-11 11"/></svg>';
+// An inline line icon from one of the fixed strings above (never page data).
+function iconNode(svg) {
+  const s = h('span', { class: 'ico-wrap', 'aria-hidden': 'true' });
+  s.innerHTML = svg;
+  return s;
+}
 function queueRow(sessionId, it) {
   const imgs = ((it.message && it.message.content) || []).filter((b) => b.type === 'image').length;
   const row = h('div', { class: 'qitem' },
     h('div', { class: 'qtext' }, queueText(it) || (imgs ? '' : '(empty)'), imgs ? h('span', { class: 'qimgs' }, plural(imgs, 'image')) : null));
-  const edit = h('button', { type: 'button', class: 'qact', 'aria-label': 'Edit queued message' }, '✎');
-  const rm = h('button', { type: 'button', class: 'qact', 'aria-label': 'Remove queued message' }, '✕');
+  const edit = h('button', { type: 'button', class: 'qact', 'aria-label': 'Edit queued message' }, iconNode(PENCIL));
+  const rm = h('button', { type: 'button', class: 'qact', 'aria-label': 'Remove queued message' }, iconNode(CROSS));
   // Focus inside the tap itself: iOS only raises the keyboard for focus during a user gesture.
   edit.onclick = () => { queueEditing = { sessionId, id: it.id }; queueDraft = queueText(it); renderQueue(); const b = $('#queueLine .qedit'); if (b) b.focus(); };
   rm.onclick = () => updateQueued(sessionId, it.id, { kind: 'remove' }, row);
@@ -1772,11 +1842,8 @@ async function updateQueued(sessionId, itemId, action, row) {
     return false;
   }
 }
-$('#stopBtn').onclick = async () => {
-  if (!S.cur) return;
-  try { await rpc('session.cancel', { sessionId: S.cur.id }); toast('Stopping…'); } catch (e) { toast('Stop failed: ' + e.message); }
-};
-$('#steerBtn').onclick = () => { S.steer = !S.steer; renderRunning(); };
+// The send/stop control decides at tap time from the state it shows.
+$('#sendBtn').onclick = () => { if (composerState().stop) stopTurn(); else send(); };
 
 // ---------- Session details ----------
 // A compact line under the session header: which model and route are in use,
@@ -2835,186 +2902,293 @@ function renderDashboard() {
 }
 
 // ---------- Approvals & questions ----------
-const collapsedCards = new Set(); // rpcId whose card the user folded to read underneath
-
-// A card folds to this slim header so the message it is asking about stays
-// readable. The chosen options and typed text live in the card's own DOM, so
-// folding never touches them. Tapping the header, or swiping it down / up,
-// toggles the fold.
-function cardHead(title, rpcId) {
-  const head = h('button', { type: 'button', class: 'card-head', 'aria-expanded': 'true' },
-    h('span', { class: 'card-title' }, title),
-    h('span', { class: 'card-wait' }, 'answer needed'),
-    h('span', { class: 'card-caret', 'aria-hidden': 'true' }, '▾'));
-  let y0 = null, x0 = null, swiped = false;
-  head.addEventListener('click', (e) => {
-    if (swiped) { swiped = false; e.preventDefault(); return; } // the tap after a swipe
-    toggleCard(rpcId);
-  });
-  head.addEventListener('touchstart', (e) => {
-    y0 = e.touches.length === 1 ? e.touches[0].clientY : null;
-    x0 = e.touches.length === 1 ? e.touches[0].clientX : null;
-    swiped = false;
-  }, { passive: true });
-  head.addEventListener('touchend', (e) => {
-    if (y0 == null) return;
-    const t = e.changedTouches[0];
-    const dy = t.clientY - y0, dx = t.clientX - x0;
-    y0 = null;
-    if (Math.abs(dy) < 24 || Math.abs(dy) <= Math.abs(dx)) return; // a tap, not a swipe
-    swiped = true;
-    toggleCard(rpcId, dy > 0); // swipe down folds it away, swipe up brings it back
-    setTimeout(() => { swiped = false; }, 600);
-  });
-  return head;
+// Decision cards sit above the composer in #pending, which scrolls and is capped, so a long
+// command never pushes the composer away. Each card is one focused surface: a kicker with the
+// time it has waited, a 17px title, the detail, and one primary with one escape. A card's node is
+// kept while its request is unchanged, so another card arriving never drops a chosen option, a
+// typed answer or the keyboard.
+const pendingNodes = new Map(); // rpcId -> { sig, node, clock, since }: the drawn card and its waiting clock
+let pendingTick = null;
+let planSheetRpc = null; // the plan whose review sheet is open
+let planSheetHead = null; // that sheet's heading node, to tell it from any other sheet
+const argKey = (raw) => (raw == null ? '' : typeof raw === 'string' ? raw : JSON.stringify(raw));
+// The call's arguments: from the frame when dsh sent them, else the drawn call, else what the
+// history lookup found (lookupApprovalArgs repaints the card when that lands).
+function approvalArgs(a) { return a.args != null ? a.args : a.input != null ? a.input : drawnCallArgs(a); }
+const SHELL_TOOLS = /^(bash|shell|sh|terminal|exec|run_command|run_terminal_cmd)$/i;
+const EDIT_TOOLS = /^(edit|write|multi_edit|multiedit|apply_patch|notebook_edit)$/i;
+function approvalTitle(a, raw) {
+  const p = raw == null ? null : parseArgs(raw);
+  if (SHELL_TOOLS.test(a.toolName || '') || (p && typeof p.command === 'string')) return 'Run this command?';
+  if (EDIT_TOOLS.test(a.toolName || '')) return 'Change this file?';
+  return `Allow ${prettyTool(a.toolName)}?`;
 }
-function applyCollapsed(card, rpcId) {
-  const collapsed = collapsedCards.has(rpcId);
-  card.classList.toggle('collapsed', collapsed);
-  const head = card.querySelector && card.querySelector('.card-head');
-  if (head) head.setAttribute('aria-expanded', String(!collapsed));
+// The kicker row: 11px tracked caps, and the time the request has waited at the trailing edge.
+function decisionHead(kicker, since, tone) {
+  const clock = since ? h('span', { class: 'dec-clock' }, fmtClock(Date.now() - since)) : null;
+  const wait = clock ? h('span', { class: 'dec-wait' }, h('span', { class: 'vh' }, 'Waiting '), clock) : null;
+  return { row: h('div', { class: 'dec-kick' }, h('span', { class: 'kicker' + (tone ? ' ' + tone : '') }, kicker), wait), clock };
 }
-function toggleCard(rpcId, want) {
-  if (!rpcId) return;
-  const collapsed = want == null ? !collapsedCards.has(rpcId) : want;
-  if (collapsed) collapsedCards.add(rpcId); else collapsedCards.delete(rpcId);
-  const box = $('#pending');
-  const card = box && box.querySelector(`.card[data-rpc="${CSS.escape(rpcId)}"]`);
-  if (card) applyCollapsed(card, rpcId);
-  positionJump();
+const subNote = (id) => (id !== (S.cur && S.cur.id) ? ' · subagent' : '');
+function tickPending() {
+  const now = Date.now();
+  for (const p of pendingNodes.values()) if (p.clock && p.since) p.clock.textContent = fmtClock(now - p.since);
+}
+function paintPendingTick() {
+  const any = [...pendingNodes.values()].some((p) => p.clock);
+  if (any && !pendingTick) {
+    pendingTick = setInterval(tickPending, 1000);
+    if (pendingTick && pendingTick.unref) pendingTick.unref();
+  } else if (!any && pendingTick) { clearInterval(pendingTick); pendingTick = null; }
 }
 function renderPending() {
   const box = $('#pending');
-  if (!S.cur) { collapsedCards.clear(); box.replaceChildren(); return; }
   const cards = [];
   const live = new Set();
-  for (const a of S.approvals.values()) if (belongsToCur(a.sessionId)) { cards.push(approvalCard(a)); live.add(a.rpcId); }
-  for (const q of S.questions.values()) {
-    if (!belongsToCur(q.sessionId)) continue;
-    live.add(q.rpcId);
-    const review = window.dshReview && window.dshReview.planReviewOf(q.questions);
-    // Keep an open plan card's node: rebuilding it would drop the feedback box's focus
-    // and, on iOS, the keyboard whenever another card arrives.
-    const kept = review && box.querySelector(`.card.plan[data-rpc="${CSS.escape(q.rpcId)}"]`);
-    cards.push(kept || (review ? planCard(q, review) : questionCard(q)));
+  const use = (rpcId, sig, build) => {
+    const kept = pendingNodes.get(rpcId);
+    const made = kept && kept.sig === sig ? kept : { sig, ...build() };
+    pendingNodes.set(rpcId, made);
+    live.add(rpcId);
+    cards.push(made.node);
+  };
+  if (S.cur) {
+    for (const a of S.approvals.values()) {
+      if (!belongsToCur(a.sessionId)) continue;
+      const raw = approvalArgs(a);
+      use(a.rpcId, `a|${argKey(raw)}|${a.lookup || ''}|${a.since || ''}`, () => approvalCard(a, raw));
+    }
+    for (const q of S.questions.values()) {
+      if (!belongsToCur(q.sessionId)) continue;
+      const review = window.dshReview && window.dshReview.planReviewOf(q.questions);
+      const sig = (review ? 'p' : 'q') + (q.expired ? 'x' : '') + '|' + JSON.stringify(q.questions || []);
+      use(q.rpcId, sig, () => (q.expired ? expiredCard(q, review) : review ? planCard(q, review) : questionCard(q)));
+    }
   }
-  for (const id of [...collapsedCards]) if (!live.has(id)) collapsedCards.delete(id);
+  for (const id of [...pendingNodes.keys()]) if (!live.has(id)) pendingNodes.delete(id);
+  // The plan was answered elsewhere, or its wait ran out: the review sheet has nothing left to decide.
+  if (planSheetRpc && !(live.has(planSheetRpc) && !(S.questions.get(planSheetRpc) || {}).expired)) {
+    const open = !$('#sheet').hidden && !!planSheetHead && sheetCur.heading === planSheetHead;
+    planSheetRpc = null;
+    if (open) closeSheet();
+  }
   box.replaceChildren(...cards);
   if (cards.length) stick();
   positionJump();
+  paintComposer();
+  paintPendingTick();
 }
-// Plan mode asks for review through an ordinary question tagged plan-review, with
-// the plan as markdown in its detail. It is drawn as the plan itself with
-// approve and keep-planning buttons, answered with the option labels dsh named.
-const planDrafts = new Map(); // rpcId -> feedback typed so far, kept across re-renders of #pending
-function planCard(q, review) {
-  const lib = window.dshReview;
-  const sub = q.sessionId !== (S.cur && S.cur.id) ? ' (subagent)' : '';
-  const body = h('div', { class: 'md plan-body' });
-  body.append(mdNode(review.plan));
-  const card = h('div', { class: 'card plan' + (q.expired ? ' expired' : ''), 'data-rpc': q.rpcId },
-    cardHead('Plan review' + sub, q.rpcId),
-    q.expired ? h('div', { class: 'why expired-note' }, 'The timed wait ran out; the agent carried on. You can still answer.') : null,
-    review.question ? h('div', { class: 'why' }, review.question) : null,
-    body);
-  let fb = null;
-  if (review.decline) {
-    fb = h('textarea', { rows: '2', class: 'plan-fb', placeholder: `Feedback, sent with ${review.decline.label} (optional)` });
-    fb.value = planDrafts.get(q.rpcId) || '';
-    fb.oninput = () => { planDrafts.set(q.rpcId, fb.value); };
-    card.append(fb);
+// Answer one request. The card's buttons are disabled while it is in flight; on failure they
+// come back with their labels.
+async function settleDecision(rpcId, result, btns, btn, done) {
+  const label = btn.textContent;
+  btns.forEach((b) => { b.disabled = true; });
+  btn.textContent = '…';
+  try {
+    await respond(rpcId, result);
+  } catch (e) {
+    toast(e.message);
+    btns.forEach((b) => { b.disabled = false; });
+    btn.textContent = label;
+    return false;
   }
-  const approve = h('button', { type: 'button', class: 'yes' }, review.approve.label);
-  const keep = review.decline ? h('button', { type: 'button' }, review.decline.label) : null;
-  // Closing the review without a decision: dsh stays in plan mode and waits for a message.
-  const reply = h('button', { type: 'button' }, 'Reply instead');
-  const btns = [approve, keep, reply].filter(Boolean);
-  const settle = async (btn, result) => {
-    const label = btn.textContent;
-    btns.forEach((b) => { b.disabled = true; });
-    btn.textContent = '…';
-    try {
-      await respond(q.rpcId, result);
-      S.questions.delete(q.rpcId); planDrafts.delete(q.rpcId); renderPending(); badge();
-      if (btn === reply) input.focus();
-    } catch (e) { toast(e.message); btns.forEach((b) => { b.disabled = false; }); btn.textContent = label; }
-  };
-  approve.onclick = () => settle(approve, { ok: true, value: { sessionId: q.sessionId, answer: lib.planAnswer(review, true) } });
-  if (keep) keep.onclick = () => settle(keep, { ok: true, value: { sessionId: q.sessionId, answer: lib.planAnswer(review, false, fb.value) } });
-  reply.onclick = () => settle(reply, { ok: false, error: { code: 'cancelled', message: 'the user closed this question request', details: {} } });
-  card.append(h('div', { class: 'row' }, ...btns));
-  applyCollapsed(card, q.rpcId);
-  return card;
+  done();
+  return true;
 }
-function approvalCard(a) {
-  const t = a.callId && R.tools.get(a.callId);
-  const args = t && t.args != null ? prettyArgs(t.args) : '';
-  const sub = a.sessionId !== (S.cur && S.cur.id) ? ' (subagent)' : '';
-  const card = h('div', { class: 'card approval', 'data-rpc': a.rpcId },
-    cardHead(`Allow ${prettyTool(a.toolName)}?${sub}`, a.rpcId),
-    a.reason ? h('div', { class: 'why' }, a.reason) : null,
-    args ? h('pre', {}, clip(args, 4000)) : null);
-  const answer = async (outcome, btn) => {
-    card.querySelectorAll('button').forEach((b) => { b.disabled = true; });
-    btn.textContent = '…';
-    try {
-      await respond(a.rpcId, { ok: true, value: { sessionId: a.sessionId, approvalId: a.approvalId, outcome } });
-      S.approvals.delete(a.approvalId); renderPending(); badge();
-    } catch (e) { toast(e.message); card.querySelectorAll('button').forEach((b) => { b.disabled = false; }); btn.textContent = outcome === 'allowed-once' ? 'Allow' : 'Deny'; }
-  };
-  const no = h('button', { type: 'button' }, 'Deny');
-  const yes = h('button', { type: 'button', class: 'yes' }, 'Allow');
-  no.onclick = () => answer('rejected', no);
+// The approval: the command in full, then Allow (the one filled control) and Deny (plain).
+// The block wraps rather than clipping or scrolling sideways, so no part of the command hides.
+function approvalCard(a, raw) {
+  const text = raw != null ? prettyArgs(raw) : '';
+  const since = a.since || a.seenAt;
+  const head = decisionHead(`Approval · ${prettyTool(a.toolName)}${subNote(a.sessionId)}`, since, 'warn');
+  let block = null;
+  if (text) {
+    const copy = h('button', { type: 'button', class: 'cmd-copy', 'aria-label': 'Copy the command' }, 'Copy');
+    copy.onclick = () => copyText(text, copy);
+    block = h('div', { class: 'cmd-block' }, copy, h('pre', { class: 'cmd-text' }, text)); // Copy first: it floats beside the first line
+  } else if (a.lookup === 'pending') {
+    block = h('div', { class: 'cmd-block loading' }, h('span', { class: 'cmd-wait' }, 'Reading the command…'));
+  }
+  const card = h('div', { class: 'card decision approval', 'data-rpc': a.rpcId },
+    head.row,
+    h('h3', { class: 'dec-title' }, approvalTitle(a, raw)),
+    a.reason ? h('p', { class: 'dec-why' }, a.reason) : null,
+    block);
+  const yes = h('button', { type: 'button', class: 'btn btn-primary dec-btn' }, 'Allow');
+  const no = h('button', { type: 'button', class: 'btn btn-plain dec-btn' }, 'Deny');
+  const answer = (outcome, btn) => settleDecision(a.rpcId, { ok: true, value: { sessionId: a.sessionId, approvalId: a.approvalId, outcome } }, [yes, no], btn,
+    () => { S.approvals.delete(a.approvalId); renderPending(); badge(); });
   yes.onclick = () => answer('allowed-once', yes);
-  card.append(h('div', { class: 'row' }, no, yes));
-  applyCollapsed(card, a.rpcId);
-  return card;
+  no.onclick = () => answer('rejected', no);
+  card.append(h('div', { class: 'dec-actions' }, yes, no));
+  return { node: card, clock: head.clock, since };
 }
+// A question: each prompt at 17px, options as 44px rows with a check (an empty ring or box until
+// chosen, so the choice never rests on colour), an optional free-text field, and Send answer.
 function questionCard(q) {
-  const state = (q.questions || []).map((qq) => ({ id: qq.id, selected: new Set(), custom: '' }));
-  const card = h('div', { class: 'card' + (q.expired ? ' expired' : ''), 'data-rpc': q.rpcId },
-    cardHead(q.expired ? 'Question expired' : 'dsh is asking', q.rpcId));
-  if (q.expired) card.append(h('div', { class: 'why expired-note' }, 'The timed wait ran out; the agent carried on. You can still answer.'));
-  (q.questions || []).forEach((qq, i) => {
+  const qs = q.questions || [];
+  const state = qs.map((qq) => ({ id: qq.id, selected: new Set(), custom: '' }));
+  const lone = qs.length === 1 && qs[0].header ? ` · ${qs[0].header}` : '';
+  const head = decisionHead(`Question${lone}${subNote(q.sessionId)}`, q.seenAt, 'warn');
+  const card = h('div', { class: 'card decision question', 'data-rpc': q.rpcId }, head.row);
+  qs.forEach((qq, i) => {
     const st = state[i];
-    card.append(h('div', { class: 'q' }, qq.header ? `${qq.header}: ` : '', qq.question));
-    if (qq.detail) card.append(h('div', { class: 'why' }, qq.detail));
-    const opts = h('div', { class: 'opts' });
+    card.append(h('h3', { class: 'dec-title' }, !lone && qq.header ? `${qq.header}: ` : '', qq.question));
+    if (qq.detail) card.append(h('p', { class: 'dec-why' }, qq.detail));
+    const role = qq.multiSelect ? 'checkbox' : 'radio';
+    const opts = h('div', { class: 'opts', role: qq.multiSelect ? 'group' : 'radiogroup', 'aria-label': qq.header || qq.question || 'Options' });
+    const buttons = [];
     for (const o of qq.options || []) {
-      const b = h('button', { type: 'button', class: 'opt' }, o.label, o.description ? h('small', {}, o.description) : null);
-      b.onclick = () => {
-        if (qq.multiSelect) { st.selected.has(o.label) ? st.selected.delete(o.label) : st.selected.add(o.label); }
-        else { st.selected.clear(); st.selected.add(o.label); }
-        opts.querySelectorAll('.opt').forEach((x) => x.classList.toggle('sel', st.selected.has(x.firstChild.textContent)));
-      };
+      const b = h('button', { type: 'button', class: 'opt', role, 'aria-checked': 'false', 'data-label': o.label },
+        h('span', { class: 'opt-check' + (qq.multiSelect ? ' multi' : ''), 'aria-hidden': 'true' }),
+        h('span', { class: 'opt-main' }, h('span', { class: 'opt-label' }, o.label), o.description ? h('small', {}, o.description) : null));
+      buttons.push(b);
       opts.append(b);
     }
-    card.append(opts);
-    const other = h('input', { type: 'text', placeholder: (qq.options || []).length ? 'Other…' : 'Your answer' });
+    // A single choice behaves as a radio group: one tab stop, arrow keys move and choose.
+    // Multi-select keeps every checkbox tabbable and leaves the arrow keys alone.
+    const choose = (b, focus) => {
+      const label = b.getAttribute('data-label');
+      if (qq.multiSelect) { st.selected.has(label) ? st.selected.delete(label) : st.selected.add(label); }
+      else { st.selected.clear(); st.selected.add(label); }
+      for (const x of buttons) {
+        const on = st.selected.has(x.getAttribute('data-label'));
+        x.setAttribute('aria-checked', String(on));
+        x.className = 'opt' + (on ? ' sel' : '');
+        if (!qq.multiSelect) x.tabIndex = on ? 0 : -1;
+      }
+      if (focus) b.focus();
+    };
+    buttons.forEach((b, bi) => {
+      b.onclick = () => choose(b, false);
+      if (qq.multiSelect) return;
+      b.tabIndex = bi === 0 ? 0 : -1;
+      b.addEventListener('keydown', (e) => {
+        const step = e.key === 'ArrowRight' || e.key === 'ArrowDown' ? 1 : e.key === 'ArrowLeft' || e.key === 'ArrowUp' ? -1 : 0;
+        if (!step) return;
+        e.preventDefault();
+        choose(buttons[(bi + step + buttons.length) % buttons.length], true);
+      });
+    });
+    if (buttons.length) card.append(opts);
+    const other = h('input', { type: 'text', class: 'field dec-field', placeholder: buttons.length ? 'Other answer (optional)' : 'Your answer', 'aria-label': buttons.length ? 'Other answer' : 'Your answer', enterkeyhint: 'done' });
     other.oninput = () => { st.custom = other.value; };
     card.append(other);
   });
-  const cancel = h('button', { type: 'button' }, q.expired ? 'Dismiss' : 'Skip');
-  const send = h('button', { type: 'button', class: 'yes' }, 'Answer');
-  cancel.onclick = async () => {
-    try { await respond(q.rpcId, { ok: false, error: { code: 'cancelled', message: 'Skipped from mobile', details: {} } }); S.questions.delete(q.rpcId); renderPending(); } catch (e) { toast(e.message); }
-  };
-  send.onclick = async () => {
+  const send = h('button', { type: 'button', class: 'btn btn-primary dec-btn' }, 'Send answer');
+  const skip = h('button', { type: 'button', class: 'btn btn-plain dec-btn' }, 'Skip');
+  const done = () => { S.questions.delete(q.rpcId); renderPending(); badge(); };
+  send.onclick = () => {
     const answers = state.map((st) => {
       const a = { id: st.id, selected: [...st.selected] };
       if (st.custom.trim()) a.custom = st.custom.trim();
       return a;
     });
-    try { await respond(q.rpcId, { ok: true, value: { sessionId: q.sessionId, answer: { answers } } }); S.questions.delete(q.rpcId); renderPending(); } catch (e) { toast(e.message); }
+    settleDecision(q.rpcId, { ok: true, value: { sessionId: q.sessionId, answer: { answers } } }, [send, skip], send, done);
   };
-  card.append(h('div', { class: 'row' }, cancel, send));
-  applyCollapsed(card, q.rpcId);
-  return card;
+  skip.onclick = () => settleDecision(q.rpcId, { ok: false, error: { code: 'cancelled', message: 'Skipped from mobile', details: {} } }, [send, skip], skip, done);
+  card.append(h('div', { class: 'dec-actions' }, send, skip));
+  return { node: card, clock: head.clock, since: q.seenAt };
+}
+// A request whose timed wait ran out: the agent has moved on, so there is nothing left to
+// answer. One quiet action puts the session back in front; dsh-rc only drops the card.
+function expiredCard(q, review) {
+  const card = h('div', { class: 'card decision expired', 'data-rpc': q.rpcId },
+    decisionHead(`${review ? 'Plan review' : 'Question'}${subNote(q.sessionId)}`, null, 'muted').row,
+    h('h3', { class: 'dec-title' }, 'This request expired'),
+    h('p', { class: 'dec-why' }, 'The wait ran out and the agent carried on without an answer.'));
+  const back = h('button', { type: 'button', class: 'btn btn-secondary dec-btn' }, 'Back to the session');
+  back.onclick = () => settleDecision(q.rpcId, { ok: false, error: { code: 'cancelled', message: 'the request expired', details: {} } }, [back], back, () => {
+    S.questions.delete(q.rpcId); planDrafts.delete(q.rpcId); renderPending(); badge();
+    input.focus();
+  });
+  card.append(h('div', { class: 'dec-actions' }, back));
+  return { node: card, clock: null };
+}
+
+// Plan mode asks for review through an ordinary question tagged plan-review, with the plan as
+// markdown in its detail. In the dock it is a compact card: the goal and the first two steps,
+// and Review plan, which opens the whole plan in a large sheet to be read at 17px. The card
+// stays behind the sheet, so closing the sheet loses nothing. Answers use the labels dsh named.
+const planDrafts = new Map(); // rpcId -> feedback typed so far, kept across re-renders and sheet closes
+const mdPlain = (s) => String(s || '').replace(/\*\*|__|`/g, '').replace(/\[([^\]]+)\]\([^)]*\)/g, '$1').replace(/^#+\s*/, '').trim();
+// The plan's goal and its steps, read from the markdown: a "Goal:" line, else the first heading,
+// else the first line of prose; the steps are its list items, in order.
+function planOutline(plan) {
+  const steps = [];
+  let goal = '', heading = '', prose = '';
+  for (const raw of String(plan || '').split('\n')) {
+    const line = raw.trim();
+    if (!line) continue;
+    const g = /^(?:\*\*|__)?goal(?:\*\*|__)?\s*:\s*(?:\*\*|__)?\s*(.+)$/i.exec(line);
+    if (g && !goal) { goal = mdPlain(g[1]); continue; }
+    const item = /^(?:\d+[.)]|[-*+])\s+(.+)$/.exec(line);
+    if (item) { steps.push(mdPlain(item[1])); continue; }
+    if (/^#{1,6}\s/.test(line)) { if (!heading) heading = mdPlain(line); continue; }
+    if (!prose) prose = mdPlain(line);
+  }
+  return { goal: goal || heading || prose || 'Review the plan', steps };
+}
+function planCard(q, review) {
+  const { goal, steps } = planOutline(review.plan);
+  const head = decisionHead(`Plan review${subNote(q.sessionId)}`, q.seenAt, 'warn');
+  const open = h('button', { type: 'button', class: 'btn btn-primary dec-btn', 'aria-haspopup': 'dialog' }, 'Review plan');
+  open.onclick = () => planSheet(q, review);
+  const card = h('div', { class: 'card decision plan', 'data-rpc': q.rpcId },
+    head.row,
+    h('h3', { class: 'dec-title plan-goal' }, goal),
+    steps.length ? h('ol', { class: 'plan-steps' }, ...steps.slice(0, 2).map((s) => h('li', {}, s))) : null,
+    steps.length > 2 ? h('p', { class: 'dec-why plan-more' }, `and ${plural(steps.length - 2, 'more step')}`) : null,
+    h('div', { class: 'dec-actions' }, open));
+  return { node: card, clock: head.clock, since: q.seenAt };
+}
+// The full plan at 17/24, a feedback field, and a sticky footer: Approve (the one filled
+// control), Keep planning (quiet fill, sends the feedback) and Reply instead (plain: closes the
+// review and leaves dsh in plan mode waiting for a message).
+function planSheet(q, review) {
+  const lib = window.dshReview;
+  planSheetRpc = q.rpcId;
+  const body = h('div', { class: 'md plan-doc' });
+  body.append(mdNode(review.plan));
+  let fb = null;
+  if (review.decline) {
+    fb = h('textarea', { rows: '1', class: 'field plan-fb', id: 'planFeedback', placeholder: 'Optional' });
+    fb.value = planDrafts.get(q.rpcId) || '';
+    fb.oninput = () => { planDrafts.set(q.rpcId, fb.value); };
+  }
+  const approve = h('button', { type: 'button', class: 'go' }, review.approve.label);
+  const keep = review.decline ? h('button', { type: 'button', class: 'btn btn-secondary plan-keep' }, review.decline.label) : null;
+  const reply = h('button', { type: 'button', class: 'btn btn-plain plan-reply' }, 'Reply instead');
+  const btns = [approve, keep, reply].filter(Boolean);
+  const finish = (focusInput) => () => {
+    S.questions.delete(q.rpcId); planDrafts.delete(q.rpcId);
+    planSheetRpc = null;
+    closeSheet();
+    renderPending(); badge();
+    if (focusInput) input.focus();
+  };
+  approve.onclick = () => settleDecision(q.rpcId, { ok: true, value: { sessionId: q.sessionId, answer: lib.planAnswer(review, true) } }, btns, approve, finish(false));
+  if (keep) keep.onclick = () => settleDecision(q.rpcId, { ok: true, value: { sessionId: q.sessionId, answer: lib.planAnswer(review, false, fb ? fb.value : '') } }, btns, keep, finish(false));
+  reply.onclick = () => settleDecision(q.rpcId, { ok: false, error: { code: 'cancelled', message: 'the user closed this question request', details: {} } }, btns, reply, finish(true));
+  planSheetHead = h('h3', {}, 'Plan review');
+  openSheet({ size: 'large' }, planSheetHead,
+    review.question ? h('p', { class: 'plan-ask' }, review.question) : null,
+    body,
+    fb ? h('label', { for: 'planFeedback' }, `Feedback, sent with ${review.decline.label}`) : null,
+    fb,
+    ...btns);
 }
 
 // ---------- Composer ----------
 const input = $('#input');
-function grow() { input.style.height = 'auto'; input.style.height = Math.min(input.scrollHeight, window.innerHeight * 0.4) + 'px'; paintComposer(); } // every value change goes through here
+// The field grows with its text; the stylesheet caps it at about five lines, then it scrolls.
+// Every value change goes through here, so the send/stop control follows the text.
+function grow() {
+  input.style.height = 'auto';
+  const border = (input.offsetHeight || 0) - (input.clientHeight || 0);
+  input.style.height = (input.scrollHeight + Math.max(0, border)) + 'px';
+  paintComposer();
+}
 input.addEventListener('input', () => { grow(); renderCmdPop(); });
 input.addEventListener('click', () => { if (!input.value.startsWith('/')) renderCmdPop(); });
 input.addEventListener('keydown', (e) => {
@@ -3121,7 +3295,10 @@ async function send() {
   const bubble = R.add(h('div', { class: 'user pending', 'data-rpc': rpcId }, text, ...images.map((im) => h('img', { class: 'transcript-image', src: im.url, alt: 'Image attachment' }))));
   pinned = true; stick(true);
   input.value = ''; grow(); S.images = []; renderAttachments();
-  const payload = { sessionId: cur.id, mode: S.steer && S.running.get(cur.id) ? 'steer' : 'queue', content };
+  // Queue unless Steer was chosen for this message while a turn runs; a waiting decision always
+  // queues, so a typed message never slips past an approval.
+  const mode = S.steer && S.running.get(cur.id) && !decisionWaiting() ? 'steer' : 'queue';
+  const payload = { sessionId: cur.id, mode, content };
   if (TZ) payload.clientTimeZone = TZ;
   try {
     await rpc('session.prompt', payload, rpcId);
@@ -3134,8 +3311,30 @@ async function send() {
   }
 }
 
-// Images
-$('#attachBtn').onclick = () => $('#fileInput').click();
+// The plus menu: everything that adds to a message, labelled, one tap from the composer.
+// dsh sessions take images, not arbitrary files, so Photo library and File both open the image
+// picker (the phone offers its photos, camera and Files from it); File says so.
+function pickImages() { closeSheet(); $('#fileInput').click(); }
+function plusSheet() {
+  // A sheet row that opens another sheet closes this one first, so there is no empty action
+  // sheet left to go Back to. The composer gets focus back, which is also where a template or a
+  // command belongs; the caret is read now, before the sheet can blur it.
+  const sel = [input.selectionStart, input.selectionEnd];
+  const then = (fn) => () => {
+    closeSheet();
+    fn();
+    // The row that opened this is gone, so hand focus back to the composer when the next
+    // sheet closes. Setting it after openSheet avoids raising the keyboard just to blur it.
+    sheetReturn = input;
+  };
+  const item = (label, hint, onclick) => h('button', { type: 'button', class: 'menuitem', onclick }, label, h('small', {}, hint));
+  openSheet({ size: 'medium' }, h('h3', {}, 'Add to message'),
+    item('Photo library', 'Attach photos', pickImages),
+    item('File', 'Attach an image file (images only)', pickImages),
+    item('Prompt template', 'Insert or save a saved prompt', then(() => templatesSheet(sel))),
+    item('Commands', 'Slash commands for this session', then(commandsSheet)));
+}
+$('#attachBtn').onclick = plusSheet;
 $('#fileInput').addEventListener('change', async (e) => {
   for (const f of e.target.files) {
     try { S.images.push(await toImage(f)); } catch (err) { toast('Image failed: ' + err.message); }
@@ -3161,8 +3360,10 @@ function renderAttachments() {
   const box = $('#attachments');
   box.hidden = !S.images.length;
   paintComposer();
-  box.replaceChildren(...S.images.map((im, i) => h('div', { class: 'thumb' }, h('img', { src: im.url, alt: '' }),
-    h('button', { type: 'button', onclick: () => { S.images.splice(i, 1); renderAttachments(); } }, '×'))));
+  // A 56px thumbnail with a 22px remove glyph whose button is a 44px hit area.
+  box.replaceChildren(...S.images.map((im, i) => h('div', { class: 'thumb' }, h('img', { src: im.url, alt: im.name ? 'Attached image ' + im.name : 'Attached image' }),
+    h('button', { type: 'button', class: 'thumb-x', 'aria-label': 'Remove image ' + (i + 1), onclick: () => { S.images.splice(i, 1); renderAttachments(); } },
+      h('span', { class: 'thumb-x-ink', 'aria-hidden': 'true' }, iconNode(CROSS))))));
 }
 
 // ---------- Dictation (Web Speech API) ----------
@@ -3506,10 +3707,11 @@ function templateRow(i, t, use, del) {
     h('button', { type: 'button', class: 'tmplmain', onclick: () => use(i) }, h('b', {}, t.name), h('small', {}, t.text.slice(0, 100) || '(empty)')),
     h('button', { type: 'button', class: 'tmplx', 'aria-label': 'Delete ' + t.name, onclick: (e) => del(i, e.currentTarget) }, '✕'));
 }
-function templatesSheet() {
+function templatesSheet(sel) {
   // Remember the cursor up front: opening the sheet blurs the composer and
-  // some browsers drop the selection on blur.
-  const [a, b] = [input.selectionStart, input.selectionEnd];
+  // some browsers drop the selection on blur. The plus menu hands in the caret it
+  // read before its own sheet took focus.
+  const [a, b] = Array.isArray(sel) ? sel : [input.selectionStart, input.selectionEnd];
   const list = h('div', { class: 'tmpl-list' });
   const render = () => {
     if (!templates.length) {
@@ -3560,7 +3762,6 @@ function templatesSheet() {
       toast('Template saved');
     } }, 'Save template'));
 }
-$('#tmplBtn').onclick = templatesSheet;
 
 // Folder choices: saved workspaces plus project roots from recent sessions.
 // Sessions in deep work dirs (agent-queue/work/…) collapse to their top folder under home;

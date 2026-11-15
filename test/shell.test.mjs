@@ -20,7 +20,10 @@ test('index.html keeps every id the scripts and tests query', () => {
     'searchRow', 'q', 'searchClose', 'menuListBtn', 'listTitle', 'listLargeTitle', 'searchResults', 'backBtn', 'title', 'subtitle', 'menuBtn',
     'sessionTitleButton', 'goalBar', 'feed', 'olderBtn',
     'msgs', 'working', 'workingText', 'jumpBtn', 'dock', 'pending', 'queueLine', 'cmdpop', 'attachments',
-    'composer', 'attachBtn', 'fileInput', 'tmplBtn', 'input', 'micBtn', 'steerBtn', 'sendBtn', 'stopBtn',
+    // PR 5: the composer is one field. #tmplBtn moved into the plus menu (#attachBtn), the
+    // queue/steer chip became the contextual #modeRow, and #sendBtn morphs into Stop, so
+    // #steerBtn and #stopBtn are gone (review.test.mjs covers the morph).
+    'composer', 'attachBtn', 'fileInput', 'input', 'micBtn', 'modeRow', 'sendBtn',
     'scrim', 'sheet', 'sheetBody', 'sheetClose', 'toast'];
   for (const id of ids) assert.ok(tagWithId(id), `#${id}`);
 });
