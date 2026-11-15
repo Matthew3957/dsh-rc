@@ -366,8 +366,8 @@ page's recursion reaches grandchildren. A tree is read again as soon as it chang
 added, a child starting or settling, the parent's catalog growing), so a parent whose turn ended
 while a background child works stays in Running now until the child settles. The `userQuestions`
 projection is mirrored as question frames: a `continued` row (the timed wait ran out and the agent
-moved on) shows as an expired card that says so, with one action back to the session and nothing
-left to answer. Dismissing it only drops the card on the phone.
+moved on) shows as an expired card that says so and is still answered through
+`userQuestions/answer`; Dismiss declines it.
 
 ### Scheduled prompts (dsh 0.2 with the schedule plugin)
 

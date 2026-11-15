@@ -2962,12 +2962,13 @@ function renderPending() {
       if (!belongsToCur(q.sessionId)) continue;
       const review = window.dshReview && window.dshReview.planReviewOf(q.questions);
       const sig = (review ? 'p' : 'q') + (q.expired ? 'x' : '') + '|' + JSON.stringify(q.questions || []);
-      use(q.rpcId, sig, () => (q.expired ? expiredCard(q, review) : review ? planCard(q, review) : questionCard(q)));
+      use(q.rpcId, sig, () => (review ? planCard(q, review) : questionCard(q)));
     }
   }
   for (const id of [...pendingNodes.keys()]) if (!live.has(id)) pendingNodes.delete(id);
-  // The plan was answered elsewhere, or its wait ran out: the review sheet has nothing left to decide.
-  if (planSheetRpc && !(live.has(planSheetRpc) && !(S.questions.get(planSheetRpc) || {}).expired)) {
+  // The plan was answered elsewhere: the review sheet has nothing left to decide. An expired
+  // plan can still be answered, so its sheet stays.
+  if (planSheetRpc && !live.has(planSheetRpc)) {
     const open = !$('#sheet').hidden && !!planSheetHead && sheetCur.heading === planSheetHead;
     planSheetRpc = null;
     if (open) closeSheet();
@@ -3029,8 +3030,9 @@ function questionCard(q) {
   const qs = q.questions || [];
   const state = qs.map((qq) => ({ id: qq.id, selected: new Set(), custom: '' }));
   const lone = qs.length === 1 && qs[0].header ? ` · ${qs[0].header}` : '';
-  const head = decisionHead(`Question${lone}${subNote(q.sessionId)}`, q.seenAt, 'warn');
-  const card = h('div', { class: 'card decision question', 'data-rpc': q.rpcId }, head.row);
+  const head = decisionHead(`${q.expired ? 'Expired question' : 'Question'}${lone}${subNote(q.sessionId)}`, q.expired ? null : q.seenAt, q.expired ? 'muted' : 'warn');
+  const card = h('div', { class: 'card decision question' + (q.expired ? ' expired' : ''), 'data-rpc': q.rpcId }, head.row);
+  if (q.expired) card.append(expiredNote());
   qs.forEach((qq, i) => {
     const st = state[i];
     card.append(h('h3', { class: 'dec-title' }, !lone && qq.header ? `${qq.header}: ` : '', qq.question));
@@ -3076,7 +3078,7 @@ function questionCard(q) {
     card.append(other);
   });
   const send = h('button', { type: 'button', class: 'btn btn-primary dec-btn' }, 'Send answer');
-  const skip = h('button', { type: 'button', class: 'btn btn-plain dec-btn' }, 'Skip');
+  const skip = h('button', { type: 'button', class: 'btn btn-plain dec-btn' }, q.expired ? 'Dismiss' : 'Skip');
   const done = () => { S.questions.delete(q.rpcId); renderPending(); badge(); };
   send.onclick = () => {
     const answers = state.map((st) => {
@@ -3090,20 +3092,10 @@ function questionCard(q) {
   card.append(h('div', { class: 'dec-actions' }, send, skip));
   return { node: card, clock: head.clock, since: q.seenAt };
 }
-// A request whose timed wait ran out: the agent has moved on, so there is nothing left to
-// answer. One quiet action puts the session back in front; dsh-rc only drops the card.
-function expiredCard(q, review) {
-  const card = h('div', { class: 'card decision expired', 'data-rpc': q.rpcId },
-    decisionHead(`${review ? 'Plan review' : 'Question'}${subNote(q.sessionId)}`, null, 'muted').row,
-    h('h3', { class: 'dec-title' }, 'This request expired'),
-    h('p', { class: 'dec-why' }, 'The wait ran out and the agent carried on without an answer.'));
-  const back = h('button', { type: 'button', class: 'btn btn-secondary dec-btn' }, 'Back to the session');
-  back.onclick = () => settleDecision(q.rpcId, { ok: false, error: { code: 'cancelled', message: 'the request expired', details: {} } }, [back], back, () => {
-    S.questions.delete(q.rpcId); planDrafts.delete(q.rpcId); renderPending(); badge();
-    input.focus();
-  });
-  card.append(h('div', { class: 'dec-actions' }, back));
-  return { node: card, clock: null };
+// A request whose timed wait ran out: the agent carried on without it, but dsh still takes a
+// late answer through the same call, so the card keeps its controls and says what happened.
+function expiredNote() {
+  return h('p', { class: 'dec-why expired-note' }, 'The wait ran out and the agent carried on. You can still answer.');
 }
 
 // Plan mode asks for review through an ordinary question tagged plan-review, with the plan as
@@ -3131,11 +3123,12 @@ function planOutline(plan) {
 }
 function planCard(q, review) {
   const { goal, steps } = planOutline(review.plan);
-  const head = decisionHead(`Plan review${subNote(q.sessionId)}`, q.seenAt, 'warn');
+  const head = decisionHead(`${q.expired ? 'Expired plan review' : 'Plan review'}${subNote(q.sessionId)}`, q.expired ? null : q.seenAt, q.expired ? 'muted' : 'warn');
   const open = h('button', { type: 'button', class: 'btn btn-primary dec-btn', 'aria-haspopup': 'dialog' }, 'Review plan');
   open.onclick = () => planSheet(q, review);
-  const card = h('div', { class: 'card decision plan', 'data-rpc': q.rpcId },
+  const card = h('div', { class: 'card decision plan' + (q.expired ? ' expired' : ''), 'data-rpc': q.rpcId },
     head.row,
+    q.expired ? expiredNote() : null,
     h('h3', { class: 'dec-title plan-goal' }, goal),
     steps.length ? h('ol', { class: 'plan-steps' }, ...steps.slice(0, 2).map((s) => h('li', {}, s))) : null,
     steps.length > 2 ? h('p', { class: 'dec-why plan-more' }, `and ${plural(steps.length - 2, 'more step')}`) : null,
