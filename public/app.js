@@ -1259,7 +1259,7 @@ const R = {
     const failed = !!t.isError
       || !!(terminal && ((typeof t.rview.exitCode === 'number' && t.rview.exitCode !== 0)
         || (typeof t.rview.signal === 'string' && !!t.rview.signal)));
-    const cls = t.done ? (failed ? 'err' : 'ok') : (t.orphan ? '' : 'run');
+    const cls = t.done ? (failed ? 'err' : t.orphan && !t.result ? '' : 'ok') : (t.orphan ? '' : 'run');
     t.el.className = 'tool ' + cls;
     const open = t.el.open;
     // dsh 0.1 attaches the presentation view to each event; dsh 0.2 rebuilds it in dsh02.js.
@@ -1291,7 +1291,9 @@ const R = {
       }
       delta = deltaEl(adds, dels);
     }
-    const glyph = statusGlyph(t.done ? (failed ? 'failed' : 'done') : (t.orphan ? 'idle' : 'run'), 'bullet');
+    // A call that never reported a result is not a success: it keeps the neutral ring.
+    const noResult = t.done && t.orphan && !t.result;
+    const glyph = statusGlyph(t.done ? (failed ? 'failed' : noResult ? 'idle' : 'done') : (t.orphan ? 'idle' : 'run'), 'bullet');
     const summary = h('summary', {}, glyph, h('span', { class: 'name' }, prettyTool(t.name)),
       failed ? h('span', { class: 'tool-failed' }, 'Failed') : null,
       h('span', { class: 'sum' }, sum), stat ? h('span', { class: 'stat' }, stat) : null, delta);
@@ -1363,7 +1365,9 @@ function turnView(T) {
   let answerItem = null;
   if (lastTool >= 0) {
     for (let i = items.length - 1; i > lastTool; i--) if (items[i].kind === 'text') { answerItem = items[i]; break; }
-    if (!answerItem) for (let i = lastTool - 1; i >= 0; i--) if (items[i].kind === 'text') { answerItem = items[i]; break; }
+    // Only a finished turn may promote text from before its last tool call: while it runs,
+    // that text is narration and would jump back into the activity on the next step.
+    if (!answerItem && T.done) for (let i = lastTool - 1; i >= 0; i--) if (items[i].kind === 'text') { answerItem = items[i]; break; }
   }
   const live = !T.done && T.liveText ? T.liveText : '';
   if (live) answerItem = null;
@@ -1992,6 +1996,7 @@ function renderSessionDetails(box = null) {
     onclick: async () => {
       refresh.disabled = true;
       try { await loadHistory(); renderSessionDetails(content); }
+      catch { toast('Could not refresh. Check the connection and try again.'); }
       finally { refresh.disabled = false; }
     },
   }, 'Refresh');
