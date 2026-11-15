@@ -389,7 +389,7 @@ async function main() {
   let mock = null, app = null, browser = null;
   const written = [];
   const problems = [];
-  const scenes = SCENES.concat(args.audit ? AUDIT_SCENES : []);
+  const scenes = SCENES.concat(args.audit || (args.only && AUDIT_SCENES.some((s) => args.only.has(s.name))) ? AUDIT_SCENES : []);
   const keepAuditShots = path.resolve(args.out) !== path.join(ROOT, 'docs', 'screenshots');
   // A check run must not overwrite the committed README set by accident. Only write pictures
   // when --out names where they go (the normal, unflagged run still writes docs/screenshots).
