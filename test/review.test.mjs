@@ -231,7 +231,7 @@ function harness(respond) {
   };
   context.globalThis = context;
   vm.createContext(context);
-  vm.runInContext(APP + '\n;globalThis.__t = { S, R, onMux, openSession, revealTool, addCodeCopy, useDsh02: (c) => { dsh2 = c; } };', context, { filename: 'public/app.js' });
+  vm.runInContext(APP + '\n;globalThis.__t = { S, R, onMux, openSession, revealTool, addCodeCopy, paintComposer, send, useDsh02: (c) => { dsh2 = c; } };', context, { filename: 'public/app.js' });
   const t = context.__t;
   t.calls = calls;
   t.el = (sel) => document.querySelector(sel);
@@ -393,66 +393,368 @@ test('a rendered code block gets a Copy action without a new parser', () => {
   assert.ok(wrap.childNodes.includes(pre));
 });
 
-test('a plan review renders as a plan card and answers with dsh\'s labels', async () => {
+// --- Decision cards (PR 5) ----------------------------------------------------
+
+const sheetBody = (t) => t.el('#sheetBody');
+const sheetFoot = (t) => t.el('#sheetFoot');
+const responds = (t) => t.calls.filter((c) => c.method === 'respond');
+
+test('a plan review is a compact card: the goal, the first two steps and Review plan', async () => {
   const t = await openWith([]);
-  t.onMux({ type: 'question/requested', sessionId: 's1', questions: [PLAN_QUESTION] }, { rpcId: 'q-1' });
+  const detail = '# Add a cache\n\n1. Read the config\n2. Wire it in\n3. Add a test\n4. Ship it';
+  t.onMux({ type: 'question/requested', sessionId: 's1', questions: [{ ...PLAN_QUESTION, detail }] }, { rpcId: 'q-1' });
   const card = byClass(t.el('#pending'), 'plan')[0];
   assert.ok(card, 'plan card rendered');
-  assert.match(textOf(card), /Add a cache/);
-  const fb = find(card, (n) => n.tagName === 'TEXTAREA')[0];
-  fb.value = 'use redis';
-  buttonNamed(card, 'Keep planning').onclick();
+  assert.equal(card.getAttribute('data-rpc'), 'q-1');
+  assert.match(textOf(byClass(card, 'kicker')[0]), /^Plan review/);
+  assert.equal(textOf(byClass(card, 'plan-goal')[0]), 'Add a cache');
+  assert.deepEqual(find(byClass(card, 'plan-steps')[0], (n) => n.tagName === 'LI').map(textOf), ['Read the config', 'Wire it in']);
+  assert.match(textOf(card), /and 2 more steps/);
+  assert.doesNotMatch(textOf(card), /Add a test/, 'the card shows two steps; the sheet has the rest');
+  assert.equal(find(card, (n) => n.tagName === 'TEXTAREA').length, 0, 'feedback lives in the sheet');
+  const buttons = find(card, (n) => n.tagName === 'BUTTON');
+  assert.deepEqual(buttons.map(textOf), ['Review plan'], 'one action on the card');
+  assert.match(buttons[0].className, /btn-primary/);
+});
+
+test('the plan card reads a "Goal:" line as the goal', async () => {
+  const t = await openWith([]);
+  const detail = '**Goal:** split `src/router.js` into one module per resource.\n\n1. Create the modules.\n2. Move the handlers.';
+  t.onMux({ type: 'question/requested', sessionId: 's1', questions: [{ ...PLAN_QUESTION, detail }] }, { rpcId: 'q-goal' });
+  const card = byClass(t.el('#pending'), 'plan')[0];
+  assert.equal(textOf(byClass(card, 'plan-goal')[0]), 'split src/router.js into one module per resource.');
+  assert.equal(byClass(card, 'plan-more').length, 0);
+});
+
+test('Review plan opens the full plan in a large sheet: Approve filled, Keep planning quiet, Reply instead plain', async () => {
+  const t = await openWith([]);
+  t.onMux({ type: 'question/requested', sessionId: 's1', questions: [PLAN_QUESTION] }, { rpcId: 'q-1' });
+  buttonNamed(byClass(t.el('#pending'), 'plan')[0], 'Review plan').onclick();
+  assert.equal(t.el('#sheet').hidden, false, 'the sheet is open');
+  assert.equal(t.el('#sheet')['data-size'], 'large');
+  assert.equal(textOf(t.el('#sheetTitle')), 'Plan review');
+  const doc = byClass(sheetBody(t), 'plan-doc')[0];
+  assert.ok(doc, 'the plan is in the sheet body');
+  assert.equal(textOf(doc), PLAN_QUESTION.detail, 'the whole plan, not an excerpt');
+  assert.ok(find(sheetBody(t), (n) => n.tagName === 'TEXTAREA' && /plan-fb/.test(n.className))[0], 'a feedback field');
+  const foot = sheetFoot(t).childNodes;
+  assert.deepEqual(foot.map(textOf), ['Approve', 'Keep planning', 'Reply instead'], 'the sticky footer, in order');
+  assert.equal(foot[0].className, 'go', 'Approve is the one filled control');
+  assert.match(foot[1].className, /btn-secondary/);
+  assert.match(foot[2].className, /btn-plain/);
+  assert.equal(foot.filter((b) => /\bgo\b|btn-primary/.test(b.className)).length, 1);
+});
+
+test('feedback in the plan sheet rides with Keep planning, using dsh\'s labels', async () => {
+  const t = await openWith([]);
+  t.onMux({ type: 'question/requested', sessionId: 's1', questions: [PLAN_QUESTION] }, { rpcId: 'q-1' });
+  buttonNamed(byClass(t.el('#pending'), 'plan')[0], 'Review plan').onclick();
+  const fb = find(sheetBody(t), (n) => n.tagName === 'TEXTAREA')[0];
+  fb.value = 'use redis'; fb.oninput();
+  buttonNamed(sheetFoot(t), 'Keep planning').onclick();
   await tick(); await tick();
-  const sent = t.calls.find((c) => c.method === 'respond');
-  assert.deepEqual(plain(sent.body), {
+  assert.deepEqual(plain(responds(t)[0].body), {
     type: 'client-response', rpcId: 'q-1',
     result: { ok: true, value: { sessionId: 's1', answer: { answers: [{ id: 'plan-review', selected: ['Keep planning'], custom: 'use redis' }] } } },
   });
   assert.equal(t.S.questions.size, 0);
+  assert.equal(t.el('#sheet').hidden, true, 'the sheet closes once answered');
+  assert.equal(byClass(t.el('#pending'), 'plan').length, 0);
 });
 
-test('approving a plan sends the approve label alone, and a reply closes the review as cancelled', async () => {
+test('Approve in the plan sheet sends the approve label alone, and Reply instead cancels', async () => {
   const t = await openWith([]);
   t.onMux({ type: 'question/requested', sessionId: 's1', questions: [PLAN_QUESTION] }, { rpcId: 'q-2' });
-  buttonNamed(byClass(t.el('#pending'), 'plan')[0], 'Approve').onclick();
+  buttonNamed(byClass(t.el('#pending'), 'plan')[0], 'Review plan').onclick();
+  buttonNamed(sheetFoot(t), 'Approve').onclick();
   await tick(); await tick();
-  assert.deepEqual(plain(t.calls.filter((c) => c.method === 'respond')[0].body.result.value.answer), { answers: [{ id: 'plan-review', selected: ['Approve'] }] });
+  assert.deepEqual(plain(responds(t)[0].body.result.value.answer), { answers: [{ id: 'plan-review', selected: ['Approve'] }] });
 
   t.onMux({ type: 'question/requested', sessionId: 's1', questions: [PLAN_QUESTION] }, { rpcId: 'q-3' });
-  buttonNamed(byClass(t.el('#pending'), 'plan')[0], 'Reply instead').onclick();
+  buttonNamed(byClass(t.el('#pending'), 'plan')[0], 'Review plan').onclick();
+  buttonNamed(sheetFoot(t), 'Reply instead').onclick();
   await tick(); await tick();
-  const cancel = t.calls.filter((c) => c.method === 'respond')[1].body;
+  const cancel = responds(t)[1].body;
   assert.equal(cancel.rpcId, 'q-3');
   assert.equal(cancel.result.ok, false);
   assert.equal(cancel.result.error.code, 'cancelled');
+  assert.equal(t.el('#sheet').hidden, true);
 });
 
-test('an ordinary question still renders as a question card', async () => {
+test('dismissing the plan sheet leaves the card and the typed feedback', async () => {
   const t = await openWith([]);
-  t.onMux({ type: 'question/requested', sessionId: 's1', questions: [{ id: 'q', question: 'Which branch?' }] }, { rpcId: 'q-4' });
+  t.onMux({ type: 'question/requested', sessionId: 's1', questions: [PLAN_QUESTION] }, { rpcId: 'q-6' });
+  buttonNamed(byClass(t.el('#pending'), 'plan')[0], 'Review plan').onclick();
+  const fb = find(sheetBody(t), (n) => n.tagName === 'TEXTAREA')[0];
+  fb.value = 'half a thought'; fb.oninput();
+  t.el('#sheetClose').onclick();
+  assert.equal(t.el('#sheet').hidden, true);
+  assert.equal(responds(t).length, 0, 'closing the sheet answers nothing');
+  assert.ok(t.S.questions.has('q-6'));
+  const card = byClass(t.el('#pending'), 'plan')[0];
+  assert.ok(card, 'the card is still behind the sheet');
+  buttonNamed(card, 'Review plan').onclick();
+  assert.equal(find(sheetBody(t), (n) => n.tagName === 'TEXTAREA')[0].value, 'half a thought');
+});
+
+test('a plan answered elsewhere closes its open review sheet', async () => {
+  const t = await openWith([]);
+  t.onMux({ type: 'question/requested', sessionId: 's1', questions: [PLAN_QUESTION] }, { rpcId: 'q-7' });
+  buttonNamed(byClass(t.el('#pending'), 'plan')[0], 'Review plan').onclick();
+  t.onMux({ type: 'question/resolved', sessionId: 's1', questionRpcId: 'q-7' });
+  assert.equal(t.el('#sheet').hidden, true);
   assert.equal(byClass(t.el('#pending'), 'plan').length, 0);
-  assert.match(textOf(t.el('#pending')), /dsh is asking/);
 });
 
-test('a pending card offers a foldable header', async () => {
-  const t = await openWith([]);
-  t.onMux({ type: 'question/requested', sessionId: 's1', questions: [{ id: 'q', question: 'Which branch?' }] }, { rpcId: 'q-5' });
-  const card = byClass(t.el('#pending'), 'card')[0];
-  assert.ok(card, 'card rendered');
-  assert.equal(card.getAttribute('data-rpc'), 'q-5');
-  assert.ok(byClass(card, 'card-head')[0], 'the header can be tapped to fold the card');
-  assert.ok(byClass(card, 'card-wait')[0], 'the folded bar can say an answer is waiting');
+const LONG_COMMAND = 'cd packages/api && npm run build -- --mode=production && '
+  + Array.from({ length: 60 }, (_, i) => `node scripts/check-${i}.mjs --strict`).join(' && ')
+  + '\nnpm test -- --reporter=dot';
+
+test('an approval card shows the whole command with Allow stacked above Deny', async () => {
+  const events = [ev(1, 'turn/start', { turn: 1 }), toolCall(2, 'b9', 'bash', { command: LONG_COMMAND }, bashCall(LONG_COMMAND))];
+  const t = await openWith(events);
+  t.onMux({ type: 'approval/requested', sessionId: 's1', approvalId: 'ap-1', toolName: 'bash', callId: 'b9', reason: 'This command is not on the allow list.' }, { rpcId: 'ap-rpc' });
+  const card = byClass(t.el('#pending'), 'approval')[0];
+  assert.ok(card);
+  assert.equal(textOf(byClass(card, 'kicker')[0]), 'Approval · Bash');
+  assert.equal(textOf(byClass(card, 'dec-title')[0]), 'Run this command?');
+  assert.equal(textOf(byClass(card, 'dec-why')[0]), 'This command is not on the allow list.');
+  assert.equal(textOf(byClass(card, 'cmd-text')[0]), LONG_COMMAND, 'the full command, no clip or ellipsis');
+  assert.ok(buttonNamed(card, 'Copy'), 'Copy is an action on the block');
+  assert.equal(byClass(card, 'card-head').length, 0, 'no fold header');
+  const actions = byClass(card, 'dec-actions')[0].childNodes;
+  assert.deepEqual(actions.map(textOf), ['Allow', 'Deny'], 'stacked, Allow first');
+  assert.match(actions[0].className, /btn-primary/);
+  assert.match(actions[1].className, /btn-plain/);
+  assert.doesNotMatch(actions[1].className, /btn-primary/, 'Allow and Deny differ by more than colour');
+  actions[0].onclick();
+  await tick(); await tick();
+  assert.deepEqual(plain(responds(t)[0].body.result), { ok: true, value: { sessionId: 's1', approvalId: 'ap-1', outcome: 'allowed-once' } });
 });
 
-test('an expired question renders as expired and still offers a dismissable answer', async () => {
+test('an approval whose call is not drawn yet repaints with the command once the lookup lands', async () => {
+  let history = [];
+  const t = harness((method) => {
+    if (method === 'session.history') return { events: history, hasMore: false };
+    if (method === 'session.models') return { current: { provider: 'p', model: 'm' } };
+    return undefined;
+  });
+  t.S.sessions = [{ sessionId: 's1', cwd: '/work/proj' }];
+  await t.openSession('s1');
+  // The approval arrives for a call this page has not drawn; the history read finds it.
+  history = [ev(1, 'turn/start', { turn: 1 }), toolCall(2, 'b7', 'bash', { command: LONG_COMMAND })];
+  t.onMux({ type: 'approval/requested', sessionId: 's1', approvalId: 'ap-2', toolName: 'bash', callId: 'b7' }, { rpcId: 'ap-rpc-2' });
+  assert.match(textOf(byClass(t.el('#pending'), 'approval')[0]), /Reading the command/);
+  await tick(); await tick(); await tick();
+  const card = byClass(t.el('#pending'), 'approval')[0];
+  assert.equal(textOf(byClass(card, 'cmd-text')[0]), LONG_COMMAND);
+  assert.doesNotMatch(textOf(card), /Reading the command/);
+});
+
+test('an approval card uses the arguments the frame carries', async () => {
   const t = await openWith([]);
-  t.onMux({ type: 'question/requested', sessionId: 's1', callId: 'c1', expired: true, questions: [{ id: 'q', question: 'Which branch?' }] }, { rpcId: 'question:s1:c1' });
+  t.onMux({ type: 'approval/requested', sessionId: 's1', approvalId: 'ap-3', toolName: 'bash', args: JSON.stringify({ command: 'rm -rf build' }) }, { rpcId: 'ap-rpc-3' });
+  assert.equal(textOf(byClass(t.el('#pending'), 'cmd-text')[0]), 'rm -rf build');
+});
+
+test('a question card shows a check on the chosen option and Send answer is the primary', async () => {
+  const t = await openWith([]);
+  t.onMux({ type: 'question/requested', sessionId: 's1', questions: [{ id: 'q', header: 'Branch', question: 'Which branch?', options: [{ label: 'main' }, { label: 'develop', description: 'the staging line' }] }] }, { rpcId: 'q-4' });
+  const card = byClass(t.el('#pending'), 'question')[0];
+  assert.ok(card);
+  assert.equal(byClass(t.el('#pending'), 'plan').length, 0);
+  assert.equal(textOf(byClass(card, 'kicker')[0]), 'Question · Branch');
+  assert.equal(textOf(byClass(card, 'dec-title')[0]), 'Which branch?');
+  const opts = byClass(card, 'opt');
+  assert.equal(opts.length, 2);
+  for (const o of opts) {
+    assert.equal(o.getAttribute('role'), 'radio');
+    assert.ok(byClass(o, 'opt-check')[0], 'every option carries a check mark slot');
+  }
+  opts[1].onclick();
+  assert.equal(opts[1].getAttribute('aria-checked'), 'true');
+  assert.match(opts[1].className, /\bsel\b/, 'the chosen row shows its check');
+  assert.equal(opts[0].getAttribute('aria-checked'), 'false');
+  const actions = byClass(card, 'dec-actions')[0].childNodes;
+  assert.deepEqual(actions.map(textOf), ['Send answer', 'Skip']);
+  assert.match(actions[0].className, /btn-primary/);
+  assert.doesNotMatch(actions[1].className, /btn-primary/);
+  const other = find(card, (n) => n.tagName === 'INPUT')[0];
+  other.value = 'release'; other.oninput();
+  actions[0].onclick();
+  await tick(); await tick();
+  assert.deepEqual(plain(responds(t)[0].body.result.value.answer), { answers: [{ id: 'q', selected: ['develop'], custom: 'release' }] });
+  assert.equal(t.S.questions.size, 0);
+});
+
+test('a single-choice question moves like a radio group with the arrow keys', async () => {
+  const t = await openWith([]);
+  t.onMux({ type: 'question/requested', sessionId: 's1', questions: [{ id: 'q', question: 'Which?', options: [{ label: 'a' }, { label: 'b' }, { label: 'c' }] }] }, { rpcId: 'q-keys' });
+  const opts = byClass(t.el('#pending'), 'opt');
+  assert.deepEqual(opts.map((o) => o.tabIndex), [0, -1, -1], 'one tab stop, the first option');
+  opts[0].onkeydown({ key: 'ArrowDown', preventDefault() {} });
+  assert.deepEqual(opts.map((o) => o.getAttribute('aria-checked')), ['false', 'true', 'false']);
+  assert.deepEqual(opts.map((o) => o.tabIndex), [-1, 0, -1], 'the chosen option takes the tab stop');
+  opts[1].onkeydown({ key: 'ArrowLeft', preventDefault() {} });
+  assert.equal(opts[0].getAttribute('aria-checked'), 'true');
+  opts[0].onkeydown({ key: 'ArrowUp', preventDefault() {} });
+  assert.equal(opts[2].getAttribute('aria-checked'), 'true', 'the arrow wraps round to the last option');
+});
+
+test('a multi-select question keeps every chosen option', async () => {
+  const t = await openWith([]);
+  t.onMux({ type: 'question/requested', sessionId: 's1', questions: [{ id: 'm', question: 'Which checks?', multiSelect: true, options: [{ label: 'lint' }, { label: 'test' }, { label: 'build' }] }] }, { rpcId: 'q-8' });
+  const opts = byClass(t.el('#pending'), 'opt');
+  assert.equal(opts[0].getAttribute('role'), 'checkbox');
+  opts[0].onclick(); opts[2].onclick();
+  assert.deepEqual(opts.map((o) => o.getAttribute('aria-checked')), ['true', 'false', 'true']);
+  buttonNamed(t.el('#pending'), 'Send answer').onclick();
+  await tick(); await tick();
+  assert.deepEqual(plain(responds(t)[0].body.result.value.answer), { answers: [{ id: 'm', selected: ['lint', 'build'] }] });
+});
+
+test('a waiting card keeps its node, and its chosen option, when another card arrives', async () => {
+  const t = await openWith([]);
+  t.onMux({ type: 'question/requested', sessionId: 's1', questions: [{ id: 'q', question: 'Which?', options: [{ label: 'a' }, { label: 'b' }] }] }, { rpcId: 'q-9' });
+  const card = byClass(t.el('#pending'), 'question')[0];
+  byClass(card, 'opt')[1].onclick();
+  t.onMux({ type: 'approval/requested', sessionId: 's1', approvalId: 'ap-9', toolName: 'bash', args: '{"command":"ls"}' }, { rpcId: 'ap-rpc-9' });
+  assert.equal(byClass(t.el('#pending'), 'question')[0], card);
+  assert.equal(byClass(card, 'opt')[1].getAttribute('aria-checked'), 'true');
+});
+
+test('an expired request is a muted card with one action back to the session', async () => {
+  const t = await openWith([]);
+  t.onMux({ type: 'question/requested', sessionId: 's1', callId: 'c1', expired: true, questions: [{ id: 'q', question: 'Which branch?', options: [{ label: 'main' }] }] }, { rpcId: 'question:s1:c1' });
   const card = byClass(t.el('#pending'), 'expired')[0];
   assert.ok(card, 'expired card rendered');
-  assert.match(textOf(card), /Question expired/);
-  assert.match(textOf(card), /still answer/);
-  assert.ok(buttonNamed(card, 'Dismiss'), 'an expired question can be dismissed');
-  assert.ok(buttonNamed(card, 'Answer'), 'an expired question can still be answered');
+  assert.equal(textOf(byClass(card, 'dec-title')[0]), 'This request expired');
+  const buttons = find(card, (n) => n.tagName === 'BUTTON');
+  assert.deepEqual(buttons.map(textOf), ['Back to the session'], 'no dead answer buttons');
+  assert.doesNotMatch(buttons[0].className, /btn-primary/);
+  assert.equal(byClass(card, 'opt').length, 0);
+  buttons[0].onclick();
+  await tick(); await tick();
+  assert.equal(responds(t)[0].body.result.ok, false, 'dismissed, not answered');
+  assert.equal(byClass(t.el('#pending'), 'expired').length, 0);
+});
+
+test('an expired plan review offers no Approve', async () => {
+  const t = await openWith([]);
+  t.onMux({ type: 'question/requested', sessionId: 's1', callId: 'c2', expired: true, questions: [PLAN_QUESTION] }, { rpcId: 'question:s1:c2' });
+  const card = byClass(t.el('#pending'), 'expired')[0];
+  assert.match(textOf(byClass(card, 'kicker')[0]), /^Plan review/);
+  assert.deepEqual(find(card, (n) => n.tagName === 'BUTTON').map(textOf), ['Back to the session']);
+});
+
+// --- Composer (PR 5): one send/stop control and Queue by default -------------
+
+const HTML = fs.readFileSync(new URL('../public/index.html', import.meta.url), 'utf8');
+
+test('the composer has one trailing control and no second stop button', () => {
+  const form = HTML.slice(HTML.indexOf('<form id="composer"'), HTML.indexOf('</form>'));
+  assert.deepEqual([...form.matchAll(/<button[^>]*\bid="([^"]+)"/g)].map((m) => m[1]), ['attachBtn', 'micBtn', 'sendBtn']);
+  assert.doesNotMatch(HTML, /id="stopBtn"|id="steerBtn"|id="tmplBtn"|>Aa</);
+  assert.match(form, /placeholder="Message dsh"/);
+});
+
+async function openComposer(extra) {
+  const t = harness((method, body) => {
+    if (method === 'session.history') return { events: [], hasMore: false };
+    if (method === 'session.models') return { current: { provider: 'p', model: 'm' } };
+    if (method === 'session.prompt' || method === 'session.cancel' || method === 'respond') return {};
+    return extra ? extra(method, body) : undefined;
+  });
+  t.S.sessions = [{ sessionId: 's1', cwd: '/work/proj' }];
+  await t.openSession('s1');
+  t.btn = () => t.el('#sendBtn');
+  t.type = (text) => { t.el('#input').value = text; t.paintComposer(); };
+  return t;
+}
+
+test('the plus menu lists the four ways to add something and hands the caret to templates', async () => {
+  const t = await openComposer();
+  t.el('#input').value = 'hello world';
+  t.el('#input').selectionStart = 5;
+  t.el('#input').selectionEnd = 5;
+  t.el('#attachBtn').onclick();
+  assert.equal(t.el('#sheet').hidden, false);
+  assert.equal(textOf(t.el('#sheetTitle')), 'Add to message');
+  const rows = find(t.el('#sheetBody'), (n) => n.tagName === 'BUTTON');
+  assert.equal(rows.length, 4);
+  const row = (label) => rows.find((r) => textOf(r).startsWith(label));
+  for (const label of ['Photo library', 'File', 'Prompt template', 'Commands']) assert.ok(row(label), label);
+  row('Prompt template').onclick();
+  assert.equal(textOf(t.el('#sheetTitle')), 'Prompt templates', 'the plus sheet is replaced, not stacked');
+  assert.equal(t.el('#sheetBack').hidden, true);
+  assert.match(textOf(t.el('#sheetBody')), /No templates saved yet/);
+});
+
+test('send morphs into stop in the same control while a turn runs and the field is empty', async () => {
+  const t = await openComposer();
+  t.type('');
+  assert.equal(t.btn().getAttribute('data-state'), 'send');
+  assert.equal(t.btn().getAttribute('aria-label'), 'Send');
+  assert.equal(t.btn().disabled, true, 'muted when empty');
+
+  t.S.running.set('s1', true);
+  t.paintComposer();
+  assert.equal(t.btn().getAttribute('data-state'), 'stop');
+  assert.equal(t.btn().getAttribute('aria-label'), 'Stop');
+  assert.equal(t.btn().disabled, false);
+  t.btn().onclick();
+  await tick();
+  assert.ok(t.calls.some((c) => c.method === 'session.cancel'), 'the stop square cancels the turn');
+
+  t.type('one more thing');
+  assert.equal(t.btn().getAttribute('data-state'), 'send');
+  assert.equal(t.btn().getAttribute('aria-label'), 'Queue message');
+  assert.equal(t.el('#modeRow').hidden, false, 'Queue / Steer appears with text while running');
+
+  t.S.running.set('s1', false);
+  t.paintComposer();
+  assert.equal(t.btn().getAttribute('aria-label'), 'Send');
+  assert.equal(t.el('#modeRow').hidden, true, 'no Queue / Steer when nothing runs');
+});
+
+test('a message queues by default while a turn runs, and steers only when chosen', async () => {
+  const t = await openComposer();
+  t.S.running.set('s1', true);
+  t.type('queued please');
+  await t.send();
+  const prompts = () => t.calls.filter((c) => c.method === 'session.prompt').map((c) => c.body.payload.mode);
+  assert.deepEqual(prompts(), ['queue']);
+
+  t.type('steer this');
+  const seg = byClass(t.el('#modeRow'), 'seg')[0];
+  assert.ok(seg, 'the segmented control is in the row');
+  assert.equal(seg.getAttribute('role'), 'radiogroup');
+  const steer = find(seg, (n) => n.tagName === 'BUTTON' && textOf(n) === 'Steer')[0];
+  steer.onclick();
+  assert.equal(t.S.steer, true);
+  assert.equal(t.btn().getAttribute('aria-label'), 'Steer the running turn');
+  await t.send();
+  assert.deepEqual(prompts(), ['queue', 'steer']);
+  assert.equal(t.S.steer, false, 'Steer is per message; the next one queues again');
+});
+
+test('while a decision waits a typed message queues and Send is quiet', async () => {
+  const t = await openComposer();
+  t.S.running.set('s1', true);
+  t.onMux({ type: 'approval/requested', sessionId: 's1', approvalId: 'ap-w', toolName: 'bash', args: '{"command":"ls"}' }, { rpcId: 'ap-rpc-w' });
+  t.S.steer = true; // even a Steer chosen earlier
+  t.type('');
+  assert.equal(t.btn().getAttribute('data-state'), 'stop', 'an empty field still offers Stop');
+  assert.match(t.btn().className, /\bquiet\b/, 'but Stop steps back while a decision waits');
+  t.type('while you wait');
+  assert.match(t.btn().className, /\bquiet\b/, 'Allow keeps the only filled accent');
+  assert.equal(t.el('#modeRow').hidden, true, 'no Steer past a waiting decision');
+  await t.send();
+  assert.equal(t.calls.filter((c) => c.method === 'session.prompt')[0].body.payload.mode, 'queue');
+
+  t.onMux({ type: 'approval/resolved', sessionId: 's1', approvalId: 'ap-w' });
+  t.type('after');
+  assert.doesNotMatch(t.btn().className, /\bquiet\b/, 'Send is primary again once the decision clears');
 });
 
 test('a huge diff keeps bounded ops and exact counts', () => {
