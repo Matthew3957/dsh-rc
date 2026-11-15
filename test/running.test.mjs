@@ -70,6 +70,16 @@ function allByClass(root, cls) {
   return out;
 }
 const oneByClass = (root, cls) => allByClass(root, cls)[0];
+// Jobs, subagents and the card itself draw the shell's universal status glyph: `glyph`, one
+// state class, and the role class the layout hooks on (run-dot, jdot, adot).
+const GLYPH_STATES = ['idle', 'run', 'approve', 'ask', 'unread', 'done', 'failed', 'stopping', 'stopped'];
+function glyphOf(el) {
+  assert.ok(el, 'a glyph element');
+  const cls = String(el.className || '').split(/\s+/);
+  assert.ok(cls.includes('glyph'), `a status glyph, not ${el.className}`);
+  assert.equal(el.getAttribute('aria-hidden'), 'true', 'the glyph is decoration; the row says the state');
+  return cls.filter((c) => GLYPH_STATES.includes(c)).join(' ');
+}
 const elementKids = (el) => (el.childNodes || []).filter((n) => n.nodeType === 1);
 const isLive = (el) => el.hidden === true || el.hidden === '';
 
@@ -245,6 +255,18 @@ test('a session/jobs frame fills the job list', async () => {
   assert.equal(textOf(oneByClass(job, 'jkind')), 'bash');
   assert.equal(textOf(oneByClass(job, 'jlabel')), 'sleep 180');
   assert.equal(oneByClass(job, 'jtime').getAttribute('data-since'), String(T0 - 5_000));
+  assert.equal(glyphOf(oneByClass(job, 'jdot')), 'run');
+});
+
+test('a job row draws its state with the universal glyph: stopping and stopped stay apart', () => {
+  const t = harness();
+  const glyphFor = (status) => glyphOf(oneByClass(t.jobRow(runningJob({ id: 'j-' + status, status }), 's1'), 'jdot'));
+  assert.equal(glyphFor('running'), 'run');
+  assert.equal(glyphFor('completed'), 'done');
+  assert.equal(glyphFor('failed'), 'failed');
+  assert.equal(glyphFor('stopping'), 'stopping');
+  assert.equal(glyphFor('killed'), 'stopped');
+  assert.equal(glyphFor('something-new'), 'idle', 'an unknown state reads as idle, not as a failure');
 });
 
 test('an emptied jobs frame removes the jobs and the card when nothing else runs', async () => {
@@ -269,7 +291,7 @@ test('a live background job keeps a session on the dashboard after its turn ends
   assert.equal(t.el('#running').hidden, false);
   assert.equal(t.card('s1') && t.card('s1').getAttribute('data-session'), 's1');
   // The dot goes idle: the turn is over even though the job is still live.
-  assert.match(oneByClass(t.card('s1'), 'run-dot').className, /idle/);
+  assert.equal(glyphOf(oneByClass(t.card('s1'), 'run-dot')), 'idle');
 });
 
 test('the subagent tree comes from subagent.list and timing from its projection', async () => {
@@ -289,7 +311,7 @@ test('the subagent tree comes from subagent.list and timing from its projection'
   const row = oneByClass(card, 'run-agent');
   assert.equal(textOf(oneByClass(row, 'aname')), 'Run the tests');
   assert.equal(textOf(oneByClass(row, 'amode')), 'one-shot');
-  assert.match(oneByClass(row, 'adot').className, /running/);
+  assert.equal(glyphOf(oneByClass(row, 'adot')), 'run');
   // dsh-subagent's `subagentTiming` view: an open interval while the child turns.
   t.onMux({ type: 'session/projection', sessionId: 'sub-1', key: 'subagentTiming', value: { settledMs: 0, active: { since: PROMPT_AT, through: T0 } }, seq: 4 }, {});
   t.renderDashboard();
@@ -335,7 +357,7 @@ test('a settled subagent shows its accumulated time instead of a live clock', as
   const row = oneByClass(t.card('s1'), 'run-agent');
   assert.equal(textOf(oneByClass(row, 'atime')), '2m 05s');
   assert.equal(oneByClass(row, 'atime').getAttribute('data-since'), undefined);
-  assert.match(oneByClass(row, 'adot').className, /settled/);
+  assert.equal(glyphOf(oneByClass(row, 'adot')), 'done');
 });
 
 // The order dsh 0.2.0-rc.2 sends when a turn spawns one background subagent and ends
@@ -376,7 +398,7 @@ test('a background subagent keeps its parent in Running now after the parent tur
   assert.match(textOf(oneByClass(card, 'run-more')), /1 subagent/);
   const row = oneByClass(card, 'run-agent');
   assert.equal(textOf(oneByClass(row, 'aname')), 'sleep then done');
-  assert.match(oneByClass(row, 'adot').className, /running/);
+  assert.equal(glyphOf(oneByClass(row, 'adot')), 'run');
 });
 
 test('the child settling takes the parent off Running now', async () => {
@@ -660,7 +682,7 @@ async function openExternal(t) {
 const feedLines = (card) => allByClass(card, 'ce').map((el) => textOf(el));
 const extDot = (t, name) => {
   const row = allByClass(t.card('s1'), 'run-agent').find((r) => textOf(oneByClass(r, 'aname')) === name);
-  return oneByClass(row, 'adot').className;
+  return glyphOf(oneByClass(row, 'adot'));
 };
 const turnEnd = (t) => t.onMux({ type: 'session/event', sessionId: 's1', event: { seq: 50, time: T0, type: 'turn/end', data: { turn: 1, reason: { kind: 'completed' } } } }, {});
 // Pretend `ms` passed since the page last looked at a run: every time it holds moves back.
@@ -759,7 +781,7 @@ test('an external run with no Claude transcript (a Codex or Gemini run) shows no
   for (const panel of allByClass(card, 'run-claude')) assert.equal(panel.hidden, true, 'an unmatched run draws no feed');
   assert.ok(t.httpCalls.every((u) => u.startsWith('./claude/runs?')), 'no events were read');
   assert.deepEqual(srv.reads, []);
-  assert.match(extDot(t, 'Second opinion'), /settled/);
+  assert.equal(extDot(t, 'Second opinion'), 'done');
   turnEnd(t);
   t.renderDashboard();
   assert.equal(t.el('#running').hidden, true, 'an unmatched external run does not keep the parent on the dashboard');
@@ -774,7 +796,7 @@ test('a matched transcript being written shows the external row live', async () 
   });
   const t = externalWorld([extEntry()], srv);
   await openExternal(t);
-  assert.match(extDot(t, 'Review the parser module'), /running/, 'the transcript, not the inactive catalog row, decides the dot');
+  assert.equal(extDot(t, 'Review the parser module'), 'run', 'the transcript, not the inactive catalog row, decides the dot');
   assert.deepEqual(feedLines(t.card('s1')), ['›Read: server/parser.mjs']);
   t.stopClaudeFeed();
 });
@@ -791,7 +813,7 @@ test('external runs are matched while the card is still folded, and the panel wa
   assert.equal(t.claudeRuns.get('s1\u0000ext-1').runId, RUN_A, 'matched without the card ever opening');
   assert.deepEqual(srv.reads, [[RUN_A, null]]);
   assert.equal(allByClass(t.card('s1'), 'run-claude').length, 0, 'no panel under a folded card');
-  assert.match(extDot(t, 'Review the parser module'), /running/);
+  assert.equal(extDot(t, 'Review the parser module'), 'run');
   const calls = t.httpCalls.length;
   t.toggleDashCard('s1');
   assert.deepEqual(feedLines(t.card('s1')), ['“Looking at the tokenizer.'], 'opening shows what was already read');
@@ -813,7 +835,7 @@ test('a Claude run still writing keeps its parent in Running now after the paren
   assert.equal(t.S.running.get('s1'), false);
   assert.equal(t.el('#running').hidden, false, 'the parent stays while the transcript is live');
   assert.ok(t.card('s1'));
-  assert.match(oneByClass(t.card('s1'), 'run-dot').className, /idle/, 'the parent turn itself is over');
+  assert.equal(glyphOf(oneByClass(t.card('s1'), 'run-dot')), 'idle', 'the parent turn itself is over');
 
   // The transcript keeps growing: the folded card's next read sees it and the card stays.
   srv.feeds[RUN_A].push({ k: 'tool', id: 'tu2', text: 'Bash: npm test', at: T0 });

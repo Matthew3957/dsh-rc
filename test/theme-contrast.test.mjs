@@ -78,6 +78,11 @@ function textPairs(p) {
     pairs.push([`fg on ${k} diff tint (over code)`, c('fg'), mix(c(k), a, c('code'))]);
   }
   pairs.push(['err on error note tint (over bg)', c('err'), mix(c('err'), 0.1, c('bg'))]);
+  // The shell (nav, bottom bar, sheet, banner, segmented control). Fields paint with the sunken
+  // surface (bg2), whose text pairs are already covered above.
+  pairs.push(['sheet Done, Back and plain buttons (accent on card)', c('accent'), c('card')]);
+  pairs.push(['segmented label on its track (fg on bg2)', c('fg'), c('bg2')], ['segmented label on its thumb (fg on card)', c('fg'), c('card')]);
+  pairs.push(['offline banner (fg on card)', c('fg'), c('card')]);
   return pairs;
 }
 
@@ -144,10 +149,52 @@ test('colourblind and contrast never pair a red-ish with a green-ish status colo
   }
 });
 
-test('the stylesheet gives the cue themes a non-colour cue for tools, offline and failed jobs', () => {
-  for (const id of ['colourblind', 'contrast']) {
-    for (const needle of ['.tool.ok .bullet::before', '.tool.err .bullet::before', '.dot:not(.on)', '.jdot.failed', '.jdot.stopping']) {
-      assert.ok(all.some((b) => b.chain.at(-1).split(',').some((s) => s.trim() === `html[data-theme="${id}"] ${needle}`)), `${id} ${needle}`);
+// ---- the universal status glyphs ----
+// One 16px vocabulary for sessions, tools, jobs and subagents (docs/design, section 5.4). The
+// shape requirement the colourblind and contrast themes used to carry alone now holds in every
+// theme: each state has its own drawn shape, and no theme may restyle a glyph.
+const GLYPHS = ['idle', 'run', 'approve', 'ask', 'unread', 'done', 'failed', 'stopping', 'stopped'];
+const selectors = (b) => b.chain.at(-1).split(',').map((s) => s.trim());
+// Every declaration that draws a state's mark: the rules naming `.glyph.<state>::before`.
+const glyphShape = (state) => all.filter((b) => selectors(b).includes(`.glyph.${state}::before`))
+  .map((b) => b.body.replace(/\s+/g, ' ').trim()).join(' | ');
+const ownShape = (state) => all.filter((b) => selectors(b).length === 1 && selectors(b)[0] === `.glyph.${state}::before`)
+  .map((b) => b.body.replace(/\s+/g, ' ').trim()).join(' | ');
+
+test('every status state has its own glyph, drawn by shape rather than colour', () => {
+  for (const state of GLYPHS) {
+    const own = ownShape(state);
+    assert.ok(own, `.glyph.${state}::before has a rule of its own`);
+    assert.match(glyphShape(state), /(border|background|mask)\s*:/, `.glyph.${state} draws something`);
+  }
+  assert.equal(new Set(GLYPHS.map(ownShape)).size, GLYPHS.length, 'no two states share a shape');
+});
+
+test('approval and question, and stopping and stopped, never read as the same glyph', () => {
+  assert.notEqual(ownShape('approve'), ownShape('ask'), 'allow this command vs answer this question');
+  assert.notEqual(ownShape('stopping'), ownShape('stopped'), 'being cancelled vs ended that way');
+  // The two waits share a colour on purpose, so their marks (! and ?) must differ in the drawing.
+  const mark = (s) => (ownShape(s).match(/url\("data:image\/svg\+xml,[^"]+"\)/) || [''])[0];
+  assert.ok(mark('approve') && mark('ask') && mark('approve') !== mark('ask'), 'distinct marks in the discs');
+  assert.ok(mark('stopping'), 'stopping is a drawn triangle');
+  assert.match(ownShape('stopped'), /border-radius:\s*2px/, 'stopped is a square, not a dot');
+});
+
+test('no theme changes a status glyph, so shape never depends on the theme', () => {
+  const themed = all.filter((b) => b.chain.some((h) => h.includes('data-theme')))
+    .flatMap(selectors).filter((s) => /\.(glyph|bullet|jdot|adot|pdot|run-dot|dot)\b/.test(s));
+  assert.deepEqual(themed, []);
+});
+
+test('status glyphs stay visible on the page and on cards (3:1, non-text contrast)', () => {
+  // The ink each state is painted with; the ! and ? are cut out of the amber disc, so the disc
+  // against the surface behind it is also the mark's contrast.
+  const ink = { idle: 'muted', run: 'accent', unread: 'accent', approve: 'warn', ask: 'warn', stopping: 'warn', done: 'ok', failed: 'err', stopped: 'muted' };
+  for (const id of THEMES) for (const dark of [false, true]) {
+    const p = palette(id, dark);
+    for (const [state, token] of Object.entries(ink)) for (const bg of ['bg', 'card']) {
+      const r = ratio(hex(p[token]), hex(p[bg]));
+      assert.ok(r >= 3, `${id} ${dark ? 'dark' : 'light'}: ${state} glyph (${token}) on ${bg} is ${r.toFixed(2)}`);
     }
   }
 });

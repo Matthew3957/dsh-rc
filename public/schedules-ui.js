@@ -33,7 +33,8 @@
       const item = (e) => {
         const st = SC().stateOf(e, now);
         return h('button', { type: 'button', class: 'plug sched', onclick: () => detailSheet(e.id) },
-          h('span', { class: 'pdot ' + (st === 'active' ? 'on' : st === 'overdue' ? 'late' : 'off') }),
+          // The shell's status glyphs: a tick when active, the caution triangle when overdue.
+          h('span', { class: 'glyph pdot ' + (st === 'active' ? 'done' : st === 'overdue' ? 'stopping' : 'stopped'), 'aria-hidden': 'true' }),
           h('div', { class: 'pmain' }, h('b', {}, e.title), h('small', {}, `${SC().ruleText(e, TZ)} · ${SC().nextText(e, now)}`)),
           h('span', { class: 'pstate' }, '›'));
       };
@@ -174,7 +175,8 @@
     changed: () => {
       available = !!dsh2;
       // Only repaint while a schedules sheet is the one on screen, never over another sheet.
-      if (redraw && !$('#sheet').hidden && $('#sheetBody [data-sched]')) redraw();
+      // The shell lifts the sheet's heading into its title row, so look in the whole sheet.
+      if (redraw && !$('#sheet').hidden && $('#sheet [data-sched]')) redraw();
     },
   };
 })();
