@@ -1042,33 +1042,6 @@ if (typeof IntersectionObserver === 'function') {
     for (const e of entries) $('#listNav').classList.toggle('titled', !e.isIntersecting);
   }, { root: $('#listScroll') }).observe($('#listLargeTitle'));
 }
-// Theme picker (public/theme.js applies and remembers the choice; style.css holds the colours).
-function themeItem() {
-  const t = window.dshTheme; if (!t) return null;
-  const cur = t.THEMES.find((x) => x.id === t.current());
-  return h('button', { class: 'menuitem', onclick: themeSheet }, 'Theme', h('small', {}, cur ? cur.label : 'Default'));
-}
-function themeSheet() {
-  const t = window.dshTheme; if (!t) return;
-  const now = t.current();
-  openSheet(h('h3', {}, 'Theme'),
-    ...t.THEMES.map((x) => h('button', {
-      class: 'menuitem' + (x.id === now ? ' cur' : ''), 'aria-pressed': String(x.id === now),
-      onclick: () => { if (!t.set(x.id)) toast('Applied for now: this browser refused to save it'); themeSheet(); },
-    }, x.label, h('small', {}, x.hint))),
-    h('div', { class: 'note' }, 'Each theme follows your device’s light or dark setting. Saved on this device.'));
-}
-function listMenuSheet() {
-  const notifState = h('small', {}, 'Approvals, questions, finished turns');
-  refreshPushState().then((st) => { notifState.textContent = pushStateLabel(st); }).catch(() => {});
-  openSheet(h('h3', {}, 'Menu'),
-    h('button', { class: 'menuitem', onclick: () => notificationsSheet() }, 'Notifications', notifState),
-    themeItem(),
-    h('button', { class: 'menuitem', onclick: pluginsSheet }, 'Plugins & connectors', h('small', {}, 'What this dsh has loaded')),
-    S.tunnelUrl ? h('button', { class: 'menuitem', onclick: () => { tunnelSheet().catch((e) => toast('Tunnel address unavailable: ' + e.message)); } }, 'Open on your phone', h('small', {}, 'Show the tunnel address as a QR code')) : null,
-    location.pathname.replace(/\/+$/, '') ? h('a', { class: 'menuitem', href: '/', style: 'color:inherit;text-decoration:none' }, 'Open full dsh web UI') : null);
-}
-$('#menuListBtn').onclick = listMenuSheet;
 
 // ---------- Renderer ----------
 // A turn is an answer plus its activity. The model below is built only from events,
@@ -3537,7 +3510,8 @@ function segmented(options, value, onChange, label) {
 // openSheet(...kids) fills it. A leading <h3> (or the first child of a leading wrapper) becomes
 // the title; a primary `.go` button, with the buttons right after it, moves to the footer; a
 // sheet with a field opens large, others medium. An options object first overrides:
-// { size: 'medium' | 'large', replace: true }.
+// { size: 'medium' | 'large', replace: true, grouped: true }. A grouped sheet (Settings and its
+// pages, the session menu) is the page colour, so its card-surface groups read as inset lists.
 // While a sheet is open, opening one with another title pushes it: the title row shows Back,
 // which returns to the one below as it was. Opening the same title again (a reload or a
 // redraw) replaces it in place, and opening a title already in the stack goes back to it.
@@ -3565,6 +3539,7 @@ function paintSheet(st) {
   foot.replaceChildren(...st.foot);
   foot.hidden = !st.foot.length;
   sheet.setAttribute('data-size', st.size);
+  if (st.grouped) sheet.setAttribute('data-grouped', ''); else sheet.removeAttribute('data-grouped');
   // A footer with a primary action makes this a form: the way out is Cancel, not Done.
   $('#sheetClose').textContent = st.foot.some((n) => hasClass(n, 'go')) ? 'Cancel' : 'Done';
   $('#sheetBack').hidden = !sheetStack.length;
@@ -3577,6 +3552,7 @@ function sheetSnapshot() {
     title: sheetCur.title, heading: sheetCur.heading,
     body: [...(body.childNodes || [])], foot: [...($('#sheetFoot').childNodes || [])],
     size: sheet.getAttribute('data-size') || 'medium', scroll: body.scrollTop,
+    grouped: sheet.getAttribute('data-grouped') != null,
   };
 }
 // Keep focus in the sheet: on the sheet itself unless something inside already has it.
@@ -3611,7 +3587,7 @@ function openSheet(...kids) {
     nodes = nodes.slice(0, go).concat(nodes.slice(end));
   }
   const size = opts.size || (sheetHasField(nodes.concat(foot)) ? 'large' : 'medium');
-  paintSheet({ title, heading, body: nodes, foot, size, scroll: 0 });
+  paintSheet({ title, heading, body: nodes, foot, size, scroll: 0, grouped: !!opts.grouped });
   $('#scrim').hidden = false; sheet.hidden = false;
   setSheetInert(true);
   focusSheet();
@@ -3841,28 +3817,27 @@ $('#newBtn').onclick = async () => {
   };
 };
 
-$('#menuBtn').onclick = () => {
+// The session menu: what acts on this session, then Settings, then Archive on its own. App-wide
+// things (notifications, appearance, plugins, prices, the full dsh UI) live in Settings;
+// Commands is in the composer's plus menu and Refresh in Session details.
+function sessionMenuSheet() {
   const cur = S.cur; if (!cur) return;
-  const notifState = h('small', {}, 'Approvals, questions, finished turns');
-  const notifRow = h('button', { class: 'menuitem', onclick: () => notificationsSheet() }, 'Notifications', notifState);
-  refreshPushState().then((st) => { notifState.textContent = pushStateLabel(st); }).catch(() => {});
-  openSheet(h('h3', {}, $('#title').textContent),
-    h('button', { class: 'menuitem', onclick: sessionDetailsSheet }, 'Session details', h('small', {}, 'Route, context, usage and session facts')),
-    h('button', { class: 'menuitem', onclick: modelSheet }, 'Model', h('small', {}, 'Switch the model for this session')),
-    h('button', { class: 'menuitem', onclick: pricesSheet }, 'Prices', h('small', {}, 'Override the price table behind "est. cost"')),
-    dsh2 ? h('button', { class: 'menuitem', onclick: () => goalSheet() }, 'Goal', h('small', {}, goalFor(cur.id) ? 'View, edit, pause or clear' : 'Keep this session working toward one objective')) : null,
-    window.dshSchedulesUI && window.dshSchedulesUI.menuItem(), // per session, so in the chat menu
-    h('button', { class: 'menuitem', onclick: commandsSheet }, 'Commands', h('small', {}, 'Slash commands available here')),
-    notifRow,
-    themeItem(),
-    h('button', { class: 'menuitem', onclick: renameSheet }, 'Rename'),
-    h('button', { class: 'menuitem', onclick: forkSession }, 'Fork', h('small', {}, 'Branch a new session from the last finished turn')),
-    h('button', { class: 'menuitem', onclick: exportSheet }, 'Export log', h('small', {}, 'Download this session as a ZIP')),
-    h('button', { class: 'menuitem', onclick: archiveSheet }, 'Archive', h('small', {}, 'Hide it from the session list')),
-    h('button', { class: 'menuitem', onclick: pluginsSheet }, 'Plugins & connectors', h('small', {}, 'What this dsh has loaded')),
-    h('button', { class: 'menuitem', onclick: () => { closeSheet(); loadHistory(); } }, 'Refresh'),
-    location.pathname.replace(/\/+$/, '') ? h('a', { class: 'menuitem', href: '/', style: 'color:inherit;text-decoration:none' }, 'Open full dsh web UI') : null);
-};
+  const goal = dsh2 ? goalFor(cur.id) : null;
+  const route = routeFor(cur);
+  openSheet({ grouped: true }, h('h3', {}, $('#title').textContent),
+    setGroup({ label: 'This session' },
+      setRow('Session details', { onclick: sessionDetailsSheet }),
+      setRow('Model', { onclick: modelSheet, value: route && route.model }),
+      dsh2 ? setRow('Goal', { onclick: () => goalSheet(), value: goal ? window.dsh02.goalStatus(goal).text : 'None' }) : null,
+      window.dshSchedulesUI && window.dshSchedulesUI.menuItem(), // per session, so in this menu
+      setRow('Rename', { onclick: renameSheet }),
+      setRow('Fork', { onclick: forkSession, chevron: false }),
+      setRow('Export log', { onclick: exportSheet })),
+    setGroup({ label: 'App' }, setRow('Settings', { onclick: settingsSheet })),
+    // Destructive, so last and alone; its sheet names what it does before anything happens.
+    setGroup({ label: 'Archive' }, setRow('Archive', { onclick: archiveSheet, tone: 'danger', chevron: false })));
+}
+$('#menuBtn').onclick = sessionMenuSheet;
 // ---------- Plugins (read-only) ----------
 // Both APIs answer `pluginInventory/list` (the pluginInventory Typert namespace). The 0.2
 // snapshot also carries display metadata and agent-preset compositions; dsh02.js resolves
@@ -3871,14 +3846,15 @@ $('#menuBtn').onclick = () => {
 // refuses the whole `pluginManager` namespace, so the phone cannot change the profile and
 // this screen stays read-only.
 async function pluginsSheet() {
-  openSheet(h('h3', {}, 'Plugins & connectors'), h('div', { class: 'note' }, 'Loading…'));
+  const page = { size: 'large', grouped: true };
+  openSheet(page, h('h3', {}, 'Plugins & connectors'), h('p', { class: 'set-foot set-foot-alone' }, 'Loading…'));
   let snap;
   try {
     const v = await remote('pluginInventory/list', {});
     snap = window.dsh02 && window.dsh02.fromPluginInventory
       ? window.dsh02.fromPluginInventory(v, { locale: navigator.language })
       : { entries: (v && (v.entries || v.items)) || (Array.isArray(v) ? v : []), presets: [], managementAvailable: false };
-  } catch (e) { openSheet(h('h3', {}, 'Plugins & connectors'), h('div', { class: 'note err' }, 'Could not read the plugin list: ' + e.message)); return; }
+  } catch (e) { openSheet(page, h('h3', {}, 'Plugins & connectors'), setError('Could not read the plugin list.', e.message)); return; }
   const entries = snap.entries;
   const phase = (e) => e.fiberPhase ?? e.phase ?? null;
   const shortId = (e) => String(e.entryId || '').split(':').pop();
@@ -3898,15 +3874,16 @@ async function pluginsSheet() {
   const subs = entries.filter((e) => /dsh-subagent-(claude-code|codex|acp|dsh-sdk)/.test(e.moduleName || '') && !/tool-/.test(e.entryId));
   const bad = entries.filter((e) => e.enabled && phase(e) === 'failed');
   const all = entries.filter((e) => e.moduleName && !/^cordis:/.test(e.moduleName));
-  const list = h('div', { class: 'plist' });
-  const search = h('input', { type: 'search', placeholder: `Search ${all.length} plugins`, autocomplete: 'off' });
+  const list = h('div', { class: 'set-group plist' });
+  const search = h('input', { type: 'search', placeholder: `Search ${all.length} plugins`, autocomplete: 'off', 'aria-label': 'Search plugins' });
   const renderAll = () => {
     const q = search.value.trim().toLowerCase();
     const hits = all.filter((e) => !q || [e.entryId, e.moduleName, e.title, e.description].filter(Boolean).join(' ').toLowerCase().includes(q));
-    list.replaceChildren(...hits.slice(0, 200).map((e) => row(e)));
+    list.replaceChildren(...(hits.length ? hits.slice(0, 200).map((e) => row(e)) : [h('div', { class: 'set-row static' }, h('span', { class: 'set-label quiet' }, 'No plugin matches'))]));
   };
   search.oninput = renderAll;
-  const section = (title, items, label) => items.length ? [h('div', { class: 'grp' }, title), ...items.map((e) => row(e, label && label(e)))] : [];
+  // Each list is one grouped card under a 13px header; the rows keep their glyph and state word.
+  const section = (title, items, label) => items.length ? [setGroup({ head: title }, ...items.map((e) => row(e, label && label(e))))] : [];
   // A preset's composition is the 0.2 snapshot's other half: a broken or failing one cannot
   // mount a session, so it sorts before the healthy presets and the default one.
   const badness = (p) => (p.broken ? 2 : p.failed ? 1 : 0);
@@ -3919,17 +3896,17 @@ async function pluginsSheet() {
       h('div', { class: 'pmain' }, h('b', {}, p.name + (p.isDefault ? ' · default' : '')), h('small', { class: 'pdesc' }, detail)),
       h('span', { class: 'pstate ' + st }, p.broken ? 'broken' : (p.failed ? `${p.failed} failed` : '')));
   };
-  openSheet(
+  openSheet(page,
     h('h3', {}, 'Plugins & connectors'),
-    bad.length ? h('div', { class: 'note err' }, `${bad.length} plugin${bad.length > 1 ? 's' : ''} failed to load.`) : null,
+    bad.length ? setError(`${bad.length} plugin${bad.length > 1 ? 's' : ''} failed to load.`) : null,
     ...section('Failed', bad),
     ...section('Connectors (MCP)', mcp, (e) => shortId(e).replace(/^mcp-/, '')),
     ...section('Subagent providers', subs, (e) => shortId(e).replace(/^subagent-/, '')),
-    ...(presets.length ? [h('div', { class: 'grp' }, 'Presets'), ...presets.map(presetRow)] : []),
-    h('div', { class: 'grp' }, 'All plugins'), search, list,
-    h('div', { class: 'note' }, snap.managementAvailable
-      ? 'Read-only. This profile supports plugin changes; dsh-rc leaves them to the laptop.'
-      : 'Read-only. Plugins and connectors are added on the laptop in the dsh profile, then dsh restarts.'));
+    ...(presets.length ? [setGroup({ head: 'Presets' }, ...presets.map(presetRow))] : []),
+    h('section', { class: 'set-sec' }, h('h4', { class: 'set-head' }, 'All plugins'), search, list,
+      h('p', { class: 'set-foot' }, snap.managementAvailable
+        ? 'Read-only. This profile supports plugin changes; dsh-rc leaves them to the laptop.'
+        : 'Read-only. Plugins and connectors are added on the laptop in the dsh profile, then dsh restarts.')));
   renderAll();
 }
 
@@ -3960,32 +3937,38 @@ async function modelSheet() {
 }
 // Prices sheet: the est. cost numbers come from a shipped table that goes stale,
 // so any model prefix can be re-priced here without shipping a new build.
+// It lives under Settings > Advanced: a developer tool, kept as JSON in the machine face, with
+// Save in the sheet's sticky footer.
 function pricesSheet() {
   const lib = window.dshPrices;
+  const page = { size: 'large', grouped: true };
   if (!lib) {
-    openSheet(h('h3', {}, 'Prices'), h('div', { class: 'note err' }, 'The price table did not load, so estimated cost stays "n/a".'));
+    openSheet(page, h('h3', {}, 'Prices'), setError('The price table did not load, so estimated cost stays “n/a”.'));
     return;
   }
   const saved = priceOverrides();
-  const box = h('textarea', { rows: '9', spellcheck: 'false', autocapitalize: 'off', autocorrect: 'off' });
+  const box = h('textarea', { rows: '9', spellcheck: 'false', autocapitalize: 'off', autocorrect: 'off', 'aria-label': 'Price overrides as JSON', class: 'prices-json' });
   box.value = Object.keys(saved).length ? JSON.stringify(saved, null, 2) : '';
+  const errSlot = h('div', { class: 'set-note-slot', 'aria-live': 'polite' });
   const save = h('button', { type: 'button', class: 'go' }, 'Save prices');
   const clear = h('button', { type: 'button', class: 'ghost wide' }, 'Clear overrides');
   save.onclick = () => {
     let rows;
+    errSlot.replaceChildren();
     try { rows = lib.parsePriceOverrides(box.value); }
-    catch (e) { toast('Prices: ' + e.message, 5000); return; }
-    if (!lib.savePriceOverrides(rows)) { toast('Could not save: this browser refused storage', 5000); return; }
+    catch (e) { errSlot.replaceChildren(setError('Those prices are not valid yet.', e.message)); return; }
+    if (!lib.savePriceOverrides(rows)) { errSlot.replaceChildren(setError('Could not save.', 'This browser refused storage.')); return; }
     S.prices = rows; // the renderer caches reads, so hand it the new rows
     renderStatusLine();
     toast(Object.keys(rows).length ? 'Prices saved' : 'Overrides cleared');
-    closeSheet();
+    if (settingsVals.prices) settingsVals.prices.textContent = pricesValue();
+    sheetBack(); // back to Settings, or closed if Prices was the only sheet
   };
   clear.onclick = () => { box.value = ''; save.onclick(); };
-  openSheet(h('h3', {}, 'Prices'),
-    h('div', { class: 'note' }, 'USD per million tokens, as JSON keyed by model-id prefix. The longest matching prefix wins, and an override beats the built-in table. Blank clears them.'),
-    h('div', { class: 'note' }, 'Fields: input, output, cacheRead, cacheWrite.'),
-    box, save, clear);
+  openSheet(page, h('h3', {}, 'Prices'),
+    h('p', { class: 'set-foot set-foot-alone' }, 'USD per million tokens, as JSON keyed by model-id prefix. The longest matching prefix wins, and an override beats the built-in table. Blank clears them.'),
+    h('p', { class: 'set-foot set-foot-alone' }, 'Fields: input, output, cacheRead, cacheWrite.'),
+    box, errSlot, save, clear);
 }
 function commandsSheet() {
   const list = S.commands || [];
@@ -4080,11 +4063,6 @@ function isIOS() {
 function isStandalone() {
   return navigator.standalone === true || (window.matchMedia && matchMedia('(display-mode: standalone)').matches);
 }
-function pushStateLabel(state) {
-  if (state === 'on') return 'On for this device';
-  if (state === 'unsupported') return 'Not supported in this browser';
-  return 'Off for this device';
-}
 function b64uToBytes(base64url) {
   const pad = '='.repeat((4 - (base64url.length % 4)) % 4);
   const raw = atob((base64url + pad).replace(/-/g, '+').replace(/_/g, '/'));
@@ -4138,33 +4116,96 @@ async function sendTestPush() {
   const res = await fetch('./push/test', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
   if (!res.ok) throw new Error('test HTTP ' + res.status);
 }
+// The browser's own permission, in words. 'default' means it has not asked yet.
+function permissionLabel() {
+  const p = typeof Notification !== 'undefined' ? Notification.permission : null;
+  return p === 'granted' ? 'Allowed' : p === 'denied' ? 'Blocked' : p ? 'Not asked yet' : 'Not available';
+}
+// A switch: the native one where Safari 17.4+ draws it (`<input type=checkbox switch>`), a styled
+// 44 by 28 one elsewhere. Either way it is a checkbox with the switch role. Safari's switch
+// pseudo-elements are the feature test; no browser exposes a property for the attribute.
+const NATIVE_SWITCH = (() => {
+  try {
+    if (typeof CSS === 'undefined' || !CSS.supports || !CSS.supports('selector(input[switch]::thumb)')) return false;
+    const m = String((typeof navigator !== 'undefined' && navigator.userAgent) || '').match(/Version\/(\d+)\.(\d+).*Safari/);
+    return !!m && (+m[1] > 17 || (+m[1] === 17 && +m[2] >= 4));
+  } catch { return false; }
+})();
+function switchInput(attrs = {}) {
+  const el = h('input', { type: 'checkbox', switch: true, role: 'switch', ...attrs });
+  if (!NATIVE_SWITCH) el.classList.add('switch-fb');
+  return el;
+}
+// Notifications: one switch for this device, the permission the browser holds, what sends a
+// push, the Home Screen steps on iOS, and a test. Turning on runs inside the tap (iOS grants
+// the permission only from a user gesture); a refusal or an error puts the switch back and
+// says why, here, rather than in a toast.
 async function notificationsSheet() {
-  openSheet(h('h3', {}, 'Notifications'), h('div', { class: 'note' }, 'Checking…'));
-  const state = await refreshPushState();
-  const kids = [h('h3', {}, 'Notifications')];
-  if (state === 'unsupported') {
-    kids.push(h('div', { class: 'note' }, 'Push notifications are not supported in this browser.'));
-    if (isIOS() && !isStandalone()) kids.push(h('div', { class: 'note' }, 'Add to Home Screen first (iOS 16.4+).'));
-    openSheet(...kids);
-    return;
-  }
-  kids.push(h('div', { class: 'note' }, pushStateLabel(state) + '.'));
-  if (state === 'on') {
-    kids.push(h('button', { class: 'menuitem', onclick: async () => {
-      try { await sendTestPush(); toast('Test notification sent'); closeSheet(); }
-      catch (e) { toast('Test failed: ' + e.message, 4000); }
-    } }, 'Send test', h('small', {}, 'Notify every subscribed device')));
-    kids.push(h('button', { class: 'menuitem', onclick: async () => {
-      try { await disablePush(); toast('Notifications off'); } catch (e) { toast('Could not turn off: ' + e.message, 4000); }
-      notificationsSheet();
-    } }, 'Turn off'));
-  } else {
-    kids.push(h('button', { class: 'menuitem', onclick: async () => {
-      try { await enablePush(); toast('Notifications on'); } catch (e) { toast('Could not turn on: ' + e.message, 4000); }
-      notificationsSheet();
-    } }, 'Turn on', h('small', {}, 'From this tap, then approve the browser prompt')));
-  }
-  openSheet(...kids);
+  const sw = switchInput({ id: 'pushSwitch', 'aria-describedby': 'pushState' });
+  const state = h('p', { class: 'set-foot', id: 'pushState' }, 'Checking…');
+  const errSlot = h('div', { class: 'set-note-slot', 'aria-live': 'polite' });
+  const testSlot = h('div', { class: 'set-note-slot' });
+  const perm = h('span', { class: 'set-val' }, permissionLabel());
+  const testRow = setRow('Send a test', { tone: 'action', chevron: false });
+  const testGroup = setGroup({ foot: 'Sends one notification to every device that has them on.' }, testRow);
+  const iosSteps = isIOS() && !isStandalone();
+  let busy = false;
+  sw.disabled = true;
+  const paint = (st, note) => {
+    sw.checked = st === 'on';
+    const denied = typeof Notification !== 'undefined' && Notification.permission === 'denied';
+    sw.disabled = busy || st === 'unsupported' || (denied && st !== 'on');
+    perm.textContent = permissionLabel();
+    state.textContent = note || (st === 'unsupported'
+      ? (iosSteps ? 'Not available in a Safari tab. Add dsh-rc to the Home Screen first (below).' : 'This browser does not support push notifications.')
+      : denied && st !== 'on' ? 'The browser has blocked notifications for this site. Allow them in its site settings, then come back.'
+        : st === 'on' ? 'On for this device.' : 'Off for this device.');
+    testGroup.hidden = st !== 'on';
+    if (settingsVals.notif) settingsVals.notif.textContent = pushStateShort(st);
+  };
+  // Inside the change event, before any await: enablePush asks for permission first thing.
+  sw.addEventListener('change', () => {
+    const want = sw.checked;
+    busy = true; sw.disabled = true; errSlot.replaceChildren();
+    state.textContent = want ? 'Turning on… approve the browser’s prompt.' : 'Turning off…';
+    (want ? enablePush() : disablePush()).then(() => {
+      busy = false; paint(want ? 'on' : 'off');
+      toast(want ? 'Notifications on' : 'Notifications off');
+    }, async (e) => {
+      busy = false;
+      const st = await refreshPushState().catch(() => 'off');
+      paint(st);
+      errSlot.replaceChildren(setError(
+        want ? (/permission/.test(e.message) ? 'The browser did not allow notifications.' : 'Could not turn notifications on.') : 'Could not turn notifications off.',
+        e.message));
+    });
+  });
+  testRow.onclick = async () => {
+    testRow.disabled = true; testSlot.replaceChildren();
+    try { await sendTestPush(); toast('Test notification sent'); }
+    catch (e) { testSlot.replaceChildren(setError('The test was not sent.', e.message)); }
+    finally { testRow.disabled = false; }
+  };
+  const steps = iosSteps ? setGroup({ head: 'On iPhone and iPad', foot: 'iOS 16.4 or newer, over HTTPS. Notifications only reach a web app opened from the Home Screen.' },
+    h('ol', { class: 'set-steps' },
+      h('li', {}, 'In Safari, tap Share.'),
+      h('li', {}, 'Choose Add to Home Screen, then Add.'),
+      h('li', {}, 'Open dsh-rc from the Home Screen and turn notifications on here.'))) : null;
+  openSheet({ size: 'large', grouped: true }, h('h3', {}, 'Notifications'),
+    h('section', { class: 'set-sec' },
+      h('div', { class: 'set-group' },
+        h('label', { class: 'set-row switch-row', for: 'pushSwitch' }, h('span', { class: 'set-label' }, 'Allow notifications'), sw),
+        setRow('Browser permission', { value: perm })),
+      state, errSlot),
+    testGroup, testSlot,
+    setGroup({ head: 'What sends a push', foot: 'Subagent sessions never notify. A notification names the session when dsh knows its title, and tapping it opens that session.' },
+      h('ul', { class: 'set-steps set-bullets' },
+        h('li', {}, 'An approval is waiting.'),
+        h('li', {}, 'A question is waiting.'),
+        h('li', {}, 'A turn finishes.'),
+        h('li', {}, 'An error arrives from the agent.'))),
+    steps);
+  paint(await refreshPushState().catch(() => 'off'));
 }
 
 // ---------- Tunnel QR ----------
@@ -4196,11 +4237,153 @@ async function tunnelSheet() {
       tile = h('div', { class: 'qr-tile' }, canvas);
     } catch (e) { tile = h('div', { class: 'note err' }, 'Could not draw the QR code: ' + e.message); }
   }
-  openSheet(h('h3', {}, 'Open on your phone'),
-    h('div', { class: 'note' }, tile ? 'Scan with the phone camera. You still log in with the passphrase.' : 'Open this address on your phone. You still log in with the passphrase.'),
+  // Copy, and Share where the browser has the share sheet. A cancelled share is not an error.
+  const copy = h('button', { type: 'button', class: 'btn btn-secondary' }, 'Copy');
+  copy.onclick = () => copyText(url, copy);
+  const share = typeof navigator.share === 'function' ? h('button', { type: 'button', class: 'btn btn-secondary' }, 'Share') : null;
+  if (share) share.onclick = () => { navigator.share({ title: 'dsh-rc', url }).catch(() => {}); };
+  openSheet({ size: 'large', grouped: true }, h('h3', {}, 'Open on your phone'),
+    h('p', { class: 'set-foot set-foot-alone' }, tile ? 'Scan with the phone camera. You still log in with the passphrase.' : 'Open this address on your phone. You still log in with the passphrase.'),
     tile,
     h('div', { class: 'note url' }, url),
-    h('div', { class: 'note' }, 'The address changes every time dsh-rc starts with --tunnel.'));
+    h('div', { class: 'qr-acts' }, copy, share),
+    h('p', { class: 'set-foot set-foot-alone' }, 'The address changes every time dsh-rc starts with --tunnel.'));
+}
+
+// ---------- Settings ----------
+// One app-wide destination, from the gear on the Sessions bar or Settings in the session menu.
+// Grouped inset rows on the card surface: a label, a 13px value and a chevron when the row
+// opens a page, which pushes inside the same sheet. What a group is for goes in one quiet
+// footer under it, not in a subtitle on every row.
+// The release workflow bumps the version here with package.json (release-please-config.json,
+// extra-files), and test/settings.test.mjs keeps the two equal. There is no server version
+// endpoint; this is the version of the page you are looking at.
+const APP_VERSION = '0.4.1'; // x-release-please-version
+const SOURCE_URL = 'https://github.com/Matthew3957/dsh-rc';
+// The values on the open Settings page, so a page below it can update them in place before
+// Back shows them again.
+let settingsVals = {};
+const CHEVRON = () => h('span', { class: 'set-chev', 'aria-hidden': 'true' });
+// A group: an optional header above, the rows on one card, an optional footer below. Empty
+// groups (every row conditional and absent) are left out.
+function setGroup({ head, foot, label } = {}, ...rows) {
+  const kids = rows.flat().filter((k) => k != null && k !== false);
+  if (!kids.length) return null;
+  return h('section', { class: 'set-sec', 'aria-label': head ? null : (label || null) },
+    head ? h('h4', { class: 'set-head' }, head) : null,
+    h('div', { class: 'set-group' }, ...kids),
+    foot ? (foot.nodeType ? foot : h('p', { class: 'set-foot' }, foot)) : null);
+}
+// A row. onclick makes it a button (with a chevron unless chevron: false), href a link; with
+// neither it is a plain label and value. tone: 'action' (accent text) or 'danger' (red text).
+function setRow(label, { value, onclick, href, external = false, chevron, tone } = {}) {
+  const cls = 'set-row' + (tone ? ' ' + tone : '');
+  const val = value == null ? null : (value.nodeType ? value : h('span', { class: 'set-val' }, String(value)));
+  const chev = chevron ?? (!!onclick || (!!href && !external));
+  const kids = [h('span', { class: 'set-label' }, label), val,
+    external ? h('span', { class: 'set-ext', 'aria-hidden': 'true' }) : (chev ? CHEVRON() : null)];
+  if (href) return h('a', { class: cls, href, target: external ? '_blank' : null, rel: external ? 'noopener' : null }, ...kids);
+  if (onclick) return h('button', { type: 'button', class: cls, onclick }, ...kids);
+  return h('div', { class: cls + ' static' }, ...kids);
+}
+// An inline error where the work is: a human sentence, then the technical message in 13px.
+function setError(sentence, detail) {
+  return h('div', { class: 'set-error', role: 'alert' }, statusGlyph('failed'),
+    h('div', {}, h('p', {}, sentence), detail ? h('p', { class: 'set-error-detail' }, detail) : null));
+}
+function themeLabel() {
+  const t = window.dshTheme;
+  const cur = t && t.THEMES.find((x) => x.id === t.current());
+  return cur ? cur.label : 'Default';
+}
+function pricesValue() {
+  if (!window.dshPrices) return 'Unavailable';
+  const n = Object.keys(priceOverrides()).length;
+  return n ? `${n} override${n === 1 ? '' : 's'}` : 'Built-in';
+}
+function pushStateShort(state) {
+  return state === 'on' ? 'On' : state === 'unsupported' ? 'Not supported' : 'Off';
+}
+// The full dsh web UI is at the origin's root, which only exists when dsh-rc is mounted on a path
+// beside it (Tailscale Serve); dsh-rc's own front door has nothing there.
+const fullUiAvailable = () => !!location.pathname.replace(/\/+$/, '');
+function settingsSheet() {
+  const notif = h('span', { class: 'set-val' }, '');
+  refreshPushState().then((st) => { notif.textContent = pushStateShort(st); }).catch(() => { notif.textContent = 'Off'; });
+  const theme = h('span', { class: 'set-val' }, themeLabel());
+  const prices = h('span', { class: 'set-val' }, pricesValue());
+  settingsVals = { notif, theme, prices };
+  const openTunnel = () => { tunnelSheet().catch((e) => toast('Tunnel address unavailable: ' + e.message)); };
+  openSheet({ size: 'large', grouped: true }, h('h3', {}, 'Settings'),
+    setGroup({ label: 'Notifications and appearance', foot: 'Both are per device. Appearance is saved in this browser.' },
+      setRow('Notifications', { onclick: () => notificationsSheet(), value: notif }),
+      window.dshTheme ? setRow('Appearance', { onclick: appearanceSheet, value: theme }) : null),
+    setGroup({ head: 'dsh', foot: 'What the dsh on your laptop has loaded. Read-only here: add or change them in the dsh profile.' },
+      setRow('Plugins & connectors', { onclick: pluginsSheet })),
+    setGroup({ head: 'This device', foot: 'Show this page’s tunnel address as a QR code, so another phone can scan it. It still asks for the passphrase.' },
+      S.tunnelUrl ? setRow('Open on your phone', { onclick: openTunnel, value: 'QR code' }) : null),
+    setGroup({ head: 'Advanced', foot: 'The price table behind “est. cost”, as JSON.' },
+      setRow('Prices', { onclick: pricesSheet, value: prices })),
+    setGroup({ head: 'About', foot: 'dsh-rc is an independent project, not affiliated with or endorsed by DeepSeek.' },
+      setRow('Version', { value: h('span', { class: 'set-val mono-val' }, APP_VERSION) }),
+      fullUiAvailable() ? setRow('Open full dsh web UI', { href: '/' }) : null,
+      setRow('Source code', { href: SOURCE_URL, external: true, value: 'GitHub' })));
+}
+$('#settingsBtn').onclick = settingsSheet;
+
+// Appearance: a card per theme, each a split swatch of the light and the dark scheme (page, a
+// card and the accent) and the theme's name. The selected card has a ring and a check, so the
+// choice is never colour alone. Tapping applies and saves it (public/theme.js); the scheme
+// follows the device.
+function themeSwatch(t) {
+  const half = (scheme) => {
+    const s = (t.swatch && t.swatch[scheme]) || { bg: t.bg[scheme === 'dark' ? 1 : 0], card: '', accent: '' };
+    return h('span', { class: 'sw-half sw-' + scheme, style: `--sw-bg:${s.bg};--sw-card:${s.card || s.bg};--sw-accent:${s.accent || 'currentColor'}` },
+      h('span', { class: 'sw-card' }, h('span', { class: 'sw-line' }), h('span', { class: 'sw-dot' })));
+  };
+  return h('span', { class: 'swatch', 'aria-hidden': 'true' }, half('light'), half('dark'));
+}
+function appearanceSheet() {
+  const t = window.dshTheme; if (!t) return;
+  const hint = h('p', { class: 'set-foot' });
+  const saveNote = h('div', { class: 'set-note-slot' });
+  const cards = t.THEMES.map((x) => h('button', {
+    type: 'button', class: 'theme-card', role: 'radio', 'data-theme-id': x.id, title: x.hint,
+    onclick: () => pick(x.id),
+  }, themeSwatch(x), h('span', { class: 'theme-meta' }, h('span', { class: 'theme-name' }, x.label), h('span', { class: 'theme-check', 'aria-hidden': 'true' }))));
+  const paint = () => {
+    const now = t.current();
+    const cur = t.THEMES.find((x) => x.id === now) || t.THEMES[0];
+    for (const c of cards) {
+      const on = c.getAttribute('data-theme-id') === cur.id;
+      c.setAttribute('aria-checked', String(on));
+      c.tabIndex = on ? 0 : -1;
+    }
+    hint.textContent = `${cur.label}: ${cur.hint.charAt(0).toLowerCase()}${cur.hint.slice(1)}.`;
+    if (settingsVals.theme) settingsVals.theme.textContent = cur.label;
+  };
+  const pick = (id) => {
+    const saved = t.set(id);
+    // The theme applies either way; say so in place when this browser would not keep it.
+    saveNote.replaceChildren(...(saved ? [] : [setError('Applied until this page reloads.', 'This browser refused to save the choice.')]));
+    paint();
+  };
+  const grid = h('div', { class: 'theme-grid', role: 'radiogroup', 'aria-label': 'Theme' }, ...cards);
+  // Arrow keys move the choice, as in any radio group.
+  grid.addEventListener('keydown', (e) => {
+    const step = e.key === 'ArrowRight' || e.key === 'ArrowDown' ? 1 : e.key === 'ArrowLeft' || e.key === 'ArrowUp' ? -1 : 0;
+    if (!step) return;
+    e.preventDefault();
+    const i = t.THEMES.findIndex((x) => x.id === t.current());
+    const next = t.THEMES[(i + step + t.THEMES.length) % t.THEMES.length];
+    pick(next.id);
+    const c = cards.find((n) => n.getAttribute('data-theme-id') === next.id);
+    if (c) c.focus();
+  });
+  openSheet({ size: 'large', grouped: true }, h('h3', {}, 'Appearance'),
+    h('section', { class: 'set-sec' }, h('h4', { class: 'set-head' }, 'Theme'), grid, hint, saveNote),
+    h('p', { class: 'set-foot set-foot-alone' }, 'Each theme follows your device’s light or dark setting, so there is no separate switch here. The choice is saved on this device.'));
+  paint();
 }
 
 // ---------- Viewport (iOS keyboard) ----------
@@ -4291,7 +4474,11 @@ fitViewport();
       }
     } else toast('dsh not reachable: ' + e.message, 6000);
   }
-  loadTunnelUrl().then((url) => { S.tunnelUrl = url; });
+  loadTunnelUrl().then((url) => {
+    S.tunnelUrl = url;
+    // The Settings page can be open before this local read finishes; add This device in place.
+    if (url && !$('#sheet').hidden && sheetCur.title === 'Settings') settingsSheet();
+  });
   connect();
   await loadSessions();
   if (location.hash) route();

@@ -20,12 +20,15 @@ API that dsh 0.1.7 and 0.2 speak (see Compatibility).
 - Composer extras: slash commands, @-mention files, and a plus menu for photos and image files,
   saved prompt templates and the command list; dictation where the browser has speech
   recognition.
-- Session menu: session details, switch model, rename, fork, export, archive, and on dsh 0.2 set
-  a goal or manage scheduled prompts.
+- Session menu: session details, switch model, rename, fork, export, and on dsh 0.2 set a goal or
+  manage scheduled prompts; then Settings, and archive on its own, confirmed first.
+- Settings, from the gear on the session list: notifications, appearance, plugins and connectors,
+  prices under Advanced, the tunnel QR code while a tunnel runs, and About with the version.
 - Web Push for approvals, questions, finished turns and errors.
-- Themes from the menu, saved per device and following light or dark: the default, a
-  colourblind-safe one (blue, orange and crimson with shape cues, no red against green), high
-  contrast, autumn, winter and spring, and Mission Tile (warm paper, ink and tile red, in a serif).
+- Seven themes under Settings > Appearance, each previewed as a light and dark swatch, saved per
+  device and following light or dark: the default, a colourblind-safe one (blue, orange and
+  crimson, no red against green), high contrast, autumn, winter and spring, and Mission Tile
+  (warm paper, ink and tile red, in a serif).
 - Reach it over Tailscale, or as its own front door with a passphrase login, HTTPS or a Cloudflare
   quick tunnel with a QR code.
 
@@ -43,6 +46,8 @@ dsh. Every project, path and conversation in them is invented.
 | The board | Running now, jobs and subagents open | Chat with the turn receipt | Edit as a line diff |
 | <img src="docs/screenshots/summary.png" width="180" alt="A completed turn's receipt opened to its activity"> | <img src="docs/screenshots/status.png" width="180" alt="Session details with route, context and per-turn usage"> | <img src="docs/screenshots/plan.png" width="180" alt="Plan review sheet"> | <img src="docs/screenshots/approval.png" width="180" alt="Approval card above the composer"> |
 | Receipt opened to its activity | Session details and per-turn usage | Plan review | Approval while a turn runs |
+| <img src="docs/screenshots/settings.png" width="180" alt="Settings: notifications, appearance, plugins, prices and about in grouped rows"> | <img src="docs/screenshots/appearance.png" width="180" alt="Appearance: seven theme cards, each a light and dark swatch, the current one ringed and ticked"> | | |
+| Settings | Appearance, one card per theme | | |
 
 ## Setup
 
@@ -141,8 +146,9 @@ never downloads it, and `--no-autoupdate` stops cloudflared updating itself. Ins
 A quick tunnel has no access control of its own, so the passphrase is the only thing between
 anyone who learns the URL and a shell as you. Pick a long one. The URL changes on every start,
 so it is not something to bookmark or add to a home screen. The URL is also printed as a QR code
-in the terminal, and the session list menu has an "Open on your phone" item that shows the same
-code, so a phone can scan it instead of typing the address. The code holds only the URL; the phone still has to log in.
+in the terminal, and Settings (the gear on the session list) has an "Open on your phone" row that
+shows the same code, with Copy and, where the browser has a share sheet, Share, so a phone can scan
+it instead of typing the address. The code holds only the URL; the phone still has to log in.
 The encoder is a small one in `public/qr.js`, with no dependency.
 
 ### Named Cloudflare tunnel with Access (the durable setup)
@@ -192,9 +198,12 @@ Subagent sessions are ignored, the session title is included when known, repeats
 tag are debounced for 5 seconds, and subscriptions that answer 404 or 410 are removed. Tapping a
 notification focuses an open dsh-rc window and opens that session, or opens `./index.html#s=<id>`.
 
-In the app, open a session, tap ⋯ and pick **Notifications**. Turning on must happen from that tap
-(browsers, iOS especially, only grant the permission from a user gesture). The sheet shows the
-state (on / off / unsupported), and offers **Send test**, which notifies every subscribed device.
+In the app, tap the gear on the session list (or **Settings** in a session's ⋯ menu) and pick
+**Notifications**. Turn on **Allow notifications** there: it asks for the permission from that tap
+(browsers, iOS especially, only grant it from a user gesture). If the browser refuses or the
+subscription fails, the switch goes back to off and the page says why. The page also shows the
+permission the browser holds, what sends a push, the Add to Home Screen steps when it is open in an
+iOS Safari tab, and, while on, **Send a test**, which notifies every subscribed device.
 
 iOS notes: notifications only work in a web app added to the Home Screen (Share, then Add to
 Home Screen), on iOS 16.4 or newer. The origin must be HTTPS, which the Tailscale Serve mount
@@ -472,7 +481,8 @@ Every amount is labeled `est.` and ignores batch discounts, long-context tiers, 
 multipliers, and DeepSeek's peak/off-peak split (the table holds the peak rate, so it is an upper
 bound).
 
-To override a price, open the ⋯ menu in a session and tap **Prices**. The field takes JSON keyed by
+To override a price, open Settings (the gear on the session list, or **Settings** in a session's ⋯
+menu) and tap **Prices** under Advanced. The field takes JSON keyed by
 model-id prefix, each mapping `input`, `output`, `cacheRead` and `cacheWrite`; blank clears it.
 The longest prefix wins and an override beats the shipped table. It is saved in this browser's
 `localStorage`, so it is per device.
@@ -482,8 +492,7 @@ The longest prefix wins and an override beats the shipped table. It is saved in 
 The main screen is one board in the order attention deserves: **Needs you**, **Running now**,
 **Unread**, then **Today** and **Earlier** (Yesterday, Previous 7 days, Older). Each session
 appears once. The large "Sessions" title scrolls away into the compact title in the bar; the bar
-has a menu button (notifications, plugins and connectors, the tunnel QR code while `--tunnel`
-runs, the full dsh web UI) and search. Search opens a field in the bar with Cancel, hides the
+has search and a gear for Settings (see below). Search opens a field in the bar with Cancel, hides the
 board and searches dsh; Cancel puts the board back where it was. The bottom bar holds the one
 primary action, **New session**. If the connection to dsh drops, a "Reconnecting…" banner sits
 under the top bar until it is back; the list stays readable meanwhile.
@@ -497,6 +506,27 @@ set, used for sessions, tool calls, background jobs and subagents, and drawn the
 theme, so no state relies on colour alone: a hollow ring for idle, a spinner for working, an amber
 disc with `!` for an approval and with `?` for a question, a filled dot for unread, a tick for
 done, a cross for failed, a triangle while stopping and a square once stopped.
+
+## Settings and the session menu
+
+There are two menus, and they do not overlap.
+
+**Settings** is app-wide, from the gear on the session list (or **Settings** in a session's ⋯
+menu). It is one page of grouped rows, each with its value: **Notifications** (on, off or not
+supported), **Appearance** (the theme), **Plugins & connectors** (read-only), **Open on your
+phone** under This device while a `--tunnel` runs, **Prices** under Advanced, and **About** with
+the version of the page, a link to the source and, where dsh-rc is mounted beside dsh web, **Open
+full dsh web UI**. Each row opens its own page inside the same sheet, with Back.
+
+**Appearance** shows the seven themes as cards in two columns. Each card is a split swatch, the
+light scheme on the left and the dark on the right, with the theme's page, card and accent colours,
+and its name; the current one has a ring and a tick. A tap applies and saves it on this device.
+There is no light or dark switch: every theme follows the device's setting.
+
+The **session menu** (⋯ in a session) only acts on that session: Session details, Model, Goal and
+Scheduled prompts where dsh has them, Rename, Fork and Export log; then Settings; then Archive, on
+its own and in red, which asks first and says it cannot be undone. Commands are in the composer's +
+menu (and the `/` list), and Refresh is in Session details.
 
 ## Running now
 

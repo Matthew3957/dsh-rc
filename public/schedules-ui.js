@@ -170,7 +170,9 @@
   window.dshSchedulesUI = {
     probe,
     /** The session menu entry, or null where the schedule plugin is not there. */
-    menuItem: () => (available && dsh2 ? h('button', { class: 'menuitem', onclick: () => listSheet() }, TITLE, h('small', {}, 'Prompts dsh sends on a timer')) : null),
+    // A row of the session menu's grouped list (app.js setRow): the label and a chevron.
+    menuItem: () => (available && dsh2 ? h('button', { type: 'button', class: 'set-row', onclick: () => listSheet() },
+      h('span', { class: 'set-label' }, TITLE), h('span', { class: 'set-chev', 'aria-hidden': 'true' })) : null),
     /** `host/schedules-changed`: dsh only says this when the plugin is loaded. */
     changed: () => {
       available = !!dsh2;

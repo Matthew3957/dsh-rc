@@ -34,13 +34,14 @@
        Earlier. Each session appears once; the sections are the filter. -->
   <section id="listView" class="view">
     <header class="nav" id="listNav">
-      <div class="nav-lead">
-        <button id="menuListBtn" class="navbtn" type="button" aria-label="Menu" title="Menu" aria-haspopup="dialog"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16"/></svg></button>
-      </div>
+      <!-- The leading slot stays empty so the compact title stays centred. -->
+      <div class="nav-lead"></div>
       <!-- The compact title fades in once the large title has scrolled under the bar. -->
       <div class="nav-title listtitle" id="listTitle" aria-hidden="true">Sessions</div>
+      <!-- Two bar actions, both trailing: search, then Settings (the app-wide sheet). -->
       <div class="nav-trail">
         <button id="searchBtn" class="navbtn" type="button" aria-label="Search sessions" title="Search" aria-controls="searchRow" aria-expanded="false"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="m20 20-4.2-4.2"/></svg></button>
+        <button id="settingsBtn" class="navbtn" type="button" aria-label="Settings" title="Settings" aria-haspopup="dialog"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M9.84 4.92 10.17 2.58A9.6 9.6 0 0 1 13.83 2.58L14.16 4.92A7.4 7.4 0 0 1 15.47 5.47L17.37 4.04A9.6 9.6 0 0 1 19.96 6.63L18.53 8.53A7.4 7.4 0 0 1 19.08 9.84L21.42 10.17A9.6 9.6 0 0 1 21.42 13.83L19.08 14.16A7.4 7.4 0 0 1 18.53 15.47L19.96 17.37A9.6 9.6 0 0 1 17.37 19.96L15.47 18.53A7.4 7.4 0 0 1 14.16 19.08L13.83 21.42A9.6 9.6 0 0 1 10.17 21.42L9.84 19.08A7.4 7.4 0 0 1 8.53 18.53L6.63 19.96A9.6 9.6 0 0 1 4.04 17.37L5.47 15.47A7.4 7.4 0 0 1 4.92 14.16L2.58 13.83A9.6 9.6 0 0 1 2.58 10.17L4.92 9.84A7.4 7.4 0 0 1 5.47 8.53L4.04 6.63A9.6 9.6 0 0 1 6.63 4.04L8.53 5.47A7.4 7.4 0 0 1 9.84 4.92Z"/><circle cx="12" cy="12" r="3"/></svg></button>
       </div>
       <!-- Search opens in the bar: a full-width field and Cancel. -->
       <div class="searchrow" id="searchRow" role="search" hidden>
