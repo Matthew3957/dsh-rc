@@ -824,8 +824,11 @@ function announceTurnEnd(sessionId, ev) {
     announce(['Turn ' + outcome].concat(facts ? facts.counts : []).join(', '));
     return;
   }
+  // Without the turn's receipt only failed and stopped are certain from the reason; a
+  // "completed" turn may still have a failing command, so it is not called passed here.
   const title = S.titles.get(sessionId) || basename(sessionMeta(sessionId).cwd) || 'A session';
-  announce(`${title}: turn ${outcomeOf(reason)}`);
+  const outcome = outcomeOf(reason);
+  announce(`${title}: turn ${outcome === 'passed' ? 'finished' : outcome}`);
 }
 // The verdict from a turn/end reason alone, when no receipt is drawn for it (the same words
 // summarizeTurn gives the receipt).
@@ -1674,17 +1677,31 @@ $('#msgs').addEventListener('click', (e) => {
 });
 // The live row's jobs and subagents: the row is redrawn on every toggle, so its detail opens
 // from no height to its own, and closes to none before the redraw drops it.
+// One height animation per element: a close that starts mid-open (or the reverse) takes over
+// from where the element is, and the earlier animation's onfinish never runs.
+function foldStop(el) {
+  const running = typeof el.getAnimations === 'function' ? el.getAnimations() : [];
+  let from = null;
+  for (const a of running) {
+    if (from == null && typeof getComputedStyle === 'function') from = parseFloat(getComputedStyle(el).height) || null;
+    a.onfinish = null;
+    a.cancel();
+  }
+  return from;
+}
 function foldOpen(el) {
   if (!canAnimate(el) || reducedMotion()) return;
+  const from = foldStop(el);
   const h = heightOf(el);
   if (!h) return;
   el.style.overflow = 'hidden';
-  el.animate([{ height: '0px' }, { height: h + 'px' }], { duration: MOTION.base, easing: MOTION.standard }).onfinish = () => { el.style.overflow = ''; };
+  el.animate([{ height: (from || 0) + 'px' }, { height: h + 'px' }], { duration: MOTION.base, easing: MOTION.standard }).onfinish = () => { el.style.overflow = ''; };
 }
 function foldShut(el, then) {
   if (!el || !canAnimate(el) || reducedMotion()) { then(); return; }
+  const from = foldStop(el);
   el.style.overflow = 'hidden';
-  el.animate([{ height: heightOf(el) + 'px' }, { height: '0px' }], { duration: MOTION.base, easing: MOTION.standard, fill: 'forwards' }).onfinish = then;
+  el.animate([{ height: (from != null ? from : heightOf(el)) + 'px' }, { height: '0px' }], { duration: MOTION.base, easing: MOTION.standard, fill: 'forwards' }).onfinish = then;
 }
 
 // Markdown stays produced by md(), which sanitises before it reaches the DOM. The

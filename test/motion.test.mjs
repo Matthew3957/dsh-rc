@@ -208,6 +208,14 @@ test('on the board a session that finishes is announced by name', () => {
   assert.equal(t.said(), 'Draft the release notes: turn failed');
 });
 
+test('on the board a completed turn is not called passed, since its commands are not known there', () => {
+  const t = harness();
+  live(t);
+  t.S.titles.set('s2', 'Draft the release notes');
+  t.onMux(turnEnd('s2', { kind: 'completed' }), {});
+  assert.equal(t.said(), 'Draft the release notes: turn finished');
+});
+
 test('a newly arrived approval or question is announced once; one waiting at load or re-sent on reconnect is not', () => {
   const t = harness();
   t.S.titles.set('s2', 'Fix the off-by-one');
