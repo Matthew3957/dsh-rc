@@ -4798,7 +4798,7 @@ async function tunnelSheet() {
 // The release workflow bumps the version here with package.json (release-please-config.json,
 // extra-files), and test/settings.test.mjs keeps the two equal. There is no server version
 // endpoint; this is the version of the page you are looking at.
-const APP_VERSION = '0.4.1'; // x-release-please-version
+const APP_VERSION = '0.5.0'; // x-release-please-version
 const SOURCE_URL = 'https://github.com/Matthew3957/dsh-rc';
 // The values on the open Settings page, so a page below it can update them in place before
 // Back shows them again.
