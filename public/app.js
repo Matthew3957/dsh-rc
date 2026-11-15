@@ -154,8 +154,7 @@ const S = {
   jobOpen: new Set(),     // jobIds whose output pane is expanded
   subagents: new Map(),   // parentId -> {entries, parentAvailable, at}
   agentsLoading: new Set(), // parentIds whose subagent.list call is in flight
-  dashOpen: new Set(),    // sessionIds whose dashboard card is expanded
-  dashCollapsed: false,   // Running now shows its cards (progress bars) until folded
+  dashOpen: new Set(),    // sessionIds whose live row has its jobs and subagents expanded
   model: new Map(),       // sessionId -> {provider, model} in use
   goalViews: new Map(),   // sessionId -> goals/get view (the armed state the projection lacks)
   prices: null,           // price overrides, read from localStorage once
@@ -165,8 +164,9 @@ const S = {
   steer: false,
   images: [],
   commands: [],
-  searchMode: false,
-  filter: 'all',          // session list filter: all | running | waiting
+  searchMode: false,      // the search field is open and its results stand in for the board
+  boardScroll: 0,         // where the board was scrolled when search opened, for Cancel
+  listLoaded: false,      // the first session.list answer is in; until then there is no empty state
   tunnelUrl: null,        // set when dsh-rc runs with --tunnel
 };
 try { for (const [k, v] of Object.entries(JSON.parse(localStorage.getItem('dshm.titles') || '{}'))) S.titles.set(k, v); } catch {}
@@ -239,6 +239,12 @@ function fmtElapsed(ms) {
   const hrs = Math.floor(m / 60);
   if (hrs < 24) return hrs + 'h ' + String(m % 60).padStart(2, '0') + 'm';
   return Math.floor(hrs / 24) + 'd ' + String(hrs % 24).padStart(2, '0') + 'h';
+}
+// The live row's elapsed is a running clock, not a log line: 0:07, 4:12, 1:04:12.
+function fmtClock(ms) {
+  const s = Math.max(0, Math.floor((typeof ms === 'number' && Number.isFinite(ms) ? ms : 0) / 1000));
+  const hrs = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = String(s % 60).padStart(2, '0');
+  return hrs ? `${hrs}:${String(m).padStart(2, '0')}:${sec}` : `${m}:${sec}`;
 }
 function md(text) {
   if (window.marked && window.DOMPurify) {
@@ -444,12 +450,12 @@ function connect() {
   clearTimeout(c.timer);
   c.timer = null; // a stale id would make the next onDown think a reconnect is already scheduled
   if (dsh2) {
-    S.approvals.clear(); S.questions.clear(); renderPending();
+    S.approvals.clear(); S.questions.clear(); approvalLookups.clear(); renderPending();
     dsh2.connect();
     return;
   }
   for (const k of ['mux', 'host']) if (c[k]) { c[k].onclose = null; try { c[k].close(); } catch {} }
-  S.approvals.clear(); S.questions.clear(); renderPending();
+  S.approvals.clear(); S.questions.clear(); approvalLookups.clear(); renderPending();
   let opened = 0;
   const onOpen = () => {
     if (++opened === 2) {
@@ -535,11 +541,14 @@ function onMux(p, env) {
     case 'session/subscribed':
       if (S.cur && p.sessionId === S.cur.id && !S.cur.loading && p.lastSeq > S.cur.lastSeq) loadHistory();
       break;
-    case 'approval/requested':
-      S.approvals.set(p.approvalId, { ...p, rpcId: env.rpcId }); renderPending(); badge();
+    case 'approval/requested': {
+      const a = { ...p, rpcId: env.rpcId };
+      S.approvals.set(p.approvalId, a); renderPending(); badge();
+      lookupApprovalArgs(a).catch(() => {});
       break;
+    }
     case 'approval/resolved':
-      S.approvals.delete(p.approvalId); renderPending(); badge();
+      S.approvals.delete(p.approvalId); approvalLookups.delete(p.approvalId); renderPending(); badge();
       break;
     case 'question/requested':
       S.questions.set(env.rpcId, { ...p, rpcId: env.rpcId }); renderPending(); badge();
@@ -649,12 +658,15 @@ async function loadSessions() {
       for (const x of S.sessions) readState.seen[x.sessionId] = x.updatedAt || Date.now();
       readState.seeded = true; readState.seededAt = Date.now(); saveReadState();
     }
+    S.listLoaded = true;
     if (!S.searchMode) renderList();
     renderDashboard();
     fillTitles();
     checkUnreadTails().catch(() => {});
   } catch (e) {
-    $('#sessions').replaceChildren(h('li', { class: 'empty' }, 'Could not load sessions: ' + e.message));
+    $('#sessions').replaceChildren(h('div', { class: 'empty-state' },
+      h('p', { class: 'empty-title' }, 'Could not load sessions'),
+      h('p', { class: 'empty-body' }, e.message)));
   }
 }
 let fillingTitles = false;
@@ -675,12 +687,6 @@ async function fillTitles() {
       } catch {}
     }
   } finally { fillingTitles = false; }
-}
-function pendingCount(sessionId) {
-  let n = 0;
-  for (const a of S.approvals.values()) if (rootOf(a.sessionId) === sessionId) n++;
-  for (const q of S.questions.values()) if (rootOf(q.sessionId) === sessionId) n++;
-  return n;
 }
 // ----- read state and failed turns (per device) -----
 // dsh keeps neither, so the page does: `seen` is when each session was last looked at,
@@ -770,7 +776,6 @@ function sessState(id) {
   if (readState.failed[id] != null && !(S.cur && S.cur.id === id)) return 'error';
   return isUnread(id) ? 'unread' : 'idle';
 }
-const kindOf = (state) => state.split(' ')[0];
 // ---------- Status glyphs ----------
 // One 16px vocabulary for the session list, tools, jobs and subagents, drawn by style.css with
 // the same shape in every theme. Callers name what they know; these maps turn it into a glyph.
@@ -791,85 +796,240 @@ function jobGlyph(status) {
 function itemGlyph(st) {
   return { on: 'done', failed: 'failed', late: 'stopping', off: 'stopped' }[st] || 'idle';
 }
-// One row: a status glyph, the title, and one muted line (state, age, folder).
+// ---------- Sessions: the board ----------
+// One list in the order attention deserves: Needs you, Running now, Unread, Today, Earlier
+// (Yesterday, Previous 7 days, Older). Each session appears once, in the first section that
+// claims it. The sections are the filter, so there is no other.
+// The first non-blank line of a summary, trimmed.
+const firstText = (text) => String(text || '').split('\n').map((l) => l.trim()).find(Boolean) || '';
+// An approval frame names the tool and call, not its arguments. The call is in the session's
+// history, so read that once per approval and keep the argument for the Needs you summary.
+const approvalLookups = new Set();
+// The drawn call is only this approval's when its session is the one on screen; R.tools
+// outlives the chat view, so an id from another session must not supply the argument.
+function drawnCallArgs(a) {
+  if (!S.cur || !a.callId) return null;
+  if (a.sessionId !== S.cur.id && rootOf(a.sessionId) !== S.cur.id) return null;
+  const t = R.tools.get(a.callId);
+  return t && t.args != null ? t.args : null;
+}
+async function lookupApprovalArgs(a) {
+  if (!a || !a.approvalId || !a.callId || a.args != null || a.input != null) return;
+  const drawn = drawnCallArgs(a);
+  if (drawn != null) { a.args = drawn; return; }
+  if (approvalLookups.has(a.approvalId)) return;
+  approvalLookups.add(a.approvalId);
+  try {
+    const v = await rpc('session.history', { sessionId: a.sessionId, maxMessages: 24 });
+    const call = (v.events || []).map((f) => f.event)
+      .find((e) => e && e.type === 'tool/call' && e.data && e.data.callId === a.callId);
+    if (!call || S.approvals.get(a.approvalId) !== a) return; // answered or replaced meanwhile
+    a.args = call.data.arguments;
+    if (!$('#listView').hidden && !S.searchMode) renderList(); else paintNeedsYou();
+  } catch {} // a history read is a nicety; the reason still answers the row
+}
+// The sessions waiting on an approval or a question, by root session, in the order they asked.
+function waitingSessions() {
+  const out = new Map();
+  const add = (id, item) => { const root = rootOf(id); if (!out.has(root)) out.set(root, []); out.get(root).push(item); };
+  for (const a of S.approvals.values()) add(a.sessionId, { kind: 'approve', a });
+  for (const q of S.questions.values()) add(q.sessionId, { kind: 'ask', q });
+  return out;
+}
+// One line of what is being asked, for a Needs you row. The decision itself happens in the
+// session: the list never offers Allow or Deny.
+function askSummary(item) {
+  if (item.kind === 'approve') {
+    const a = item.a;
+    const tool = prettyTool(a.toolName);
+    // The argument is known when the frame carries it or the session's call is already drawn.
+    const raw = a.args != null ? a.args : a.input != null ? a.input : drawnCallArgs(a);
+    const arg = raw != null ? firstText(toolSummary(raw, null, a.toolName)) : '';
+    if (arg) return `Allow ${tool}: ${arg}`;
+    const why = firstText(a.reason);
+    return why ? `Allow ${tool}? ${why}` : `Allow ${tool}?`;
+  }
+  const q = item.q;
+  if (window.dshReview && window.dshReview.planReviewOf(q.questions)) return 'Approve the plan';
+  const first = (q.questions || [])[0];
+  return firstText(first && (first.question || first.header)) || 'Question for you';
+}
+// Calendar buckets for the date sections, by the device's own day boundaries.
+function dateGroup(ms, now = Date.now()) {
+  if (typeof ms !== 'number' || !ms) return 'older';
+  const day = new Date(now); day.setHours(0, 0, 0, 0);
+  const today = day.getTime();
+  day.setDate(day.getDate() - 1);
+  const yesterday = day.getTime();
+  day.setDate(day.getDate() - 6);
+  const week = day.getTime();
+  return ms >= today ? 'today' : ms >= yesterday ? 'yesterday' : ms >= week ? 'week' : 'older';
+}
+const DATE_GROUPS = [['yesterday', 'Yesterday'], ['week', 'Previous 7 days'], ['older', 'Older']];
+// A row: a status glyph, the title, one 13px line and a chevron. The whole row is one button.
+function boardRow(id, { title, untitled, glyph, line, lineClass, label, extra }) {
+  return h('li', { class: 'sess' + (extra ? ' ' + extra : ''), 'data-session': id },
+    h('button', { class: 'sess-hit', type: 'button', 'aria-label': label, onclick: () => openSession(id) },
+      glyph,
+      h('span', { class: 'main' },
+        h('span', { class: 't' + (untitled ? ' untitled' : '') }, title),
+        h('span', { class: lineClass || 'm' }, ...[].concat(line))),
+      h('span', { class: 'sess-chev', 'aria-hidden': 'true' })));
+}
+// A history row (Unread, Today, Earlier, search): folder and relative time, with "Failed" in
+// red when the last turn failed. A search hit shows its two-line snippet instead.
 function sessRow(s, snippet) {
   const id = s.sessionId;
   const t = S.titles.get(id);
   const state = sessState(id);
-  const pend = pendingCount(id);
   const folder = basename(s.cwd);
-  const when = ago(s.updatedAt);
-  const lead = state === 'wait approve' ? (pend > 1 ? `${pend} waiting for you` : 'Needs approval')
-    : state === 'wait ask' ? (pend > 1 ? `${pend} waiting for you` : 'Question for you')
-    : state === 'error' ? 'Failed' : state === 'run' ? 'Working' : null;
-  const sub = state === 'run' ? [lead, folder] : [lead, when, folder];
-  return h('li', { class: 'sess ' + state, onclick: () => openSession(id), 'aria-label': [t || folder || 'Untitled', lead || (state === 'unread' ? 'unread' : '')].filter(Boolean).join(', ') },
-    glyphEl(state),
-    h('div', { class: 'main' },
-      h('div', { class: 't' + (t ? '' : ' untitled') }, t || folder || 'Untitled'),
-      snippet ? h('div', { class: 'snip' }, snippet) : h('div', { class: 'm' }, sub.filter(Boolean).join(' · '))),
-    h('span', { class: 'sess-chev', 'aria-hidden': 'true' }, '›'));
+  const title = t || folder || 'Untitled';
+  const meta = [folder, ago(s.updatedAt)].filter(Boolean).join(' · ');
+  const failed = state === 'error';
+  const unread = state === 'unread' || (failed && isUnread(id));
+  // A search hit that is just the title would read twice; only a distinct excerpt is a snippet.
+  const snip = snippet && snippet.trim() && snippet.trim() !== title ? snippet : null;
+  const word = { 'wait approve': 'Needs approval', 'wait ask': 'Question for you', run: 'Working', error: 'Failed' }[state];
+  const line = snip ? [snip]
+    : failed ? [h('span', { class: 'failed-word' }, 'Failed'), meta ? ' · ' + meta : '']
+    : word ? [word + (meta ? ' · ' + meta : '')] : [meta];
+  return boardRow(id, {
+    title, untitled: !t,
+    // Unread is a section as well as a glyph: a failed unread row keeps the accent dot and
+    // says "Failed" in red, so neither cue is colour alone.
+    glyph: glyphEl(unread ? 'unread' : state), line, lineClass: snip ? 'snip' : 'm',
+    label: [title, word || (unread ? 'Unread' : ''), snip ? '' : meta].filter(Boolean).join(', '),
+    extra: state + (unread && state !== 'unread' ? ' unread' : ''),
+  });
 }
-const FILTERS = { all: 'All sessions', running: 'Running', waiting: 'Waiting for you', unread: 'Unread' };
-const FILTER_KIND = { running: 'run', waiting: 'wait', unread: 'unread' };
-function filteredSessions() {
-  if (S.filter === 'all') return S.sessions;
-  const want = FILTER_KIND[S.filter];
-  return S.sessions.filter((s) => kindOf(sessState(s.sessionId)) === want);
+// A Needs you row: the glyph says approval or question, the mono line says what is asked.
+function needsRow(id, items) {
+  const s = sessionMeta(id);
+  const t = S.titles.get(id);
+  const title = t || basename(s.cwd) || 'Untitled';
+  const kind = items[0].kind;
+  const ask = askSummary(items[0]) + (items.length > 1 ? ` (+${items.length - 1} more)` : '');
+  return boardRow(id, {
+    title, untitled: !t, glyph: statusGlyph(kind),
+    line: ask, lineClass: 'ask-sum',
+    label: `${title}, ${kind === 'approve' ? 'needs approval' : 'question for you'}: ${ask}`,
+    extra: 'wait ' + kind,
+  });
 }
+const secHead = (id, label, count) => h('h2', { class: 'sec-head', id },
+  h('span', { class: 'sec-label' }, label), count != null ? [' ', h('span', { class: 'sec-count' }, String(count))] : null);
+// The sessions Running now shows: the working ones that are not waiting on the user.
+function runningSessions(waiting = waitingSessions()) {
+  return activeSessions().filter((s) => !waiting.has(s.sessionId));
+}
+let boardKey = null; // the Running now ids the other sections were last drawn without
 function renderList() {
-  const ul = $('#sessions');
-  const all = filteredSessions();
-  const rows = all.slice(0, S.shown).map((s) => sessRow(s));
-  const none = { all: 'No sessions yet', running: 'Nothing is running', waiting: 'Nothing is waiting for you', unread: 'Nothing unread' }[S.filter] || 'No sessions yet';
-  ul.replaceChildren(...(rows.length ? rows : [h('li', { class: 'empty' }, none)]));
-  $('#moreBtn').hidden = all.length <= S.shown;
-  $('#filterBtn').classList.toggle('active', S.filter !== 'all');
-  $('#filterBtn').setAttribute('aria-pressed', String(S.filter !== 'all'));
-  paintBanner();
+  const waiting = waitingSessions();
+  const running = runningSessions(waiting);
+  boardKey = running.map((s) => s.sessionId).join('\u0000');
+  paintNeedsYou(waiting);
+  const taken = new Set([...waiting.keys(), ...running.map((s) => s.sessionId)]);
+  const rest = S.sessions.filter((s) => !taken.has(s.sessionId));
+  const unread = rest.filter((s) => isUnread(s.sessionId));
+  const dated = rest.filter((s) => !isUnread(s.sessionId)).sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+  const shown = dated.slice(0, S.shown);
+  const list = (rows) => h('ul', { class: 'sess-list' }, rows.map((s) => sessRow(s)));
+  const secs = [];
+  if (unread.length) secs.push(h('section', { class: 'board-sec', 'aria-labelledby': 'unreadHead' }, secHead('unreadHead', 'Unread', unread.length), list(unread)));
+  const today = shown.filter((s) => dateGroup(s.updatedAt) === 'today');
+  if (today.length) secs.push(h('section', { class: 'board-sec', 'aria-labelledby': 'todayHead' }, secHead('todayHead', 'Today'), list(today)));
+  const earlier = DATE_GROUPS.map(([key, label]) => [label, shown.filter((s) => dateGroup(s.updatedAt) === key)]).filter(([, rows]) => rows.length);
+  if (earlier.length) {
+    secs.push(h('section', { class: 'board-sec', 'aria-labelledby': 'earlierHead' }, secHead('earlierHead', 'Earlier'),
+      earlier.flatMap(([label, rows]) => [h('h3', { class: 'sec-sub' }, label), list(rows)])));
+  }
+  if (S.listLoaded && !S.sessions.length && !waiting.size) secs.push(emptyBoard());
+  $('#sessions').replaceChildren(...secs);
+  $('#moreBtn').hidden = dated.length <= S.shown;
+  renderDashboard();
 }
-// Approvals and questions change a row's glyph as well as the banner.
+// Empty: one line glyph, one title, one sentence. The bottom bar holds the action.
+function emptyBoard() {
+  return h('div', { class: 'empty-state' },
+    h('span', { class: 'empty-glyph', 'aria-hidden': 'true' }),
+    h('p', { class: 'empty-title' }, 'No sessions yet'),
+    h('p', { class: 'empty-body' }, 'Start one from your laptop, or tap New session.'));
+}
+// Approvals and questions move a session into or out of Needs you.
 function badge() {
-  if (!$('#listView').hidden && !S.searchMode) renderList(); else paintBanner();
+  if (!$('#listView').hidden && !S.searchMode) renderList(); else paintNeedsYou();
 }
-function paintBanner() {
+function paintNeedsYou(waiting = waitingSessions()) {
   const box = $('#pendingGlobal');
-  const n = S.approvals.size + S.questions.size;
-  if (!n) { box.replaceChildren(); return; }
-  const first = [...S.approvals.values(), ...S.questions.values()][0];
-  box.replaceChildren(h('button', { class: 'banner', type: 'button', onclick: () => openSession(rootOf(first.sessionId)) },
-    glyphEl('wait approve'), `${n} waiting for your answer`));
+  if (!waiting.size) { box.replaceChildren(); box.hidden = true; return; }
+  box.hidden = false;
+  box.replaceChildren(secHead('needsHead', 'Needs you', waiting.size),
+    h('ul', { class: 'sess-list' }, [...waiting].map(([id, items]) => needsRow(id, items))));
 }
+// Search opens in the bar and takes the board's place; Cancel puts the board back where it was.
 let searchT = null;
+let searchSeq = 0;
+const SEARCH_HINT = 'Search titles and messages in every session.';
+const searchHint = (text) => h('li', { class: 'search-hint' }, text);
 $('#q').addEventListener('input', (e) => {
   clearTimeout(searchT);
   const q = e.target.value.trim();
-  if (!q) { S.searchMode = false; renderList(); return; }
+  const seq = ++searchSeq;
+  if (!q) { $('#searchResults').replaceChildren(searchHint(SEARCH_HINT)); return; }
   searchT = setTimeout(async () => {
-    S.searchMode = true;
     try {
       const v = await rpc('session.search', { query: q });
+      if (seq !== searchSeq || !S.searchMode) return; // a later keystroke or a Cancel won
       const byId = new Map(S.sessions.map((s) => [s.sessionId, s]));
       const rows = (v.items || []).map((it) => sessRow(byId.get(it.sessionId) || { sessionId: it.sessionId }, it.snippet));
-      $('#sessions').replaceChildren(...(rows.length ? rows : [h('li', { class: 'empty' }, 'No matches')]));
-      $('#moreBtn').hidden = true;
-    } catch (err) { toast('Search failed: ' + err.message); }
+      $('#searchResults').replaceChildren(...(rows.length ? rows : [searchHint('No matches')]));
+    } catch (err) { if (seq === searchSeq && S.searchMode) toast('Search failed: ' + err.message); }
   }, 300);
 });
-// Search lives in the floating strip: the round button opens it, the close button puts it away.
 function openSearch() {
-  $('#dockActions').hidden = true; $('#searchRow').hidden = false;
+  if (S.searchMode) { $('#q').focus(); return; }
+  const scroller = $('#listScroll');
+  S.searchMode = true;
+  S.boardScroll = scroller.scrollTop;
+  $('#listView').classList.add('searching');
+  $('#searchRow').hidden = false;
+  $('#searchBtn').setAttribute('aria-expanded', 'true');
+  $('#searchResults').replaceChildren(searchHint(SEARCH_HINT));
+  $('#searchResults').hidden = false;
+  scroller.scrollTop = 0;
   $('#q').focus();
 }
 function closeSearch() {
-  clearTimeout(searchT);
+  clearTimeout(searchT); searchSeq++;
   $('#q').value = '';
-  $('#searchRow').hidden = true; $('#dockActions').hidden = false;
-  if (S.searchMode) { S.searchMode = false; renderList(); }
+  $('#searchRow').hidden = true;
+  $('#searchBtn').setAttribute('aria-expanded', 'false');
+  $('#searchResults').hidden = true;
+  $('#searchResults').replaceChildren();
+  $('#listView').classList.remove('searching');
+  if (!S.searchMode) return;
+  S.searchMode = false;
+  renderList();
+  $('#listScroll').scrollTop = S.boardScroll || 0;
+  $('#searchBtn').focus();
 }
 $('#searchBtn').onclick = openSearch;
 $('#searchClose').onclick = closeSearch;
 $('#q').addEventListener('keydown', (e) => { if (e.key === 'Escape') closeSearch(); });
+// The board loads the next page itself near the end; the quiet button is the fallback.
+function loadMore() {
+  if ($('#moreBtn').hidden || S.searchMode) return;
+  S.shown += 40; renderList(); fillTitles();
+}
+$('#moreBtn').onclick = loadMore;
+if (typeof IntersectionObserver === 'function') {
+  new IntersectionObserver((entries) => { if (entries.some((e) => e.isIntersecting)) loadMore(); },
+    { root: $('#listScroll'), rootMargin: '0px 0px 480px 0px' }).observe($('#moreBtn'));
+  // The compact nav title shows only once the large title has gone under the bar.
+  new IntersectionObserver((entries) => {
+    for (const e of entries) $('#listNav').classList.toggle('titled', !e.isIntersecting);
+  }, { root: $('#listScroll') }).observe($('#listLargeTitle'));
+}
 // Theme picker (public/theme.js applies and remembers the choice; style.css holds the colours).
 function themeItem() {
   const t = window.dshTheme; if (!t) return null;
@@ -896,18 +1056,7 @@ function listMenuSheet() {
     S.tunnelUrl ? h('button', { class: 'menuitem', onclick: () => { tunnelSheet().catch((e) => toast('Tunnel address unavailable: ' + e.message)); } }, 'Open on your phone', h('small', {}, 'Show the tunnel address as a QR code')) : null,
     location.pathname.replace(/\/+$/, '') ? h('a', { class: 'menuitem', href: '/', style: 'color:inherit;text-decoration:none' }, 'Open full dsh web UI') : null);
 }
-function filterSheet() {
-  const count = (want) => S.sessions.filter((s) => kindOf(sessState(s.sessionId)) === want).length;
-  const n = { all: S.sessions.length, running: count('run'), waiting: count('wait'), unread: count('unread') };
-  openSheet(h('h3', {}, 'Show'),
-    ...Object.entries(FILTERS).map(([key, label]) => h('button', {
-      class: 'menuitem' + (S.filter === key ? ' cur' : ''), 'aria-pressed': String(S.filter === key),
-      onclick: () => { S.filter = key; closeSheet(); renderList(); },
-    }, label, h('small', {}, String(n[key])))));
-}
 $('#menuListBtn').onclick = listMenuSheet;
-$('#filterBtn').onclick = filterSheet;
-$('#moreBtn').onclick = () => { S.shown += 40; renderList(); fillTitles(); };
 
 // ---------- Renderer ----------
 const R = {
@@ -1836,10 +1985,15 @@ function activeSessions() {
   const list = (S.sessions || []).filter((s) => sessionIsWorking(s.sessionId));
   return list.sort((a, b) => (sessionStart(b.sessionId) || b.updatedAt || 0) - (sessionStart(a.sessionId) || a.updatedAt || 0));
 }
-function toggleDashCard(id) {
+function toggleDashCard(id, refocus) {
   if (S.dashOpen.has(id)) S.dashOpen.delete(id); else S.dashOpen.add(id);
   dashSig = null;
   renderDashboard();
+  // The rows are redrawn, so a footer tapped from the keyboard hands focus to its new self.
+  if (refocus && typeof CSS !== 'undefined' && CSS.escape) {
+    const btn = $('#runningCards').querySelector(`.run-row[data-session="${CSS.escape(id)}"] .run-more`);
+    if (btn) btn.focus();
+  }
 }
 // ----- subagent catalogs -----
 // The catalog is a snapshot, not a push, so it is refreshed while a card stays
@@ -2012,13 +2166,13 @@ function toggleJobOutput(sessionId, j) {
 // No prompt/confirm on a phone: the first tap arms, the second stops, a third-second pause disarms.
 function stopJobButton(sessionId, j) {
   const label = j.label || j.kind || 'job';
-  const btn = h('button', { class: 'jstop', type: 'button', 'aria-label': 'Stop ' + label }, 'stop');
+  const btn = h('button', { class: 'jstop', type: 'button', 'aria-label': 'Stop ' + label }, 'Stop');
   let armed = false;
   let timer = null;
-  const reset = () => { armed = false; clearTimeout(timer); btn.textContent = 'stop'; btn.classList.remove('armed'); };
+  const reset = () => { armed = false; clearTimeout(timer); btn.textContent = 'Stop'; btn.setAttribute('aria-label', 'Stop ' + label); btn.classList.remove('armed'); };
   btn.onclick = async () => {
     if (!armed) {
-      armed = true; btn.textContent = 'sure?'; btn.classList.add('armed');
+      armed = true; btn.textContent = 'Sure?'; btn.setAttribute('aria-label', 'Tap again to stop ' + label); btn.classList.add('armed');
       timer = setTimeout(reset, 3000);
       return;
     }
@@ -2029,7 +2183,7 @@ function stopJobButton(sessionId, j) {
       toast(v && v.outcome === 'already-finished' ? 'That job already finished' : 'Stopping ' + label);
     } catch (e) {
       toast('Could not stop it: ' + ((e && e.message) || 'unknown error'));
-      btn.disabled = false; btn.textContent = 'stop';
+      btn.disabled = false; btn.textContent = 'Stop';
     }
   };
   return btn;
@@ -2045,8 +2199,10 @@ function jobRow(j, sessionId) {
     statusGlyph(jobGlyph(j.status), 'jdot'),
     h('span', { class: 'jkind' }, j.kind || 'job'),
     label);
-  if (live && typeof j.startedAt === 'number') row.append(h('span', { class: 'jtime', 'data-since': String(j.startedAt) }, fmtElapsed(Date.now() - j.startedAt)));
-  else row.append(h('span', { class: 'jtime' }, [j.status, j.detail].filter(Boolean).join(' · ')));
+  if (live) {
+    row.append(h('span', { class: 'jstate' }, j.status || 'running'));
+    if (typeof j.startedAt === 'number') row.append(h('span', { class: 'jtime', 'data-since': String(j.startedAt) }, fmtElapsed(Date.now() - j.startedAt)));
+  } else row.append(h('span', { class: 'jtime' }, [j.status, j.detail].filter(Boolean).join(' · ')));
   if (view) row.append(h('span', { class: 'jcaret', 'aria-hidden': 'true' }, expanded ? '▾' : '▸'));
   if (dsh2 && typeof dsh2.killJob === 'function' && j.status === 'running') row.append(stopJobButton(sessionId, j));
   const wrap = h('div', { class: 'run-jobwrap' }, row);
@@ -2070,6 +2226,7 @@ function agentRow({ e, depth, parent }) {
   row.append(statusGlyph(live ? 'run' : 'done', 'adot'));
   row.append(h('span', { class: 'aname', title: e.id || '' }, e.label || e.name || e.id || 'subagent'));
   if (e.mode) row.append(h('span', { class: 'amode' }, e.mode));
+  row.append(h('span', { class: 'astate' }, live ? 'running' : 'done'));
   const t = agentTiming(e);
   if (t && t.live) row.append(h('span', { class: 'atime', 'data-since': String(t.since) }, fmtElapsed(Date.now() - t.since)));
   else if (t) row.append(h('span', { class: 'atime' }, fmtElapsed(t.settledMs)));
@@ -2143,7 +2300,7 @@ function claudeTargets() {
     const recent = runs.sort((a, b) => b.since - a.since).slice(0, CLAUDE_PER_SESSION);
     const fresh = (r) => Math.abs(now - r.since) < CLAUDE_FIND_FOR_MS && !(claudeRuns.get(r.key) || {}).runId;
     if (!sessionIsWorking(s.sessionId) && !recent.some(fresh)) continue;
-    const open = !S.dashCollapsed && S.dashOpen.has(s.sessionId);
+    const open = S.dashOpen.has(s.sessionId);
     for (const r of recent) out.push({ ...r, open });
   }
   return out;
@@ -2282,51 +2439,84 @@ function updateClaudePanel(key) {
   const el = claudePanels.get(key);
   if (el) fillClaudePanel(el, claudeRuns.get(key));
 }
-function sessionCard(s) {
+// A live row's clock starts at the current turn, or at the oldest live job when no turn runs.
+// A background subagent is the third way a session stays active; its own timing is the anchor.
+function liveSince(id) {
+  if (S.running.get(id)) {
+    const start = sessionStart(id);
+    if (typeof start === 'number') return start;
+  }
+  const jobStarts = liveJobs(id).map((j) => j.startedAt).filter((n) => typeof n === 'number' && Number.isFinite(n));
+  if (jobStarts.length) return Math.min(...jobStarts);
+  const agentStarts = flattenAgents(id, 0, []).map(({ e, parent }) => {
+    if (!e || e.kind !== 'child' || !agentLive(e, parent)) return null;
+    const t = agentTiming(e);
+    return t && t.live && typeof t.since === 'number' ? t.since : null;
+  }).filter((n) => typeof n === 'number' && Number.isFinite(n));
+  if (agentStarts.length) return Math.min(...agentStarts);
+  const s = S.sessions.find((x) => x.sessionId === id);
+  return s && typeof s.updatedAt === 'number' ? s.updatedAt : null;
+}
+// The one line of current work: the todo in progress, the running job, a live subagent, or the
+// bare fact that a turn is under way. `mono` marks a command, which reads in the machine face.
+function currentWork(id, todos) {
+  const todo = Array.isArray(todos) && todos.find((t) => t && t.status === 'in_progress' && t.content);
+  if (todo) return { text: String(todo.content) };
+  const job = liveJobs(id).find((j) => j.label);
+  if (job) return { text: String(job.label), mono: true };
+  const agent = flattenAgents(id, 0, []).find(({ e, parent }) => e && e.kind === 'child' && agentLive(e, parent));
+  if (agent) return { text: agent.e.label ? 'Subagent: ' + agent.e.label : 'Starting a subagent' };
+  return S.running.get(id) ? { text: 'Working' } : null;
+}
+// Context earns a place on the row only once it changes a decision: at 80% and up.
+function contextChip(id) {
+  const cf = contextFill(projectionValue(id, 'contextPressure'));
+  if (!cf || cf.pct < 80) return null;
+  const level = cf.pct >= 95 ? ' danger' : cf.pct >= 85 ? ' warn' : '';
+  return h('span', { class: 'run-ctx' + level }, `Context ${cf.pct}%`);
+}
+// A live row in Running now: no card, the same list as the rest of the board.
+//   1. glyph, title, and the elapsed clock at the trailing edge
+//   2. one line of current work (and the context chip at 80% or more)
+//   3. the todo bar with "2 of 5", only when the session reports todos
+//   4. a footer, "1 job · 2 subagents", that expands them inline
+// The top opens the session and the footer expands it: two separate hit areas.
+function liveRow(s) {
   const id = s.sessionId;
-  const running = !!S.running.get(id);
-  const start = running ? sessionStart(id) : null;
+  const since = liveSince(id);
   const title = S.titles.get(id) || basename(s.cwd) || 'Session';
-  const top = h('button', { class: 'run-top', type: 'button', 'aria-label': 'Open ' + title, onclick: () => openSession(id) },
-    statusGlyph(running ? 'run' : 'idle', 'run-dot'),
-    h('span', { class: 'run-name' }, title),
-    running && typeof start === 'number' ? h('span', { class: 'run-elapsed', 'data-since': String(start) }, fmtElapsed(Date.now() - start)) : null);
-
-  const meters = [];
   const todos = projectionValue(id, 'todos');
+  const work = currentWork(id, todos);
+  const chip = contextChip(id);
+  const lines = [h('span', { class: 'run-line' },
+    // Every row here is active, whether the turn, a job or a subagent is what is working.
+    statusGlyph('run', 'run-dot'),
+    h('span', { class: 'run-name' }, title),
+    since != null ? h('span', { class: 'run-elapsed', 'data-since': String(since) }, fmtClock(Date.now() - since)) : null)];
+  if (work || chip) {
+    lines.push(h('span', { class: 'run-sub' },
+      h('span', { class: 'run-current' + (work && work.mono ? ' mono-line' : '') }, work ? work.text : ''),
+      chip));
+  }
   if (Array.isArray(todos) && todos.length) {
     const done = todos.filter((t) => t && t.status === 'completed').length;
-    const pct = Math.round((done / todos.length) * 100);
     const fill = h('span', { class: 'run-fill' });
-    fill.style.setProperty('--fill', pct + '%');
-    meters.push(h('div', { class: 'run-meter' },
-      h('span', { class: 'run-meter-label' }, 'todos'),
-      h('span', { class: 'run-track' }, fill),
-      h('span', { class: 'run-meter-value' }, `${done}/${todos.length}`)));
-    const current = todos.find((t) => t && t.status === 'in_progress');
-    if (current && current.content) meters.push(h('div', { class: 'run-current' }, current.content));
+    fill.style.setProperty('--fill', Math.round((done / todos.length) * 100) + '%');
+    lines.push(h('span', { class: 'run-meter' },
+      h('span', { class: 'run-track', 'aria-hidden': 'true' }, fill),
+      h('span', { class: 'run-meter-value' }, `${done} of ${todos.length}`)));
   }
-  const cf = contextFill(projectionValue(id, 'contextPressure'));
-  if (cf) {
-    const fill = h('span', { class: 'run-fill' + cf.level });
-    fill.style.setProperty('--fill', cf.pct + '%');
-    meters.push(h('div', { class: 'run-meter' },
-      h('span', { class: 'run-meter-label' }, 'ctx'),
-      h('span', { class: 'run-track' }, fill),
-      h('span', { class: 'run-meter-value' }, cf.pct + '%')));
-  }
+  const top = h('button', { class: 'run-top', type: 'button', onclick: () => openSession(id) }, lines);
+  const row = h('li', { class: 'run-row', 'data-session': id }, top);
 
   const jobs = S.jobs.get(id) || [];
-  const live = jobs.filter(dashLive);
   const agents = flattenAgents(id, 0, []);
-  const bits = [];
-  if (live.length) bits.push(`${live.length} running job${live.length > 1 ? 's' : ''}`);
-  else if (jobs.length) bits.push(`${jobs.length} job${jobs.length > 1 ? 's' : ''}`);
-  if (agents.length) bits.push(`${agents.length} subagent${agents.length > 1 ? 's' : ''}`);
+  if (!jobs.length && !agents.length) return row; // nothing to expand, so no footer: a shorter row
+  const bits = [jobs.length ? plural(jobs.length, 'job') : null, agents.length ? plural(agents.length, 'subagent') : null].filter(Boolean);
   const expanded = S.dashOpen.has(id);
-  const more = h('button', { class: 'run-more', type: 'button', 'aria-expanded': String(expanded), onclick: () => toggleDashCard(id) },
-    h('span', { class: 'run-more-txt' }, bits.length ? bits.join(' · ') : (running ? 'working' : 'idle')),
-    h('span', { class: 'run-caret', 'aria-hidden': 'true' }, '▾'));
+  const more = h('button', { class: 'run-more', type: 'button', 'aria-expanded': String(expanded), onclick: () => toggleDashCard(id, true) },
+    h('span', { class: 'run-more-txt' }, bits.join(' · ')),
+    h('span', { class: 'run-caret', 'aria-hidden': 'true' }));
 
   const detail = h('div', { class: 'run-detail' });
   if (jobs.length) {
@@ -2339,7 +2529,7 @@ function sessionCard(s) {
     detail.append(h('div', { class: 'run-sec-title' }, 'Subagents'));
     for (const node of agents.slice(0, 24)) {
       detail.append(agentRow(node));
-      // Only an expanded card carries the feed panel; a folded one is still followed for liveness.
+      // Only an expanded row carries the feed panel; a folded one is still followed for liveness.
       if (expanded && isExternal(node.e)) {
         const panel = claudePanel(node.parent, node.e.id);
         panel.style.setProperty('--depth', String(node.depth));
@@ -2348,9 +2538,9 @@ function sessionCard(s) {
     }
     if (agents.length > 24) detail.append(h('div', { class: 'run-empty' }, `+${agents.length - 24} more`));
   }
-  if (!jobs.length && !agents.length) detail.append(h('div', { class: 'run-empty' }, 'No jobs or subagents.'));
   detail.hidden = !expanded;
-  return h('article', { class: 'run-card', 'data-session': id }, top, h('div', { class: 'run-meters' }, meters), more, detail);
+  row.append(more, detail);
+  return row;
 }
 function agentsSig(parentId, depth) {
   const tree = S.subagents.get(parentId);
@@ -2365,13 +2555,13 @@ function agentsSig(parentId, depth) {
   }
   return out.join(',');
 }
-// What the cards would render, with time-derived strings left out so the 1s
+// What the live rows would render, with time-derived strings left out so the 1s
 // ticker never forces a rebuild.
 function dashboardSignature(list) {
   const parts = [];
   for (const s of list) {
     const id = s.sessionId;
-    parts.push(id, S.running.get(id) ? 'run' : 'idle', 'S' + (sessionStart(id) || ''));
+    parts.push(id, S.running.get(id) ? 'run' : 'idle', 'S' + (sessionStart(id) || ''), 'N' + (S.titles.get(id) || s.cwd || ''));
     const todos = projectionValue(id, 'todos');
     parts.push('T' + (Array.isArray(todos) ? todos.map((t) => ((t && t.status) || '?')[0] + ((t && t.content) || '')).join('\u0001') : ''));
     const cf = contextFill(projectionValue(id, 'contextPressure'));
@@ -2396,32 +2586,36 @@ function tickDashboard() {
   const now = Date.now();
   for (const el of box.querySelectorAll('[data-since]')) {
     const since = Number(el.getAttribute('data-since'));
-    if (Number.isFinite(since)) el.textContent = fmtElapsed(now - since);
+    // The row's own clock reads 4:12; a job or subagent inside it keeps "4m 12s".
+    if (Number.isFinite(since)) el.textContent = (el.classList.contains('run-elapsed') ? fmtClock : fmtElapsed)(now - since);
   }
 }
+// Running now: one live row per active session that is not waiting on the user (a waiting one
+// is in Needs you). The other sections leave these sessions out, so a change in who is running
+// redraws the whole board first.
 function renderDashboard() {
   const box = $('#running');
   if (!box) return;
   if ($('#listView').hidden) { stopDashTick(); stopClaudeFeed(); return; }
-  const active = activeSessions();
-  // With no card on screen a just-started external run may still be looking for its transcript.
+  const all = activeSessions();
+  const waiting = waitingSessions();
+  const active = all.filter((s) => !waiting.has(s.sessionId));
+  if (active.map((s) => s.sessionId).join('\u0000') !== boardKey && !S.searchMode) { renderList(); return; }
+  // A waiting session can still be working: keep its subagent tree fresh for when it returns.
+  if (all.length) ensureAgentTrees(all);
+  // With no live row on screen a just-started external run may still be looking for its transcript.
   if (!active.length) { box.hidden = true; dashSig = null; stopDashTick(); syncClaudeFeed(); return; }
   box.hidden = false;
   const sig = dashboardSignature(active);
   if (sig !== dashSig) {
     dashSig = sig;
     claudePanels.clear();
-    $('#runningCards').replaceChildren(...active.map(sessionCard));
+    $('#runningCards').replaceChildren(...active.map(liveRow));
     $('#runningCount').textContent = String(active.length);
   }
-  const open = !S.dashCollapsed;
-  $('#runningHead').setAttribute('aria-expanded', String(open));
-  $('#runningCards').hidden = !open;
   startDashTick();
-  ensureAgentTrees(active);
   syncClaudeFeed();
 }
-$('#runningHead').onclick = () => { S.dashCollapsed = !S.dashCollapsed; renderDashboard(); };
 
 // ---------- Approvals & questions ----------
 const collapsedCards = new Set(); // rpcId whose card the user folded to read underneath

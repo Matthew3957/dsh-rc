@@ -232,8 +232,6 @@ html.kb #toast { bottom: calc(var(--vvbot) + 90px); }
   transition: opacity 100ms var(--ease-standard);
 }
 .navbtn:active { opacity: .72; }
-/* A filter in force: a dot as well as the label, so it is not colour alone. */
-.navbtn.active::after { content: ''; position: absolute; top: 8px; right: 8px; width: 8px; height: 8px; border-radius: 50%; background: var(--tint); box-shadow: 0 0 0 2px var(--canvas); }
 @media (hover: hover) { .navbtn:hover { background: var(--surface-fill); } }
 
 /* Buttons: primary filled accent, secondary quiet fill, plain accent text, destructive red.
@@ -307,9 +305,6 @@ html[data-theme="contrast"] .field:focus { box-shadow: none; outline: 2px solid 
 .banner.offline { background: var(--surface); border-bottom: 1px solid var(--card-border); }
 .banner.offline .glyph { color: var(--text-2); }
 .banner.out { opacity: 0; transition: opacity var(--dur-base) var(--ease-exit); }
-/* Approvals and questions waiting somewhere: a tappable banner at the top of the list. */
-button.banner { min-height: var(--hit); color: var(--warning); font-weight: var(--weight-semibold); }
-button.banner:active { background: var(--surface-fill); }
 
 /* Status glyph: one 16px vocabulary for sessions, tools, jobs and subagents, the same shape in
    every theme. Colour repeats what the shape already says.
@@ -342,46 +337,103 @@ button.banner:active { background: var(--surface-fill); }
    replaced by a fade. */
 @media (prefers-reduced-motion: reduce) { .glyph.run::before { animation-duration: 3s; } }
 
-/* Session list: the rows scroll between the nav and the bottom bar. */
+/* Sessions: one board in attention order (Needs you, Running now, Unread, Today, Earlier),
+   scrolling between the nav and the bottom bar. Every section is rows in the same list: no
+   cards, no shadows, 1px separators inset to the text. */
 #listView { position: relative; overflow: hidden; }
-.listscroll { flex: 1; min-height: 0; overflow-y: auto; -webkit-overflow-scrolling: touch; overscroll-behavior: contain; padding-bottom: var(--s-4); }
-.sessions { list-style: none; margin: 0; padding: var(--s-1) 0 0; }
-/* List row: 56px or more, a leading glyph, a 17px title and a 13px line, a separator inset to
-   the text. A pressed fill, no hover. */
-.sess { position: relative; display: flex; gap: var(--s-3); align-items: flex-start; width: 100%; max-width: var(--col); margin-inline: auto; min-height: max(56px, calc(56rem / 17)); padding: var(--s-3) var(--row-x); cursor: pointer; }
-.sess::after { content: ''; position: absolute; left: calc(var(--row-x) + 28px); right: 0; bottom: 0; border-bottom: 1px solid var(--separator); }
+.listscroll { flex: 1; min-height: 0; overflow-y: auto; -webkit-overflow-scrolling: touch; overscroll-behavior: contain; padding-bottom: var(--s-6); }
+/* The large title: 34/41 at the gutter, scrolling away with the board. The one clamped role, so
+   at the largest text sizes it stops growing and wraps instead of crowding the screen. */
+.largetitle {
+  max-width: var(--col); margin: 0 auto; padding: var(--s-1) var(--row-x) 0;
+  font-size: min(var(--text-display), 44px); line-height: var(--text-display-lh);
+  font-weight: var(--weight-semibold); letter-spacing: var(--track-display); overflow-wrap: anywhere;
+}
+/* Its 17px echo in the bar fades in once the large title has gone under it (app.js: .titled). */
+#listTitle { opacity: 0; transition: opacity var(--dur-fast) var(--ease-standard); }
+#listNav.titled #listTitle { opacity: 1; }
+/* Section headers: 13px semibold with a count. Needs you leads in full text colour; the amber
+   lives in its glyphs, never as 13px amber text on the page. */
+.board-sec { margin: 0; }
+.sec-head {
+  max-width: var(--col); margin: 0 auto; padding: var(--s-6) var(--row-x) var(--s-1);
+  font-size: var(--text-section); line-height: var(--text-section-lh); font-weight: var(--weight-semibold); color: var(--text-2);
+}
+.sec-count { font-weight: var(--weight-regular); font-variant-numeric: tabular-nums; }
+.needs .sec-head { color: var(--text); }
+/* Earlier's quiet sub-headers: Yesterday, Previous 7 days, Older. */
+.sec-sub {
+  max-width: var(--col); margin: 0 auto; padding: var(--s-3) var(--row-x) 0;
+  font-size: var(--text-caption); line-height: var(--text-caption-lh); font-weight: var(--weight-regular); color: var(--text-2);
+}
+/* List row: 56px or more, a 16px glyph, a 17/22 title and a 13/18 line, a 12px chevron. The whole
+   row is one button. A pressed fill, no hover. */
+.sess-list { list-style: none; margin: 0; padding: 0; }
+.sess { position: relative; max-width: var(--col); margin-inline: auto; }
+.sess::after { content: ''; position: absolute; left: calc(var(--row-x) + 28px); right: 0; bottom: 0; border-bottom: 1px solid var(--separator); pointer-events: none; }
 .sess:last-child::after { content: none; }
-.sess:active { background: var(--surface-fill); }
-.sess > .glyph { margin-top: calc((var(--text-body) * var(--text-nav-lh) - 16px) / 2); }
+.sess-hit {
+  display: flex; gap: var(--s-3); align-items: flex-start; width: 100%;
+  min-height: max(56px, calc(56rem / 17)); padding: var(--s-3) var(--row-x);
+  text-align: left; color: var(--text); -webkit-user-select: none; user-select: none;
+}
+.sess-hit:active { background: var(--surface-fill); }
+.sess-hit > .glyph { margin-top: calc((var(--text-body) * var(--text-nav-lh) - 16px) / 2); }
 .sess .main { flex: 1; min-width: 0; }
-.sess-chev { flex-shrink: 0; align-self: center; font-size: 18px; line-height: 1; color: var(--text-2); }
-.sess .t { font-size: var(--text-body); line-height: var(--text-nav-lh); font-weight: var(--weight-regular); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sess .t { display: block; font-size: var(--text-body); line-height: var(--text-nav-lh); font-weight: var(--weight-regular); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .sess .t.untitled { color: var(--text-2); }
-.sess .m { font-size: var(--text-caption); line-height: var(--text-caption-lh); color: var(--text-2); margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.sess.wait .m { color: var(--warning); }
-.sess .snip { font-size: var(--text-caption); line-height: var(--text-caption-lh); color: var(--text-2); margin-top: 2px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.sess .m, .sess .snip { display: block; font-size: var(--text-caption); line-height: var(--text-caption-lh); color: var(--text-2); margin-top: 2px; }
+.sess .m { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sess .snip { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+/* What a waiting session asks, in the machine face: the command, the question, the plan. */
+.sess .ask-sum { display: block; margin-top: 2px; font-family: var(--font-mono); font-size: var(--text-mono); line-height: var(--text-mono-lh); color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .sess.unread .t { font-weight: var(--weight-semibold); }
-.sess.error .m { color: var(--danger); }
-/* Empty state: one glyph, one sentence. */
-.empty { list-style: none; padding: var(--s-10) var(--s-5); color: var(--text-2); text-align: center; font-size: var(--text-callout); line-height: var(--text-callout-lh); }
-.sessions > .empty::before { content: ''; display: block; width: 28px; height: 28px; margin: 0 auto var(--s-3); border: 1.75px solid currentColor; border-radius: var(--r-sm); }
-#moreBtn { max-width: var(--col); margin: var(--s-2) auto 0; }
+.failed-word { color: var(--danger); font-weight: var(--weight-semibold); }
+.sess-chev {
+  flex-shrink: 0; align-self: center; width: 12px; height: 12px; background: var(--text-2);
+  -webkit-mask: var(--chev) center / 12px 12px no-repeat; mask: var(--chev) center / 12px 12px no-repeat;
+  --chev: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'><path d='M4.25 1.75 8.5 6l-4.25 4.25' fill='none' stroke='black' stroke-width='1.75' stroke-linecap='round' stroke-linejoin='round'/></svg>");
+}
+/* A full-width row shows its keyboard ring inside its own edge. */
+.sess-hit:focus-visible, .run-top:focus-visible, .run-more:focus-visible { outline-offset: -2px; }
+/* Empty: a 28px line glyph, a title and one sentence. The bottom bar holds the action. */
+.empty-state { max-width: var(--col); margin: 0 auto; padding: var(--s-10) var(--s-6); text-align: center; }
+.empty-glyph {
+  display: block; width: 28px; height: 28px; margin: 0 auto var(--s-3); background: var(--text-2);
+  -webkit-mask: var(--empty) center / 28px 28px no-repeat; mask: var(--empty) center / 28px 28px no-repeat;
+  --empty: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><g fill='none' stroke='black' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'><rect x='3' y='4.5' width='18' height='15' rx='2.5'/><path d='m7 9.5 2.75 2.5L7 14.5M12.5 14.5H17'/></g></svg>");
+}
+.empty-title { margin: 0; font-size: var(--text-body); line-height: var(--text-nav-lh); font-weight: var(--weight-semibold); }
+.empty-body { margin: var(--s-1) 0 0; font-size: var(--text-callout); line-height: var(--text-callout-lh); color: var(--text-2); overflow-wrap: anywhere; }
+/* The next page loads itself near the end of the board; this quiet line is the fallback. */
+.morebtn {
+  display: block; margin: var(--s-2) auto 0; min-height: var(--hit); padding: 0 var(--s-4);
+  font-size: var(--text-caption); line-height: var(--text-caption-lh); color: var(--text-2);
+}
+.morebtn:active { opacity: .72; }
 
-/* Bottom bar: 56px plus the home indicator, in the flow, so the list ends above it. The
-   hairline shows while rows sit under it (app.js sets .edge); the contrast theme keeps it. */
+/* Search opens in the bar as a full-width field with Cancel, and its results take the board's
+   place (app.js sets #listView.searching). The bottom bar steps aside for the keyboard. */
+.searchrow { grid-column: 1 / -1; display: flex; align-items: center; gap: var(--s-2); min-width: 0; padding: var(--s-1) 0 var(--s-1) calc(var(--s-4) - 6px); }
+.searchrow #q { flex: 1; min-width: 0; }
+.searchrow #searchClose { flex-shrink: 0; }
+#listView.searching :is(.nav-lead, #listTitle, .nav-trail) { display: none; }
+#listView.searching :is(#listLargeTitle, #api403, #pendingGlobal, #running, #sessions, #moreBtn, #listDock) { display: none; }
+.search-hint { list-style: none; max-width: var(--col); margin: 0 auto; padding: var(--s-6) var(--row-x); text-align: center; font-size: var(--text-callout); line-height: var(--text-callout-lh); color: var(--text-2); }
+
+/* Bottom bar: 56px plus the home indicator, in the flow, so the list ends above it. It holds
+   the screen's one primary action, a 52px New session. The hairline shows while rows sit under
+   it (app.js sets .edge); the contrast theme keeps it. */
 .bottombar {
   flex-shrink: 0; display: flex; flex-direction: column; justify-content: center;
   min-height: calc(56px + var(--safe-b));
-  padding: 5px var(--pad-x) calc(5px + var(--safe-b));
+  padding: 1px var(--pad-x) calc(2px + var(--safe-b)); /* 1px hairline + 1 + 52px button + 2 = 56 */
   background: var(--canvas); border-top: 1px solid transparent;
   transition: border-color var(--dur-fast) var(--ease-standard);
 }
 .bottombar.edge, html[data-theme="contrast"] .bottombar { border-top-color: var(--separator); }
 .dockrow { display: flex; align-items: center; gap: var(--s-2); }
-.dockrow #searchBtn { margin-left: -10px; }
-#newBtn { flex: 1; min-width: 0; }
-.searchrow #q { flex: 1; min-width: 0; }
-.searchrow #searchClose { flex-shrink: 0; padding-inline: var(--s-2); margin-right: calc(var(--s-2) * -1); }
+#newBtn { flex: 1; min-width: 0; min-height: max(52px, calc(52rem / 17)); }
 
 /* Feed */
 /* The transcript keeps its own type until PR 4; the shell only centres it in the 680px column. */
@@ -739,49 +791,70 @@ html[data-theme="contrast"] #sheetBody :is(input, select, textarea):focus { box-
 .status-table > :nth-child(6n) { padding-left: var(--s-2); }
 .status-note { padding-top: var(--s-1); font-family: var(--font-sans); }
 
-/* Running now */
-/* A section above the session list. Its own scroll area keeps it from pushing
-   the list off screen when several sessions are busy. */
-/* PR 3 turns these cards into live rows in the list; until then they take the shell's type,
-   radii, hit boxes and the universal glyphs. */
-.running { flex-shrink: 0; margin: 0 0 var(--s-2); }
-.running-head { display: flex; align-items: center; gap: var(--s-3); width: 100%; min-height: var(--hit); padding: var(--s-2) var(--pad-x); text-align: left; }
-.running-head:active { background: var(--surface-fill); }
-.running-label { font-size: var(--text-section); line-height: var(--text-section-lh); font-weight: var(--weight-semibold); color: var(--text-2); }
-.running-count { font-size: var(--text-section); line-height: var(--text-section-lh); color: var(--text-2); font-variant-numeric: tabular-nums; }
-.running-caret { margin-left: auto; width: 20px; height: 20px; color: var(--text-2); }
-.running-head[aria-expanded="true"] .running-caret { transform: rotate(180deg); }
-.running-cards { max-height: 46vh; overflow-y: auto; -webkit-overflow-scrolling: touch; padding: 0 var(--pad-x) var(--s-2); display: flex; flex-direction: column; gap: var(--s-2); }
-.run-card { background: var(--surface); border: 1px solid var(--card-border); border-radius: var(--r-md); overflow: hidden; }
-.run-top { display: flex; align-items: center; gap: var(--s-3); width: 100%; min-height: var(--hit); padding: var(--s-2) var(--s-4) var(--s-1); text-align: left; }
-.run-top:active { background: var(--surface-fill); }
-.run-name { flex: 1; min-width: 0; font-size: var(--text-callout); line-height: var(--text-callout-lh); font-weight: var(--weight-semibold); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.run-elapsed { flex-shrink: 0; font-family: var(--font-mono); font-size: var(--text-mono-num); line-height: var(--text-mono-num-lh); font-weight: var(--weight-medium); font-variant-numeric: tabular-nums; color: var(--text-2); }
-.run-meters { display: flex; flex-direction: column; gap: var(--s-1); padding: 0 var(--s-4); }
-.run-meter { display: flex; align-items: center; gap: var(--s-2); font-family: var(--font-mono); font-size: var(--text-mono-sm); line-height: var(--text-mono-sm-lh); letter-spacing: var(--track-mono-sm); font-variant-numeric: tabular-nums; color: var(--text-2); }
-.run-meter-label { flex-shrink: 0; width: 5ch; }
+/* Running now: a live row per active session, in the same list as the rest of the board. The
+   top opens the session; the footer expands its jobs and subagents inline. Two hit areas. */
+.run-rows { list-style: none; margin: 0; padding: 0; }
+.run-row { position: relative; max-width: var(--col); margin-inline: auto; }
+.run-row::after { content: ''; position: absolute; left: calc(var(--row-x) + 28px); right: 0; bottom: 0; border-bottom: 1px solid var(--separator); pointer-events: none; }
+.run-row:last-child::after { content: none; }
+.run-top {
+  display: flex; flex-direction: column; gap: 2px; width: 100%;
+  min-height: max(56px, calc(56rem / 17)); padding: var(--s-3) var(--row-x);
+  text-align: left; color: var(--text); -webkit-user-select: none; user-select: none;
+}
+.run-row:has(> .run-more) > .run-top { padding-bottom: var(--s-1); }
+.run-top:active, .run-more:active { background: var(--surface-fill); }
+/* 1: glyph, 17px title, and the clock at the trailing edge. The title truncates; the clock,
+   22px mono with tabular figures, never does and never jitters. */
+.run-line { display: flex; align-items: center; gap: var(--s-3); min-width: 0; }
+.run-name { flex: 1; min-width: 0; font-size: var(--text-body); line-height: var(--text-nav-lh); font-weight: var(--weight-semibold); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.run-elapsed {
+  flex-shrink: 0; margin-left: auto; font-family: var(--font-mono); font-size: var(--text-live); line-height: var(--text-live-lh);
+  font-weight: var(--weight-medium); font-variant-numeric: tabular-nums; color: var(--text); white-space: nowrap;
+}
+/* 2: one 13px line of current work, and the context chip once context reaches 80%. */
+.run-sub { display: flex; align-items: center; gap: var(--s-2); min-width: 0; padding-left: 28px; }
+.run-current { flex: 1; min-width: 0; font-size: var(--text-caption); line-height: var(--text-caption-lh); color: var(--text-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.run-current.mono-line { font-family: var(--font-mono); font-size: var(--text-mono); line-height: var(--text-mono-lh); }
+/* The chip's words carry the level; the border and a tint of the status colour repeat it. Text
+   stays --text, so the chip reads in every theme (see textPairs in theme-contrast.test.mjs). */
+.run-ctx {
+  flex-shrink: 0; padding: 0 var(--s-2); border: 1px solid var(--separator); border-radius: var(--r-pill);
+  background: var(--surface-sunk); color: var(--text);
+  font-size: var(--text-caption); line-height: var(--text-caption-lh); font-weight: var(--weight-semibold); font-variant-numeric: tabular-nums; white-space: nowrap;
+}
+.run-ctx.warn { border-color: var(--warning); background: color-mix(in srgb, var(--warning) 14%, var(--canvas)); }
+.run-ctx.danger { border-color: var(--danger); background: color-mix(in srgb, var(--danger) 14%, var(--canvas)); }
+/* 3: the 4px todo bar with "2 of 5", only when the session reports todos. */
+.run-meter { display: flex; align-items: center; gap: var(--s-2); min-width: 0; padding: var(--s-1) 0 0 28px; font-size: var(--text-caption); line-height: var(--text-caption-lh); font-variant-numeric: tabular-nums; color: var(--text-2); }
 .run-track { flex: 1; min-width: 0; height: 4px; border-radius: var(--r-pill); background: var(--separator); overflow: hidden; }
 .run-fill { display: block; height: 100%; width: var(--fill, 0%); background: var(--tint); }
-.run-fill.warn { background: var(--warning); }
-.run-fill.err { background: var(--danger); }
 .run-meter-value { flex-shrink: 0; }
-.run-current { padding: var(--s-1) var(--s-4) 0; font-size: var(--text-caption); line-height: var(--text-caption-lh); color: var(--text-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.run-more { display: flex; align-items: center; gap: var(--s-2); width: 100%; min-height: var(--hit); padding: var(--s-1) var(--s-4); font-size: var(--text-caption); line-height: var(--text-caption-lh); color: var(--text-2); text-align: left; }
-.run-more:active { background: var(--surface-fill); }
-.run-more .run-caret { margin-left: auto; }
-.run-caret { color: var(--text-2); transition: transform var(--dur-base) var(--ease-standard); }
+/* 4: the footer, "1 job · 2 subagents", with a chevron that turns when it opens. */
+.run-more {
+  display: flex; align-items: center; gap: var(--s-2); width: 100%; min-height: var(--hit);
+  padding: 0 var(--row-x) 0 calc(var(--row-x) + 28px);
+  font-size: var(--text-caption); line-height: var(--text-caption-lh); color: var(--text-2); text-align: left;
+}
+.run-more-txt { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.run-caret {
+  flex-shrink: 0; width: 12px; height: 12px; background: currentColor; transition: transform var(--dur-base) var(--ease-standard);
+  -webkit-mask: var(--chev-down) center / 12px 12px no-repeat; mask: var(--chev-down) center / 12px 12px no-repeat;
+  --chev-down: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'><path d='M1.75 4.25 6 8.5l4.25-4.25' fill='none' stroke='black' stroke-width='1.75' stroke-linecap='round' stroke-linejoin='round'/></svg>");
+}
 .run-more[aria-expanded="true"] > .run-caret { transform: rotate(180deg); }
-.run-detail { display: flex; flex-direction: column; gap: var(--s-2); padding: var(--s-2) var(--s-4) var(--s-3); border-top: 1px solid var(--separator); }
-.run-sec-title { font-size: var(--text-section); line-height: var(--text-section-lh); font-weight: var(--weight-semibold); color: var(--text-2); }
+/* Expanded: 44px rows of jobs and subagents, indented to the text, in the same row. */
+.run-detail { display: flex; flex-direction: column; padding: 0 var(--row-x) var(--s-3) calc(var(--row-x) + 28px); }
+.run-sec-title { padding-top: var(--s-2); font-size: var(--text-section); line-height: var(--text-section-lh); font-weight: var(--weight-semibold); color: var(--text-2); }
 .run-job, .run-agent { display: flex; align-items: center; gap: var(--s-2); min-width: 0; font-family: var(--font-mono); font-size: var(--text-mono); line-height: var(--text-mono-lh); }
 .run-job > .glyph, .run-agent > .glyph { align-self: center; }
 .jkind { flex-shrink: 0; color: var(--text-2); }
 .jlabel, .aname { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.jstate, .astate { flex-shrink: 0; color: var(--text-2); }
 .jtime, .atime { flex-shrink: 0; color: var(--text-2); font-variant-numeric: tabular-nums; }
-.run-agent { padding-left: calc(var(--depth, 0) * 14px); min-height: 28px; }
+.run-agent { padding-left: calc(var(--depth, 0) * 14px); min-height: var(--hit); }
 .run-agent .amode { flex-shrink: 0; font-size: var(--text-mono-sm); line-height: var(--text-mono-sm-lh); color: var(--text-2); border: 1px solid var(--separator); border-radius: var(--r-pill); padding: 0 var(--s-1); }
 .run-agent .afail { flex-shrink: 0; color: var(--danger); }
-.run-more-txt { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .run-empty { font-size: var(--text-caption); line-height: var(--text-caption-lh); color: var(--text-2); }
 /* 0.2 jobs: a row can reveal its own output and stop a running job. Both are 44px hit boxes. */
 .run-jobwrap { display: flex; flex-direction: column; min-width: 0; }

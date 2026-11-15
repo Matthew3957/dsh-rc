@@ -8,9 +8,9 @@ stop a turn, and get a push notification when it needs you. Works with dsh 0.1 a
 API that dsh 0.1.7 and 0.2 speak (see Compatibility).
 
 **At a glance**
-- Session list with a status for each row: working, needs approval, a question for you, failed,
-  unread. A Running now dashboard shows every active session with todo and context bars,
-  background jobs (stop them from the phone) and its subagent tree.
+- Session list in attention order: Needs you, Running now, Unread, Today, Earlier. A live row
+  for every active session shows the current step, a running clock, todo progress, context when
+  it is nearly full, background jobs (stop them from the phone) and its subagent tree.
 - Chat with streaming replies, tool rows you tap to expand, file edits as line diffs, and a
   summary card at the end of each turn (files changed, commands run, passed or failed).
 - Approval, question and plan-review cards above the composer; stop, steer or queue a message;
@@ -37,8 +37,8 @@ dsh. Every project, path and conversation in them is invented.
 
 | | | | |
 |:-:|:-:|:-:|:-:|
-| <img src="docs/screenshots/sessions.png" width="180" alt="Session list"> | <img src="docs/screenshots/running.png" width="180" alt="Running now with a card expanded"> | <img src="docs/screenshots/chat.png" width="180" alt="A chat with tool rows"> | <img src="docs/screenshots/diff.png" width="180" alt="A file edit opened as a line diff"> |
-| Session list | Running now, one card open | Chat with tool rows | Edit as a line diff |
+| <img src="docs/screenshots/sessions.png" width="180" alt="The session board in attention order"> | <img src="docs/screenshots/running.png" width="180" alt="Running now with a live row's jobs and subagents open"> | <img src="docs/screenshots/chat.png" width="180" alt="A chat with tool rows"> | <img src="docs/screenshots/diff.png" width="180" alt="A file edit opened as a line diff"> |
+| The board | Running now, jobs and subagents open | Chat with tool rows | Edit as a line diff |
 | <img src="docs/screenshots/summary.png" width="180" alt="Turn summary card"> | <img src="docs/screenshots/status.png" width="180" alt="Status line with the per-turn breakdown open"> | <img src="docs/screenshots/plan.png" width="180" alt="Plan review card"> | <img src="docs/screenshots/approval.png" width="180" alt="Approval card above the composer"> |
 | Turn summary | Status line, per-turn breakdown | Plan review | Approval while a turn runs |
 
@@ -476,43 +476,50 @@ The longest prefix wins and an override beats the shipped table. It is saved in 
 
 ## Session list
 
-The main screen is kept quiet. The bar at the top has a menu button (notifications, plugins and
-connectors, the tunnel QR code while `--tunnel` runs, the full dsh web UI) and a view button that
-filters the list to running sessions or sessions waiting for you; a dot on it says a filter is on.
-Each session is one row: a status glyph, the title, and one muted line with the state, age and
-folder. The bar at the bottom holds search and **New session**; search opens a field in the same
-bar, and Cancel puts it away. If the connection to dsh drops, a "Reconnecting…" banner sits under
-the top bar until it is back; the list stays readable meanwhile.
+The main screen is one board in the order attention deserves: **Needs you**, **Running now**,
+**Unread**, then **Today** and **Earlier** (Yesterday, Previous 7 days, Older). Each session
+appears once. The large "Sessions" title scrolls away into the compact title in the bar; the bar
+has a menu button (notifications, plugins and connectors, the tunnel QR code while `--tunnel`
+runs, the full dsh web UI) and search. Search opens a field in the bar with Cancel, hides the
+board and searches dsh; Cancel puts the board back where it was. The bottom bar holds the one
+primary action, **New session**. If the connection to dsh drops, a "Reconnecting…" banner sits
+under the top bar until it is back; the list stays readable meanwhile.
 
-The status glyphs are one set, used for sessions, tool calls, background jobs and subagents, and
-drawn the same way in every theme, so no state relies on colour alone: a hollow ring for idle, a
-spinner for working, an amber disc with `!` for an approval and with `?` for a question, a filled
-dot for unread, a tick for done, a cross for failed, a triangle while stopping and a square once
-stopped.
+There is no filter control: the sections are the filter. **Needs you** lists each session waiting
+on an approval or a question, with the command or question in one mono line. Tapping the row opens
+the session; approving happens there, never in the list. **Unread** is for finished sessions you
+have not read yet, with the filled dot; a failure says "Failed" in red there and in the date
+sections, where it stays rather than competing with a live question. The status glyphs are one
+set, used for sessions, tool calls, background jobs and subagents, and drawn the same way in every
+theme, so no state relies on colour alone: a hollow ring for idle, a spinner for working, an amber
+disc with `!` for an approval and with `?` for a question, a filled dot for unread, a tick for
+done, a cross for failed, a triangle while stopping and a square once stopped.
 
 ## Running now
 
-Under the header, **Running now** lists every active session, meaning a session with a turn in
-flight, a live background job, or a running subagent. It is one line with a count until tapped
-open. Each card carries:
+**Running now** is a section of the board, with a live row for every active session, meaning a
+session with a turn in flight, a live background job, or a running subagent. A session waiting on
+you is in Needs you instead, so nothing appears twice. Each row carries:
 
-- **elapsed time** for the current turn. A live `turn/start` event supplies the exact origin;
-  when the page opens mid-turn it falls back to that session's last human prompt in the
-  `sessionListMetadata` projection.
-- **todo progress** from the `todos` projection, with the in-progress item named.
-- **context fill** from the `contextPressure` projection, the same provider-anchored figure as
-  the per-session status line.
+- **the title and a running clock** at the trailing edge. The clock is the current turn, or the
+  oldest live job when no turn runs, written as `4:12` or `1:04:12`; it ticks without moving the
+  row.
+- **one line of current work**: the in-progress todo, the running job's label, or the subagent.
+- **todo progress** from the `todos` projection: a 4 px bar with "2 of 5" only when dsh reports
+  todos. Context from `contextPressure` appears as a small chip only from 80%, amber from 85 and
+  red from 95.
 - **background jobs** from the `session/jobs` mux frame: kind, label, state and elapsed time for
   each `JobView`. On dsh 0.2 the same rows arrive from one `job/list` stream per listed session; a
   tap on a job row opens its retained output (`job/follow`), and a running job carries a two-tap
-  **stop** that calls `job/kill` (the older API has no kill, so there is no stop there).
+  **Stop** that calls `job/kill` (the older API has no kill, so there is no stop there).
 - **the subagent tree** from `subagent.list`, one direct-child catalog per parent, with each
   child's `subagentTiming` projection giving its active or settled time.
 
-Everything there is read-only except the 0.2 stop. Tapping a card's title opens that session;
-tapping its summary row expands the jobs and subagent tree, and tapping a 0.2 job row expands its
-output. The section follows the projection and jobs pushes, refetches a subagent catalog only when
-it is stale, and stops while a chat is open.
+A footer such as "1 job · 2 subagents" expands those rows under the live row; a row with neither
+has no footer and is shorter. Everything there is read-only except the 0.2 stop. Tapping the
+title opens that session; tapping the footer expands the jobs and subagent tree, and tapping a
+0.2 job row expands its output. The section follows the projection and jobs pushes, refetches a
+subagent catalog only when it is stale, and stops while a chat is open.
 
 ### External Claude Code subagents
 
@@ -521,9 +528,9 @@ one-shot external tasks. dsh only sees them start and finish, so their rows in t
 say `external` and nothing more. Claude Code writes its own transcript as it works, and dsh-rc
 can read it and show the last few tool calls and lines of text under the run's row
 (`Bash: npm test`, `Read: public/app.js`, `Grep: foo in server`), updating every few seconds
-while the card is open. A transcript written in the last five minutes also marks the run as
+while the row is open. A transcript written in the last five minutes also marks the run as
 working: its glyph keeps spinning and its parent stays in Running now after the parent's turn ends,
-whether or not the card is expanded.
+whether or not the row is expanded.
 
 Point dsh-rc at the same config dir the provider uses. If your dsh profile sets
 `CLAUDE_CONFIG_DIR` in that provider's `env` block, pass that directory; if it sets none, Claude
@@ -541,14 +548,14 @@ The page asks `GET ./claude/runs?cwd=<parent session cwd>&since=<run start>` and
 transcripts in that folder whose first prompt landed within a few seconds of the run's
 `createdAt` in the parent's `subagentCatalog`, nearest first, as opaque ids. dsh does not say
 which tool ran an external run, so every one is looked up (the eight most recent per session,
-while the session is in Running now, folded or not). Each claims one transcript, preferring the
+while the session is in Running now, expanded or not). Each claims one transcript, preferring the
 one whose prompt contains the run's label, so concurrent runs do not share a feed. It then reads
-`GET ./claude/runs/<id>?offset=<n>` (every 3 seconds under an expanded card, every 6 under a
+`GET ./claude/runs/<id>?offset=<n>` (every 3 seconds under an expanded row, every 6 under a
 folded one), which answers only the complete lines appended since the last read (a half-written
 last line waits for the next poll), already reduced on the server to short summaries: no
 thinking, no tool results beyond whether they failed, no full tool inputs. Interactive Claude Code sessions in the same folder are skipped.
 Codex and Gemini runs have no such transcript, so they never match: a run with no match shows
-nothing and never keeps a card in Running now.
+nothing and never keeps a row in Running now.
 
 ## Regenerating the screenshots
 
@@ -574,9 +581,9 @@ npm run screenshots
 The output is byte-identical between runs. Edit the fixtures, rerun, and commit the new images.
 Keep each image under around 250 KB, and never point this at a real instance.
 
-The committed set is the default theme in the dark scheme. To review another theme or the light
-scheme, add `--scheme light|dark` and `--theme <id>` (one of the ids in `public/theme.js`) and
-write somewhere outside the repo with `--out`; those images are for review, not for committing.
+The committed set is the default theme in the dark scheme. To review another theme or the light scheme, add `--scheme light|dark` and `--theme <id>` (one of
+the ids in `public/theme.js`), and `--width 320` or `--width 430` for another phone width; write
+somewhere outside the repo with `--out`. Those images are for review, not for committing.
 
 ## Roadmap
 

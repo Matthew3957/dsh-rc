@@ -83,6 +83,16 @@ function textPairs(p) {
   pairs.push(['sheet Done, Back and plain buttons (accent on card)', c('accent'), c('card')]);
   pairs.push(['segmented label on its track (fg on bg2)', c('fg'), c('bg2')], ['segmented label on its thumb (fg on card)', c('fg'), c('card')]);
   pairs.push(['offline banner (fg on card)', c('fg'), c('card')]);
+  // The board (PR 3). Rows sit on the page; a pressed row fills with bg2. Named so the default
+  // theme's exemptions above never apply: these must pass on their own in every theme.
+  pairs.push(['board: Failed in a row (err on bg)', c('err'), c('bg')]);
+  pairs.push(['board: Failed in a pressed row (err on bg2)', c('err'), c('bg2')]);
+  pairs.push(['board: Needs you summary and live clock (fg on bg)', c('fg'), c('bg')]);
+  // The live row's context chip: text stays fg; 80-84% on bg2, then a 14% tint of warn (85%) or
+  // err (95%) over the page, as .run-ctx paints it. The amber and red are in the border.
+  pairs.push(['board: context chip (fg on bg2)', c('fg'), c('bg2')]);
+  pairs.push(['board: context chip at 85% (fg on warn tint over bg)', c('fg'), mix(c('warn'), 0.14, c('bg'))]);
+  pairs.push(['board: context chip at 95% (fg on err tint over bg)', c('fg'), mix(c('err'), 0.14, c('bg'))]);
   return pairs;
 }
 

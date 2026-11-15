@@ -30,15 +30,22 @@
 <body>
 <div id="app">
 
-  <!-- Session list -->
+  <!-- Session list: one board in attention order. Needs you, Running now, Unread, then Today and
+       Earlier. Each session appears once; the sections are the filter. -->
   <section id="listView" class="view">
     <header class="nav" id="listNav">
       <div class="nav-lead">
         <button id="menuListBtn" class="navbtn" type="button" aria-label="Menu" title="Menu" aria-haspopup="dialog"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16"/></svg></button>
       </div>
-      <h1 class="nav-title listtitle" id="listTitle">Sessions</h1>
+      <!-- The compact title fades in once the large title has scrolled under the bar. -->
+      <div class="nav-title listtitle" id="listTitle" aria-hidden="true">Sessions</div>
       <div class="nav-trail">
-        <button id="filterBtn" class="navbtn" type="button" aria-label="View" title="View" aria-haspopup="dialog" aria-pressed="false"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h9M17 7h3M4 17h3M11 17h9"/><circle cx="15" cy="7" r="2"/><circle cx="9" cy="17" r="2"/></svg></button>
+        <button id="searchBtn" class="navbtn" type="button" aria-label="Search sessions" title="Search" aria-controls="searchRow" aria-expanded="false"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="m20 20-4.2-4.2"/></svg></button>
+      </div>
+      <!-- Search opens in the bar: a full-width field and Cancel. -->
+      <div class="searchrow" id="searchRow" role="search" hidden>
+        <input id="q" class="field" type="search" placeholder="Search sessions" autocomplete="off" enterkeyhint="search" aria-label="Search sessions">
+        <button id="searchClose" class="btn btn-plain textbtn" type="button">Cancel</button>
       </div>
     </header>
     <!-- Banner slot: conditions that last (offline) sit here, under the bar, not in a toast. -->
@@ -46,30 +53,25 @@
       <div class="banner offline conn-banner" role="status" hidden><span class="glyph run" aria-hidden="true"></span><span>Reconnecting…</span></div>
     </div>
     <div id="listScroll" class="listscroll">
-      <div id="pendingGlobal"></div>
+      <h1 class="largetitle" id="listLargeTitle">Sessions</h1>
       <div id="api403"></div>
-      <!-- Running now: what every active session is doing with itself right now.
-           A quiet one-line row, folded by default; tapping it opens the cards. -->
-      <section id="running" class="running" hidden aria-label="Running now">
-        <button id="runningHead" class="running-head" type="button" aria-expanded="false" aria-controls="runningCards">
-          <span class="running-label">Running now</span>
-          <span id="runningCount" class="running-count"></span>
-          <svg class="ico running-caret" viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
-        </button>
-        <div id="runningCards" class="running-cards" hidden></div>
+      <!-- Needs you: one row per session waiting on an approval or a question. -->
+      <section id="pendingGlobal" class="board-sec needs" aria-labelledby="needsHead" hidden></section>
+      <!-- Running now: a live row per active session (a turn, a live job or a live subagent). -->
+      <section id="running" class="board-sec running" hidden aria-labelledby="runningHead">
+        <h2 id="runningHead" class="sec-head"><span class="sec-label">Running now</span> <span id="runningCount" class="sec-count"></span></h2>
+        <ul id="runningCards" class="run-rows"></ul>
       </section>
-      <ul id="sessions" class="sessions"></ul>
-      <button id="moreBtn" class="btn btn-plain wide" type="button" hidden>Show more</button>
+      <!-- Unread, Today and Earlier: everything not already above. -->
+      <div id="sessions" class="sessions"></div>
+      <button id="moreBtn" class="morebtn" type="button" hidden>Show earlier sessions</button>
+      <!-- Search results replace the board while the search field is open. -->
+      <ul id="searchResults" class="sess-list" aria-label="Search results" hidden></ul>
     </div>
-    <!-- Bottom bar: search and the one primary action. Search opens into the same bar. -->
+    <!-- Bottom bar: the one primary action. -->
     <footer id="listDock" class="bottombar">
       <div class="dockrow" id="dockActions">
-        <button id="searchBtn" class="navbtn" type="button" aria-label="Search sessions" title="Search"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="m20 20-4.2-4.2"/></svg></button>
         <button id="newBtn" class="btn btn-primary" type="button" aria-haspopup="dialog"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>New session</button>
-      </div>
-      <div class="dockrow searchrow" id="searchRow" hidden>
-        <input id="q" class="field" type="search" placeholder="Search sessions" autocomplete="off" enterkeyhint="search" aria-label="Search sessions">
-        <button id="searchClose" class="btn btn-plain" type="button">Cancel</button>
       </div>
     </footer>
   </section>
