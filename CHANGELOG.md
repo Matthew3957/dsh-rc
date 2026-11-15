@@ -1,5 +1,52 @@
 # Changelog
 
+## [0.5.0](https://github.com/Matthew3957/dsh-rc/compare/v0.4.1...v0.5.0) (2026-11-15)
+
+
+### Features
+
+* **server:** serve read-only Claude Code transcript views for external subagents ([b856f81](https://github.com/Matthew3957/dsh-rc/commit/b856f816e678e64e1ffe7126eda54a53fd4d3963))
+* **ui:** add a Mission Tile theme (warm paper, ink and tile red in a book serif) ([950f2f4](https://github.com/Matthew3957/dsh-rc/commit/950f2f4ec3041bc00df08e3016a34c072a6232c9))
+* **ui:** add native motion, press and focus states ([1642f0c](https://github.com/Matthew3957/dsh-rc/commit/1642f0c25e859fa7ea90a8f9faff1c98e35c633e))
+* **ui:** fold pending cards and keep the jump button clear ([0c68c53](https://github.com/Matthew3957/dsh-rc/commit/0c68c530fbbd65d362a3c9715f88093833ecb392))
+* **ui:** give read, search, web and todo tools their own cards ([a49b407](https://github.com/Matthew3957/dsh-rc/commit/a49b4070855e691ff8999ba30726ee22faf0d27f)), closes [#81](https://github.com/Matthew3957/dsh-rc/issues/81)
+* **ui:** make the session list attention-ordered ([2cecb59](https://github.com/Matthew3957/dsh-rc/commit/2cecb593950a499e966a4a60cb42078e6543b3b8))
+* **ui:** rebuild the app shell, bars and sheets ([b54d020](https://github.com/Matthew3957/dsh-rc/commit/b54d02090b08884cabeffd7b69348bbdbce0deee))
+* **ui:** rebuild the composer and decision cards ([a57ff84](https://github.com/Matthew3957/dsh-rc/commit/a57ff84a510bdc764c5dc6ccb0485b83c0ff13a3))
+* **ui:** show live Claude Code activity for external subagents in Running now ([2295e34](https://github.com/Matthew3957/dsh-rc/commit/2295e346c03913bbc5ce6480423147bde5f08e88))
+* **ui:** show turns as prose with a review receipt ([d623c2b](https://github.com/Matthew3957/dsh-rc/commit/d623c2b05335cba0473d3bd0e0596578dc5cdc04))
+* **ui:** theme picker with colourblind-safe, high-contrast and seasonal themes ([b508a5c](https://github.com/Matthew3957/dsh-rc/commit/b508a5cdc9888ebc30f31da02955c8d4b0858e08)), closes [#73](https://github.com/Matthew3957/dsh-rc/issues/73)
+* **ui:** unify menus into settings and appearance ([7d6340a](https://github.com/Matthew3957/dsh-rc/commit/7d6340a972b592c12483bd6c9c9cd0608dfe2a5e))
+
+
+### Bug Fixes
+
+* **server:** answer a missing page with a styled 404 and a way back ([c85aca3](https://github.com/Matthew3957/dsh-rc/commit/c85aca3581976252da5a0b6655ec7d9bdb204587))
+* **ui:** drop the doubled bottom inset in iOS 26 home-screen apps ([f21a6c4](https://github.com/Matthew3957/dsh-rc/commit/f21a6c478f69ce0fdc50af501d78eb157effb96a))
+* **ui:** fill the screen in iOS home-screen mode ([eed45fb](https://github.com/Matthew3957/dsh-rc/commit/eed45fbfd045c40a86ab5fb17932c93985f28e90))
+* **ui:** fit the iOS keyboard and fill the screen under the composer ([3341698](https://github.com/Matthew3957/dsh-rc/commit/334169846ed7f3574831ca1bb775a92f4c2639fc))
+* **ui:** keep a Safari tab's composer above the toolbar ([a5aab23](https://github.com/Matthew3957/dsh-rc/commit/a5aab2351db45ca696dd97f51fe248ae34199968))
+* **ui:** keep a working external Claude run live in Running now ([73051e4](https://github.com/Matthew3957/dsh-rc/commit/73051e4f49884cd3e7552fc3f3e6a0d650502ead))
+* **ui:** keep expired questions answerable ([59cf0f4](https://github.com/Matthew3957/dsh-rc/commit/59cf0f4a276306c5c6b70f35fe09da7094b68fd4))
+* **ui:** keep live narration out of the answer and no-result calls unticked ([19cbacb](https://github.com/Matthew3957/dsh-rc/commit/19cbacba87cdbda39451ccd053f8af5c2774c5db))
+* **ui:** keep the feed's place while typing in a card, and size without visualViewport ([74b3e95](https://github.com/Matthew3957/dsh-rc/commit/74b3e95a333ef675f1bce0366620e80c3b1a3842))
+* **ui:** make Send a test a real button ([5107da7](https://github.com/Matthew3957/dsh-rc/commit/5107da7116d09b760cf4e7d74fd79e55a0f0b740))
+* **ui:** paint streamed text once per frame ([330aab3](https://github.com/Matthew3957/dsh-rc/commit/330aab3265d7d95cdbed0cf31b82a16e3d9fad88))
+* **ui:** read keyboard state from the viewport and ignore pinch zoom ([1718692](https://github.com/Matthew3957/dsh-rc/commit/1718692ff782ae0309a051bbad7d567478b0ac98))
+* **ui:** refuse message links that are not app pages ([aef5abb](https://github.com/Matthew3957/dsh-rc/commit/aef5abb042ff9d04127534e0d9e80f020d931250))
+* **ui:** stop folds fighting and board turns claiming a pass ([1455e15](https://github.com/Matthew3957/dsh-rc/commit/1455e15d29d8c5732241dcff99013e6b58b2c7cb))
+* **ui:** use an opaque iOS status bar so a home-screen app reaches the bottom ([49fa733](https://github.com/Matthew3957/dsh-rc/commit/49fa733d75d36c46989ba76cde50bda954c332dc))
+
+
+### Documentation
+
+* **ui:** add the redesign plan ([ef6d9d2](https://github.com/Matthew3957/dsh-rc/commit/ef6d9d2d1483548c34b16ea41e03db093022ac01))
+
+
+### Code Refactoring
+
+* **ui:** define theme-safe type, space and surface tokens ([a493c2f](https://github.com/Matthew3957/dsh-rc/commit/a493c2f602135c4a75c00f5977192a34e193f0f3))
+
 ## [0.4.1](https://github.com/Matthew3957/dsh-rc/compare/v0.4.0...v0.4.1) (2026-10-01)
 
 
