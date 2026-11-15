@@ -618,6 +618,15 @@ The committed set is the default theme in the dark scheme. To review another the
 the ids in `public/theme.js`), and `--width 320` or `--width 430` for another phone width; write
 somewhere outside the repo with `--out`. Those images are for review, not for committing.
 
+Two checks run in the same harness. `--audit` taps every control on screen in each scene (and in
+a few extra states: the session menu, New session, search, the plus menu, Queue/Steer, and
+Notifications) and fails any whose hit box is under 44 by 44, any control without an accessible
+name, and any console error. `--reduced-motion` renders with Reduce Motion on and fails if
+anything could still move, or if a fade is slower than 120 ms or the working glyph faster than
+3 s. Both exit non-zero on a failure, and neither writes into `docs/screenshots` unless `--out`
+is given. If Chromium aborts at launch inside a sandbox that refuses sockets, point
+`CHROMIUM_PATH` at Playwright's `chrome-headless-shell` instead.
+
 ## Roadmap
 
 Next, in priority order:

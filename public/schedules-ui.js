@@ -178,7 +178,9 @@
       available = !!dsh2;
       // Only repaint while a schedules sheet is the one on screen, never over another sheet.
       // The shell lifts the sheet's heading into its title row, so look in the whole sheet.
-      if (redraw && !$('#sheet').hidden && $('#sheet [data-sched]')) redraw();
+      // A sheet that is sliding away is already closed (app.js sheetOpen), so it is not redrawn.
+      const open = typeof sheetOpen === 'function' ? sheetOpen() : !$('#sheet').hidden;
+      if (redraw && open && $('#sheet [data-sched]')) redraw();
     },
   };
 })();

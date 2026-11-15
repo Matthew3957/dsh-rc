@@ -150,6 +150,11 @@ body { overscroll-behavior: none; }
 button { font: inherit; color: inherit; background: none; border: 0; cursor: pointer; -webkit-tap-highlight-color: transparent; }
 input, textarea, select { font: inherit; color: inherit; }
 [hidden] { display: none !important; }
+/* Selection: text stays selectable in prose, code and diffs (the default). Controls and rows are
+   not text: a long press on one should press it, not start a selection. */
+button, summary, label.set-row, [role="button"], [role="radio"], [role="checkbox"], .run-top, .run-more, .sess-hit {
+  -webkit-user-select: none; user-select: none; -webkit-tap-highlight-color: transparent;
+}
 
 /* Shell metrics. A hit box is 44px, or more when the text size grows; the column is at most
    680px wide and centred, with a 16px gutter (and the side safe areas in landscape). */
@@ -188,16 +193,26 @@ html.kb #sheet[data-size="large"] { height: calc(var(--vvh) - 12px); }
 html.kb .sheetfoot, html.kb #sheet:not(:has(.sheetfoot:not([hidden]))) #sheetBody { padding-bottom: var(--s-3); }
 html.kb #toast { bottom: calc(var(--vvbot) + 90px); }
 .view { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+/* View push and pop (app.js): for the length of the move both views fill #app, one over the
+   other on an opaque page, and the one leaving stays drawn (already [hidden] for everything
+   else) until the move ends. Only their transform and opacity animate. */
+#app.vt > .view { position: absolute; inset: 0; background: var(--canvas); }
+#app.vt > .view.vt-leaving[hidden] { display: flex !important; pointer-events: none; }
+#app.vt > .view.vt-top { z-index: 1; }
 /* Scroll-edge sentinels (app.js): 1px markers at each end of a scroller that take no room. */
 .edge-sentinel { height: 1px; margin-bottom: -1px; pointer-events: none; }
 
 /* Line icons: 24px, 1.75 stroke, round caps. */
 .ico { width: 24px; height: 24px; flex-shrink: 0; fill: none; stroke: currentColor; stroke-width: 1.75; stroke-linecap: round; stroke-linejoin: round; }
 
-/* Focus: a keyboard ring everywhere, nothing for a tap. Fields add a soft ring while typing. */
+/* Focus: a keyboard ring everywhere, nothing for a tap. Fields add a soft ring while typing (the
+   contrast theme swaps it for the same 2px solid ring). A control that fills the width of
+   something that clips (a receipt, a grouped list, a scroller) draws its ring inside its own
+   edge, so the clip never hides it. */
 :focus-visible { outline: 2px solid var(--tint); outline-offset: 2px; }
 :focus:not(:focus-visible) { outline: none; }
 #sheet:focus, #sheet:focus-visible { outline: none; }
+:where(.turncard > summary, .diff > summary, .folder, .tmplmain, .cmd, .menuitem, .qitem .qact):focus-visible { outline-offset: -2px; }
 
 /* Nav bar: leading and trailing slots around a centred title. min-height, never height, so a
    larger text size grows the bar instead of clipping it. The hairline shows only once content
@@ -213,20 +228,26 @@ html.kb #toast { bottom: calc(var(--vvbot) + 90px); }
   transition: border-color var(--dur-fast) var(--ease-standard);
 }
 .nav.edge, html[data-theme="contrast"] .nav { border-bottom-color: var(--separator); }
-.nav-lead, .nav-trail { display: flex; align-items: center; min-width: 0; }
+/* Two bar buttons side by side keep 8px between their 44px boxes. */
+.nav-lead, .nav-trail { display: flex; align-items: center; gap: var(--s-2); min-width: 0; }
 .nav-lead { justify-self: start; }
 .nav-trail { justify-self: end; }
 .nav-title {
-  margin: 0; min-width: 0; text-align: center;
+  margin: 0; min-width: 0; max-width: 100%; text-align: center;
   font-size: var(--text-nav); line-height: var(--text-nav-lh); font-weight: var(--weight-semibold); letter-spacing: var(--track-nav);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 .nav-titles { min-width: 0; text-align: center; padding-block: var(--s-1); }
 .nav-sub {
+  max-width: 100%;
   font-size: var(--text-caption); line-height: var(--text-caption-lh); color: var(--text-2);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 .nav-sub:empty { display: none; }
+/* Large text: two 44pt-equivalent bar buttons and a centred title no longer fit together. The
+   buttons keep their full targets at the two ends, and the title takes the room that is left
+   between them (so it can ellipsize rather than run under a button). */
+html.type-large .nav { grid-template-columns: auto minmax(0, 1fr) auto; }
 
 /* Icon button: a bare 24px glyph in a 44px box. No circle, no fill until pressed. */
 .navbtn {
@@ -255,7 +276,7 @@ html.kb #toast { bottom: calc(var(--vvbot) + 90px); }
 .btn .ico { width: 20px; height: 20px; stroke-width: 2; }
 .textbtn { min-height: var(--hit); padding: 0 var(--s-2); }
 
-.ghost { color: var(--text-2); padding: 10px; font-size: 14px; }
+.ghost { color: var(--text-2); padding: 10px; font-size: 14px; min-height: var(--hit); }
 .wide { width: 100%; }
 .chip { font-size: var(--text-caption); line-height: var(--text-caption-lh); padding: var(--s-1) var(--s-3); border-radius: var(--r-pill); border: 1px solid var(--separator); color: var(--text-2); flex-shrink: 0; }
 .chip.on { border-color: var(--tint); color: var(--tint); }
@@ -273,22 +294,35 @@ html.kb #toast { bottom: calc(var(--vvbot) + 90px); }
 html[data-theme="contrast"] .field:focus { box-shadow: none; outline: 2px solid var(--tint); outline-offset: 0; }
 .field::-webkit-search-cancel-button { display: none; }
 
-/* Segmented control: a 32px track and a 28px thumb inside a 44px row. Every label is full
-   text colour; the thumb and the weight carry the selection, so it is never colour alone. */
+/* Segmented control: a 32px track and a 28px thumb inside a 44px row. The thumb is one shape
+   that slides under the labels (app.js sets --seg-n, the option count, and --seg-i, the chosen
+   one), and the chosen label turns semibold and accent, so the choice is position, weight and
+   colour, never colour alone. Unchosen labels stay full text colour: --text-2 on the track
+   would fall under AA in the default light theme. Each label reserves its semibold width (the
+   hidden ::before copy), so choosing never resizes the control. */
 .seg-row { display: flex; align-items: center; min-height: var(--hit); }
 .seg {
+  position: relative; isolation: isolate;
   display: inline-grid; grid-auto-flow: column; grid-auto-columns: 1fr; gap: 2px;
   min-height: max(32px, calc(32rem / 17)); padding: 2px;
   border-radius: var(--r-pill); background: var(--surface-sunk); border: 1px solid var(--card-border);
+}
+.seg::before {
+  content: ''; position: absolute; z-index: -1; top: 2px; bottom: 2px; left: 2px;
+  width: calc((100% - 4px - (var(--seg-n, 2) - 1) * 2px) / var(--seg-n, 2));
+  border-radius: var(--r-pill); background: var(--surface); box-shadow: 0 0 0 1px var(--separator);
+  transform: translateX(calc(var(--seg-i, 0) * (100% + 2px)));
+  transition: transform var(--dur-base) var(--ease-emphasized);
 }
 .seg button {
   position: relative; min-height: max(28px, calc(28rem / 17)); padding: 0 var(--s-3);
   border-radius: var(--r-pill); color: var(--text);
   font-size: var(--text-caption); line-height: var(--text-caption-lh); font-weight: var(--weight-regular);
-  transition: background-color var(--dur-base) var(--ease-emphasized);
+  transition: color var(--dur-base) var(--ease-standard);
 }
+.seg button::before { content: attr(data-label); display: block; height: 0; overflow: hidden; visibility: hidden; font-weight: var(--weight-semibold); }
 .seg button::after { content: ''; position: absolute; inset: -8px 0; } /* the 44px hit box */
-.seg button[aria-checked="true"] { background: var(--surface); font-weight: var(--weight-semibold); box-shadow: 0 0 0 1px var(--separator); }
+.seg button[aria-checked="true"] { color: var(--tint); font-weight: var(--weight-semibold); }
 
 /* Banner: a condition that lasts, under the bar. Icon, 13px text, 36px or more. */
 .banner-slot { flex-shrink: 0; }
@@ -480,8 +514,8 @@ html[data-theme="contrast"] .field:focus { box-shadow: none; outline: 2px solid 
 .think { font-size: var(--text-caption); line-height: var(--text-caption-lh); color: var(--text-2); }
 .think summary { list-style: none; cursor: pointer; min-height: var(--hit); display: flex; align-items: center; gap: var(--s-1); }
 .think summary::-webkit-details-marker { display: none; }
-.think summary::before { content: "▸"; }
-.think[open] summary::before { content: "▾"; }
+.think summary::before { content: "▸"; display: inline-block; transition: transform var(--dur-base) var(--ease-standard); }
+.think[open]:not([data-closing]) summary::before { transform: rotate(90deg); }
 .think .body { white-space: pre-wrap; font-style: italic; padding: var(--s-1) 0 var(--s-2) var(--s-3); border-left: 2px solid var(--separator); max-height: 40vh; overflow-y: auto; }
 
 /* Live activity: the last three rows, with a quiet disclosure above them. */
@@ -550,14 +584,14 @@ html[data-theme="contrast"] .field:focus { box-shadow: none; outline: 2px solid 
 .receipt-mark { flex: 0 0 16px; }
 .receipt b { color: var(--text); font-size: var(--text-receipt); font-weight: var(--weight-semibold); flex-shrink: 0; }
 .receipt-meta { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-2); }
-.receipt-chevron { margin-left: auto; flex-shrink: 0; color: var(--text-2); font-size: 18px; line-height: 1; transform: rotate(90deg); }
-.turncard[open] .receipt-chevron { transform: rotate(-90deg); }
+.receipt-chevron { margin-left: auto; flex-shrink: 0; color: var(--text-2); font-size: 18px; line-height: 1; transform: rotate(90deg); transition: transform var(--dur-base) var(--ease-standard); }
+/* data-closing: app.js is folding it away, so the chevron turns back as the fold starts. */
+.turncard[open]:not([data-closing]) .receipt-chevron { transform: rotate(-90deg); }
 .tc-why { color: var(--text-2); padding: var(--s-1) var(--s-3) var(--s-2); }
 .tc-sec { display: flex; gap: var(--s-2); justify-content: space-between; padding: var(--s-2) var(--s-3) 0; color: var(--text-2); font-weight: var(--weight-semibold); }
 .tc-more { color: var(--text-2); padding: var(--s-2) var(--s-3) 0; }
 .receipt-activity { display: flex; flex-direction: column; gap: 2px; padding: var(--s-2) var(--s-3) var(--s-3); }
 .receipt-activity:empty { display: none; }
-.receipt-activity .think summary { min-height: 0; padding: var(--s-1) 0; }
 
 .note { font-size: var(--text-caption); line-height: var(--text-caption-lh); color: var(--text-2); text-align: center; padding: var(--s-1) 0; }
 .note.err { color: var(--danger); text-align: left; background: color-mix(in srgb, var(--danger) 10%, transparent); border-radius: var(--r-sm); padding: var(--s-2) var(--s-3); white-space: pre-wrap; }
@@ -565,7 +599,6 @@ html[data-theme="contrast"] .field:focus { box-shadow: none; outline: 2px solid 
 
 #working { display: flex; align-items: center; gap: var(--s-2); min-height: var(--hit); padding: var(--s-1) 0 var(--s-2); color: var(--text-2); font-size: var(--text-caption); line-height: var(--text-caption-lh); }
 .working-elapsed { margin-left: auto; font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
-@keyframes pulse { 50% { opacity: .3; } }
 
 /* Jump-to-live: a 44px pill above the composer, not a permanent circle. app.js
    positions it above the dock. */
@@ -613,9 +646,10 @@ html[data-theme="contrast"] .field:focus { box-shadow: none; outline: 2px solid 
 .cbtn svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 2.25; stroke-linecap: round; stroke-linejoin: round; }
 .cbtn.plus .cbtn-ink { background: var(--surface-fill); }
 .cbtn.mic { color: var(--text-2); }
-/* Dictation is live: the mic fills red and pulses until it is tapped off again. */
-#micBtn.live .cbtn-ink { background: var(--danger); color: var(--on-tint); animation: pulse 1.2s ease-in-out infinite; }
-@media (prefers-reduced-motion: reduce) { #micBtn.live .cbtn-ink { animation: none; } }
+/* Dictation is live: the mic sits in a filled red disc (a shape change, not only a colour, and
+   aria-pressed says it too) until it is tapped off again. No pulse: the working glyph is the
+   app's one looping animation. */
+#micBtn.live .cbtn-ink { background: var(--danger); color: var(--on-tint); }
 /* Send: accent when there is something to send, muted when empty, quiet (filled-quiet, not the
    accent) while a decision waits. Stop: the same control as a square on the text colour. */
 .cbtn.send .cbtn-ink { background: var(--tint); color: var(--on-tint); }
@@ -641,6 +675,13 @@ html[data-theme="contrast"] .cbtn.plus .cbtn-ink, html[data-theme="contrast"] .c
 #input::placeholder { color: var(--text-2); }
 #input:focus { box-shadow: 0 0 0 3px var(--focus); }
 html[data-theme="contrast"] #input:focus { box-shadow: none; outline: 2px solid var(--tint); outline-offset: 0; }
+/* Large text: the field keeps the full column and the three 44pt controls sit in one row under
+   it, plus at the leading edge and mic/send at the trailing edge. Nothing is clamped; the row
+   simply grows and the dock with it. */
+html.type-large #composer { flex-wrap: wrap; row-gap: var(--s-2); }
+html.type-large #input { order: 0; flex: 1 0 100%; }
+html.type-large #attachBtn { order: 1; margin-right: auto; }
+html.type-large #micBtn, html.type-large #sendBtn { order: 1; }
 
 /* Queue or Steer: a labelled segmented at the trailing edge, only while a turn runs and there is
    something to send. The hint says what the current choice does. */
@@ -650,10 +691,11 @@ html[data-theme="contrast"] #input:focus { box-shadow: none; outline: 2px solid 
 /* Queued messages: one 13px line, "2 queued · Review". Review opens the editor in place, the one
    nested scroll in the dock. */
 #queueLine { font-size: var(--text-caption); line-height: var(--text-caption-lh); color: var(--text-2); }
-.qbanner { display: flex; align-items: center; gap: 6px; min-height: 36px; padding: 0 var(--s-1); white-space: nowrap; }
+.qbanner { display: flex; align-items: center; gap: 6px; min-height: var(--hit); padding: 0 var(--s-1); white-space: nowrap; }
 .qcount { color: var(--text); font-weight: var(--weight-semibold); }
 .qreview { position: relative; padding: 0 var(--s-1); color: var(--tint); font-weight: var(--weight-semibold); }
-.qreview::after { content: ''; position: absolute; inset: -4px -8px; } /* the 44px hit box */
+/* The 44px hit box: the banner's full height around an 18px line, and 8px either side. */
+.qreview::after { content: ''; position: absolute; inset: calc((18px - var(--hit)) / 2) -8px; }
 .qlist { max-height: 30vh; overflow-y: auto; overscroll-behavior: contain; border-top: 1px solid var(--separator); }
 .qitem { display: flex; align-items: center; gap: var(--s-2); min-height: var(--hit); padding: 0 0 0 var(--s-1); border-bottom: 1px solid var(--separator); }
 .qitem .qtext { flex: 1; min-width: 0; color: var(--text); font-size: var(--text-callout); line-height: var(--text-callout-lh); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -668,6 +710,7 @@ html[data-theme="contrast"] #input:focus { box-shadow: none; outline: 2px solid 
 .qitem.editing .row { display: flex; justify-content: flex-end; gap: var(--s-1); }
 .qedit { width: 100%; min-height: var(--hit); font-size: max(16px, var(--text-body)); line-height: var(--text-body-lh); border: 1px solid var(--card-border); border-radius: var(--r-sm); padding: var(--s-2) var(--s-3); background: var(--surface-sunk); color: var(--text); resize: vertical; outline: none; }
 .qedit:focus { box-shadow: 0 0 0 3px var(--focus); }
+html[data-theme="contrast"] .qedit:focus { box-shadow: none; outline: 2px solid var(--tint); outline-offset: 0; }
 .ico-wrap { display: inline-grid; place-items: center; }
 
 /* Attachments: 56px thumbnails, each with a 22px remove glyph inside a 44px hit box that
@@ -689,11 +732,11 @@ html[data-theme="contrast"] #input:focus { box-shadow: none; outline: 2px solid 
    waiting) or in the contrast theme, through --card-border. */
 .card { background: var(--surface); border: 1px solid var(--card-border); border-radius: var(--r-md); padding: var(--s-3) var(--s-4); }
 /* The board's API help card (403 or no dsh): scoped, so none of it reaches a decision card. */
-.api403 h4 { margin: 0 0 var(--s-1); font-size: 13px; }
-.api403 .why { font-size: 12px; color: var(--text-2); margin-bottom: 6px; white-space: pre-wrap; }
-.api403 pre { font-family: var(--font-mono); font-size: 12px; background: var(--surface-sunk); border-radius: var(--r-sm); padding: var(--s-2); max-height: 22vh; overflow: auto; white-space: pre-wrap; word-break: break-word; margin: 6px 0; }
+.api403 h4 { margin: 0 0 var(--s-1); font-size: var(--text-section); line-height: var(--text-section-lh); }
+.api403 .why { margin-bottom: 6px; color: var(--text-2); font-size: var(--text-callout); line-height: var(--text-callout-lh); white-space: pre-wrap; }
+.api403 pre { margin: 6px 0; padding: var(--s-2); max-height: 22vh; overflow: auto; border-radius: var(--r-sm); background: var(--surface-sunk); font-family: var(--font-mono); font-size: var(--text-mono); line-height: var(--text-mono-lh); white-space: pre-wrap; word-break: break-word; }
 .api403 .row { display: flex; gap: var(--s-2); margin-top: var(--s-2); }
-.api403 .row button { flex: 1; padding: 10px; border-radius: var(--r-sm); font-weight: 600; border: 1px solid var(--separator); }
+.api403 .row button { flex: 1; min-height: var(--hit); padding: 10px; border-radius: var(--r-sm); font-weight: 600; border: 1px solid var(--separator); }
 
 /* Decision cards: approval, question, plan review, expired. A kicker row (11px tracked caps and
    the time it has waited), a 17px title, 13px detail, then one filled primary and one escape.
@@ -768,7 +811,11 @@ html[data-theme="contrast"] .card.decision.expired { border-color: var(--separat
 
 /* Sheet: one shell. A grabber, a title row (back while a sub-sheet is open, Done or Cancel), a
    scrolling body and a footer that stays put for the primary action. Medium hugs its content up
-   to half the screen; large fills it (forms and reading). Dragging between the two is PR 7. */
+   to half the screen; large fills it (forms and reading); the content picks the size.
+   Motion (section 5.5): it rises over 320ms on the emphasized curve while the scrim fades in
+   over 220ms. Dragging it down from the header, or from the body once that is scrolled to the
+   top, follows the finger; app.js then dismisses it (220ms out) or springs it back. While
+   app.js moves it, .held stops the entry animation so a sheet still rising can be caught. */
 #scrim { position: fixed; inset: 0; background: var(--scrim); z-index: 20; cursor: pointer; animation: fade-in var(--dur-base) var(--ease-standard); }
 #sheet {
   position: fixed; left: 0; right: 0; bottom: 0; z-index: 21; margin-inline: auto; width: 100%; max-width: var(--col);
@@ -777,9 +824,11 @@ html[data-theme="contrast"] .card.decision.expired { border-color: var(--separat
   border-radius: var(--r-lg) var(--r-lg) 0 0; box-shadow: var(--shadow-sheet);
   animation: sheet-in var(--dur-slow) var(--ease-emphasized);
 }
+#sheet.held, #scrim.held { animation: none; }
 #sheet[data-size="medium"] { max-height: 50dvh; }
 #sheet[data-size="large"] { height: 92dvh; }
-.sheethead { flex-shrink: 0; padding: var(--s-2) var(--s-2) 0; }
+/* The header is a drag handle and nothing scrolls from it, so the browser leaves it to app.js. */
+.sheethead { flex-shrink: 0; padding: var(--s-2) var(--s-2) 0; touch-action: none; }
 .grab { width: 36px; height: 5px; margin: 0 auto; border-radius: var(--r-pill); background: var(--separator); }
 .sheet-titlerow { display: grid; grid-template-columns: minmax(var(--hit), 1fr) minmax(0, max-content) minmax(var(--hit), 1fr); align-items: center; column-gap: var(--s-1); min-height: var(--hit); }
 .sheet-title { min-width: 0; text-align: center; }
@@ -977,8 +1026,14 @@ html[data-theme="contrast"] #sheet[data-grouped] #sheetBody :is(input[type="sear
   font-size: var(--text-caption); line-height: var(--text-caption-lh); font-weight: var(--weight-semibold);
   animation: toast-in 180ms var(--ease-standard);
 }
+/* Leaving (app.js adds .out, then hides it): a 160ms fade. */
+#toast.out { animation: fade-out 160ms var(--ease-exit) forwards; }
 @keyframes toast-in { from { opacity: 0; transform: translateY(8px); } }
-@media (prefers-reduced-motion: reduce) { #toast { animation: fade-in var(--dur-fast) linear; } }
+@keyframes fade-out { to { opacity: 0; } }
+@media (prefers-reduced-motion: reduce) {
+  #toast { animation: fade-in var(--dur-fast) linear; }
+  #toast.out { animation: fade-out var(--dur-fast) linear forwards; }
+}
 
 /* Plugins sheet */
 .plug { display: flex; align-items: center; gap: var(--s-3); min-height: var(--hit); padding: var(--s-2) 2px; border-bottom: 1px solid var(--separator); }
@@ -1013,13 +1068,14 @@ html[data-theme="contrast"] #sheet[data-grouped] #sheetBody :is(input[type="sear
   max-height: 45vh;
 }
 #sheetBody .tmpl-list .note { padding: 10px var(--s-3); }
+/* The template itself is the row's full height (its tap target), the delete a 44px box beside it. */
 .tmplrow {
-  display: flex; align-items: flex-start; gap: 10px; width: 100%;
-  padding: 11px var(--s-3); border-bottom: 1px solid var(--separator);
+  display: flex; align-items: stretch; gap: 10px; width: 100%;
+  padding: 0 var(--s-3); border-bottom: 1px solid var(--separator);
   background: var(--surface);
 }
 .tmplrow:last-child { border-bottom: 0; }
-.tmplmain { flex: 1; min-width: 0; display: block; text-align: left; background: none; border: 0; padding: 0; color: inherit; }
+.tmplmain { flex: 1; min-width: 0; display: block; min-height: var(--hit); text-align: left; background: none; border: 0; padding: 11px 0; color: inherit; }
 .tmplmain:active { background: var(--surface-fill); }
 .tmplrow b { display: block; font-weight: 600; font-size: var(--text-callout); line-height: var(--text-callout-lh); }
 .tmplrow small {
@@ -1028,12 +1084,13 @@ html[data-theme="contrast"] #sheet[data-grouped] #sheetBody :is(input[type="sear
 }
 .tmplx {
   flex-shrink: 0; font-size: 14px; color: var(--text-2);
-  min-width: var(--hit); min-height: var(--hit); margin: -12px -12px -12px 0;
+  min-width: var(--hit); min-height: var(--hit); margin: 0 -12px 0 0; align-self: center;
   background: none; border: 0; padding: 0;
 }
 .tmplx.armed { color: var(--danger); font-size: var(--text-caption); font-weight: 600; min-width: 64px; }
 /* Goal line and sheet */
-.goal-bar { flex-shrink: 0; display: flex; align-items: baseline; gap: 6px; width: 100%; text-align: left; padding: 5px var(--s-3); border-bottom: 1px solid var(--separator); background: var(--surface-sunk); font-family: var(--font-mono); font-size: 11px; line-height: 1.4; color: var(--text-2); }
+/* A strip under the header and a tap target for the goal sheet, so 44px tall at least. */
+.goal-bar { flex-shrink: 0; display: flex; align-items: center; gap: 6px; width: 100%; min-height: var(--hit); text-align: left; padding: var(--s-1) var(--s-3); border-bottom: 1px solid var(--separator); background: var(--surface-sunk); font-family: var(--font-mono); font-size: 11px; line-height: 1.4; color: var(--text-2); }
 .goal-bar:active { background: var(--canvas); }
 .goal-bar[hidden] { display: none; }
 .goal-glyph { flex-shrink: 0; }
@@ -1085,7 +1142,9 @@ html[data-theme="contrast"] #sheet[data-grouped] #sheetBody :is(input[type="sear
 /* 3: the 4px todo bar with "2 of 5", only when the session reports todos. */
 .run-meter { display: flex; align-items: center; gap: var(--s-2); min-width: 0; padding: var(--s-1) 0 0 28px; font-size: var(--text-caption); line-height: var(--text-caption-lh); font-variant-numeric: tabular-nums; color: var(--text-2); }
 .run-track { flex: 1; min-width: 0; height: 4px; border-radius: var(--r-pill); background: var(--separator); overflow: hidden; }
-.run-fill { display: block; height: 100%; width: var(--fill, 0%); background: var(--tint); }
+/* A change of fill animates as a scale from the left edge over 240ms (app.js), so only the
+   compositor moves; the "2 of 5" beside it changes at once. */
+.run-fill { display: block; height: 100%; width: var(--fill, 0%); background: var(--tint); transform-origin: left center; }
 .run-meter-value { flex-shrink: 0; }
 /* 4: the footer, "1 job · 2 subagents", with a chevron that turns when it opens. */
 .run-more {
@@ -1345,3 +1404,16 @@ html.ios-short { --safe-b: 0px; }
   background: color-mix(in srgb, var(--warning) 14%, transparent);
 }
 .nav-sub.danger { background: color-mix(in srgb, var(--danger) 14%, transparent); }
+
+/* Reduce Motion (section 5.5): a real setting, not an edge case. Nothing moves across the
+   screen: every transform that animates is dropped, fades stay at 120ms, the working glyph
+   slows to 3s (the rule beside .glyph.run). app.js reads the same setting, so the sheet and the
+   views fade instead of sliding, disclosures and the todo bar change at once, and scrolling to
+   a row jumps. A state still shows: a chevron is still turned, a thumb still sits under its
+   label; they just get there without travelling. */
+@media (prefers-reduced-motion: reduce) {
+  :root { --dur-base: 120ms; --dur-slow: 120ms; }
+  .seg::before, .receipt-chevron, .run-caret, .think summary::before { transition: none; }
+  .cbtn-ink { transition: background-color var(--dur-fast) linear; }
+  .cbtn:active .cbtn-ink { transform: none; }
+}

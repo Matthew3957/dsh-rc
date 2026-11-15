@@ -21,10 +21,59 @@ function h(tag, attrs = {}, ...kids) {
   return el;
 }
 
+// ---------- Motion ----------
+// Section 5.5 of the design plan. The stylesheet carries the simple fades and every at-rest
+// state; app.js drives the moves that must start from wherever a thing is right now (a sheet
+// caught mid-rise or mid-drag, a view mid-push, a disclosure mid-fold) with the Web Animations
+// API, on transform and opacity (a disclosure's height is the one layout exception the plan
+// allows). Where that API is missing, or the user has asked to Reduce Motion, the change is
+// instant or a short fade, which is also what the VM tests see.
+const MOTION = {
+  fast: 120, base: 220, slow: 320, push: 300, pop: 260, cross: 150, progress: 240,
+  standard: 'cubic-bezier(0.2, 0, 0, 1)', emphasized: 'cubic-bezier(0.32, 0.72, 0, 1)', exit: 'cubic-bezier(0.4, 0, 1, 1)',
+};
+function reducedMotion() {
+  try { return typeof matchMedia === 'function' && !!matchMedia('(prefers-reduced-motion: reduce)').matches; } catch { return false; }
+}
+const canAnimate = (el) => !!el && typeof el.animate === 'function';
+
+// Toast: one at a time. It rises in over 180ms (style.css), and after its time fades out over
+// 160ms before it is hidden. A new one replaces the old at once; there is no queue.
 function toast(msg, ms = 2400) {
   const t = $('#toast');
+  clearTimeout(toast._t); clearTimeout(toast._out);
+  t.classList.remove('out');
   t.textContent = msg; t.hidden = false;
-  clearTimeout(toast._t); toast._t = setTimeout(() => { t.hidden = true; }, ms);
+  toast._t = setTimeout(() => {
+    t.classList.add('out');
+    toast._out = setTimeout(() => { t.hidden = true; t.classList.remove('out'); }, 160);
+  }, ms);
+}
+
+// Screen reader announcements (index.html #announce, a visually hidden polite live region): a
+// turn that just ended and a decision that just arrived, said once. Nothing from history replay,
+// nothing per token, and nothing the toast is already saying. Saying the same words twice in a
+// row would be silent, so a repeat gets a trailing no-break space; the region empties itself
+// after a while so a stale line is not found by someone reading the page.
+let announceClear = null;
+let announceArmed = false, announceLive = false; // see setConn and settleAnnouncements
+// The pending decisions a dsh sends in the first moments after the socket opens are already on
+// screen, not news. Let that opening burst land (a short settle, not a long silence), mark
+// whatever is then waiting as seen, and turn live announcements on. A decision that arrives
+// after that is announced once; a reconnect that re-sends it is silent.
+const ANNOUNCE_GRACE_MS = 250; // let the opening burst land
+const ANNOUNCE_BURST_MS = 75; // frames this close to the open are that burst, not news
+const announced = new Set(); // decisions already announced (or already waiting at load)
+const graceDecisions = new Map(); // key -> { item, at } for decisions during the settle
+let announceStarted = 0;
+const announcedTurns = new Set(); // sessionId:seq, so a replayed turn end is said once
+function announce(msg) {
+  const el = $('#announce');
+  if (!el || !msg) return;
+  el.textContent = el.textContent === msg ? msg + ' ' : msg;
+  clearTimeout(announceClear);
+  announceClear = setTimeout(() => { el.textContent = ''; }, 10000);
+  if (announceClear && announceClear.unref) announceClear.unref();
 }
 
 /* ---------- API errors ---------- */
@@ -429,6 +478,9 @@ let connFade = null;
 function setConn(up) {
   S.conn.up = up;
   $('#app').setAttribute('data-conn', up ? 'up' : 'down');
+  // The decisions already waiting arrive in a burst just after the first connection: they are
+  // on screen, not news. Announcements start once that burst has had a moment to land.
+  if (up && !announceArmed) { announceArmed = true; announceStarted = Date.now(); setTimeout(settleAnnouncements, ANNOUNCE_GRACE_MS); }
   clearTimeout(connFade);
   const banners = [...document.querySelectorAll('.conn-banner')];
   if (!up) {
@@ -534,6 +586,10 @@ function onMux(p, env) {
         }
       }
       if (S.cur && p.sessionId === S.cur.id) ingest(p);
+      // The open session's turn end is announced by applyLive, after its receipt is drawn. On
+      // the board there is no receipt, so its live row change is announced directly (deduped
+      // by sequence, because a reconnect can replay the frame).
+      if (ev && ev.type === 'turn/end' && !S.cur) announceTurnEnd(p.sessionId, ev);
       if (ev && ev.type === 'session/title') setTitle(p.sessionId, ev.data && ev.data.title);
       if (ev && (ev.type === 'turn/start' || ev.type === 'turn/end')) scheduleDashboard();
       break;
@@ -547,6 +603,7 @@ function onMux(p, env) {
       S.approvals.set(p.approvalId, a);
       lookupApprovalArgs(a).catch(() => {}); // marks a lookup in flight before the card is drawn
       renderPending(); badge();
+      announceDecision('a:' + p.approvalId, { kind: 'approve', a });
       break;
     }
     case 'approval/resolved':
@@ -554,6 +611,7 @@ function onMux(p, env) {
       break;
     case 'question/requested':
       S.questions.set(env.rpcId, { ...p, rpcId: env.rpcId, seenAt: (S.questions.get(env.rpcId) || {}).seenAt || Date.now() }); renderPending(); badge();
+      announceDecision('q:' + env.rpcId, { kind: 'ask', q: S.questions.get(env.rpcId) });
       break;
     case 'question/resolved':
       S.questions.delete(p.questionRpcId); planDrafts.delete(p.questionRpcId); renderPending(); badge();
@@ -742,6 +800,91 @@ function noteTurnEnd(sessionId, reason, time) {
   else if (id === sessionId) delete readState.failed[id]; // a later good turn of the session itself clears it
   saveReadState();
 }
+// A turn that just ended, for a screen reader. In the open session it is the receipt's own
+// verdict and counts ("Turn passed, 2 files, 1 command"); on the board it is the session and the
+// verdict. A subagent's turn is part of its parent's and is not announced, and neither is
+// another session's while a chat is open: that would talk over the conversation in front of
+// the user. History replay never reaches here; this runs only for a live turn/end frame.
+function announceTurnEnd(sessionId, ev) {
+  if (!sessionId || rootOf(sessionId) !== sessionId) return;
+  const stamp = ev && ev.seq != null ? 's' + ev.seq : ev && ev.time != null ? 't' + ev.time : '';
+  if (stamp) {
+    const key = sessionId + ':' + stamp;
+    if (announcedTurns.has(key)) return;
+    announcedTurns.add(key);
+    if (announcedTurns.size > 500) announcedTurns.delete(announcedTurns.values().next().value);
+  }
+  const here = !!S.cur && S.cur.id === sessionId;
+  if (S.cur && !here) return;
+  const reason = (ev && ev.data && ev.data.reason) || {};
+  if (here) {
+    const T = R.turns[R.turns.length - 1];
+    const facts = T && T.done && T.endEv === ev ? receiptFacts(T) : null;
+    const outcome = facts ? facts.outcome : outcomeOf(reason);
+    announce(['Turn ' + outcome].concat(facts ? facts.counts : []).join(', '));
+    return;
+  }
+  const title = S.titles.get(sessionId) || basename(sessionMeta(sessionId).cwd) || 'A session';
+  announce(`${title}: turn ${outcomeOf(reason)}`);
+}
+// The verdict from a turn/end reason alone, when no receipt is drawn for it (the same words
+// summarizeTurn gives the receipt).
+function outcomeOf(reason) {
+  const kind = reason && reason.kind;
+  if (kind === 'error' || kind === 'blocked') return 'failed';
+  if (kind === 'aborted' || kind === 'interrupted' || kind === 'max-tokens') return 'stopped';
+  return 'passed';
+}
+// A newly arrived approval or question, once, with the tool and its command or the question's
+// first line. The decision card already on screen holds the detail. Anything that was waiting
+// when the page connected is remembered silently, so a reconnect that re-sends it stays quiet.
+function announceDecision(key, item) {
+  if (announced.has(key)) return;
+  // During the opening settle, remember the request but do not mark it seen yet. Whatever is
+  // still waiting when the settle ends is the burst that was already on screen; anything that
+  // arrives after that is news.
+  if (!announceLive) { if (item && !graceDecisions.has(key)) graceDecisions.set(key, { item, at: Date.now() }); return; }
+  rememberDecision(key);
+  if (!item) return;
+  const sessionId = item.kind === 'approve' ? item.a.sessionId : item.q && item.q.sessionId;
+  const root = rootOf(sessionId);
+  const where = S.cur && S.cur.id === root ? '' : ` in ${S.titles.get(root) || basename(sessionMeta(root).cwd) || 'another session'}`;
+  if (item.kind === 'approve') {
+    const a = item.a;
+    const raw = approvalArgs(a);
+    const arg = raw != null ? firstText(toolSummary(raw, null, a.toolName)) : '';
+    announce(`Approval needed for ${prettyTool(a.toolName)}${where}${arg ? ': ' + arg.slice(0, 120) : ''}`);
+    return;
+  }
+  const q = item.q || {};
+  if (window.dshReview && window.dshReview.planReviewOf(q.questions)) { announce(`Plan ready for review${where}`); return; }
+  const first = (q.questions || [])[0];
+  const text = firstText(first && (first.question || first.header));
+  announce(`Question${where}${text ? ': ' + text.slice(0, 160) : ''}`);
+}
+function rememberDecision(key) {
+  announced.add(key);
+  if (announced.size > 500) announced.delete(announced.values().next().value);
+}
+function settleAnnouncements() {
+  // Mark the opening burst silently, then let the next request speak. A request that arrived
+  // after the burst but during the settle is news too, so it is held back, not swallowed: once
+  // the burst is marked, it is announced. A reconnect does not re-arm this: the ids stay in
+  // `announced`, and the original frames are not replayed as new.
+  const late = [];
+  for (const [key, rec] of graceDecisions) {
+    const item = rec && rec.item;
+    const still = item && (item.kind === 'approve' ? S.approvals.has(item.a.approvalId) : S.questions.has(item.q && item.q.rpcId));
+    if (still && rec.at - announceStarted >= ANNOUNCE_BURST_MS) late.push([key, item]);
+  }
+  for (const a of S.approvals.values()) rememberDecision('a:' + a.approvalId);
+  for (const q of S.questions.values()) rememberDecision('q:' + q.rpcId);
+  for (const key of graceDecisions.keys()) rememberDecision(key);
+  graceDecisions.clear();
+  announceLive = true;
+  for (const [key, item] of late) { announced.delete(key); announceDecision(key, item); }
+}
+
 // Sessions that changed while the page was closed: read the tail of a few to learn
 // whether their last turn failed. Capped, and only for unread rows, so the list stays cheap.
 let checkingTails = false;
@@ -1211,6 +1354,7 @@ const R = {
     if (!T) { if (why) this.note(why, r.kind === 'error' ? 'err' : ''); return; }
     T.done = true;
     T.endedAt = typeof ev.time === 'number' ? ev.time : null;
+    T.endEv = ev; // lets a live turn end find the receipt it just closed (announceTurnEnd)
     T.reason = r;
     if (why) T.why = why;
     for (const t of T.tools) if (!t.done) { t.done = true; t.orphan = true; this.paintTool(t); }
@@ -1383,19 +1527,26 @@ function activityEl(item) {
   return el;
 }
 
-function turnCard(T, view) {
+// What a finished turn's receipt says: the verdict, and the counts beside it. The receipt row
+// and the screen reader announcement of a live turn end both read it, so they never disagree.
+function receiptFacts(T) {
   const lib = window.dshReview;
   const s = lib ? lib.summarizeTurn(T.tools, T.reason) : { files: [], commands: [], adds: 0, dels: 0, failedCommands: 0, outcome: 'passed', why: '' };
   s.toolCount = T.tools.length;
   if (typeof T.startedAt === 'number' && typeof T.endedAt === 'number') s.elapsed = Math.max(0, T.endedAt - T.startedAt);
-  const label = s.outcome === 'passed' ? 'Passed' : s.outcome === 'failed' ? 'Failed' : 'Stopped';
-  const elapsed = typeof s.elapsed === 'number' ? fmtElapsed(s.elapsed) : '';
-  const meta = [
+  s.label = s.outcome === 'passed' ? 'Passed' : s.outcome === 'failed' ? 'Failed' : 'Stopped';
+  s.counts = [
     s.files.length ? plural(s.files.length, 'file') : '',
     s.commands.length ? plural(s.commands.length, 'command') : '',
-    !s.files.length && !s.commands.length ? plural(s.toolCount, 'step') : '',
-    elapsed,
-  ].filter(Boolean).join(' · ');
+    !s.files.length && !s.commands.length && s.toolCount ? plural(s.toolCount, 'step') : '',
+  ].filter(Boolean);
+  return s;
+}
+function turnCard(T, view) {
+  const s = receiptFacts(T);
+  const label = s.label;
+  const elapsed = typeof s.elapsed === 'number' ? fmtElapsed(s.elapsed) : '';
+  const meta = s.counts.concat(elapsed ? [elapsed] : []).join(' · ');
   const state = s.outcome === 'passed' ? 'done' : s.outcome === 'stopped' ? 'stopped' : 'failed';
   const card = h('details', { class: 'turncard ' + s.outcome });
   card.open = s.outcome === 'failed';
@@ -1467,7 +1618,73 @@ function revealTool(id) {
   if (t.card) t.card.open = true;
   t.el.open = true;
   R.paintTool(t);
-  t.el.scrollIntoView({ block: 'start', behavior: 'smooth' });
+  t.el.scrollIntoView({ block: 'start', behavior: reducedMotion() ? 'auto' : 'smooth' });
+}
+
+// ----- Disclosures -----
+// A receipt, a tool row, a thought or a diff opens and closes over 220ms instead of jumping.
+// It stays a real <details>: the summary still toggles it from the keyboard (Enter and Space
+// arrive here as a click), `open` still says the state and `toggle` still fires. Only the height
+// between the two states animates, and only where the Web Animations API exists and Reduce
+// Motion is off; anywhere else this does nothing and the browser toggles it at once, which is
+// the right fallback. A second tap mid-fold turns it round from where it is.
+function heightOf(el) {
+  const r = typeof el.getBoundingClientRect === 'function' ? el.getBoundingClientRect() : null;
+  return r ? r.height : el.offsetHeight || 0;
+}
+function foldDetails(d, e) {
+  const sum = d.firstElementChild;
+  if (!sum || sum.tagName !== 'SUMMARY' || !canAnimate(d) || reducedMotion()) return;
+  e.preventDefault();
+  const from = heightOf(d);
+  const was = d._fold;
+  if (was) { d._fold = null; try { was.anim.cancel(); } catch {} }
+  const opening = was ? !was.opening : !d.open;
+  let to;
+  if (opening) {
+    delete d.dataset.closing;
+    d.open = true;
+    // A tool row builds its detail lazily on `toggle`, which fires later: build it now, so the
+    // height measured below is the height it opens to.
+    if (typeof d.ontoggle === 'function') d.ontoggle();
+    to = heightOf(d);
+  } else {
+    d.dataset.closing = ''; // the chevron turns back as the fold starts (style.css)
+    to = heightOf(sum) + (d.offsetHeight - d.clientHeight); // the summary plus the borders
+  }
+  const done = () => {
+    if (d._fold !== fold) return;
+    d._fold = null;
+    d.style.overflow = '';
+    if (!opening) { d.open = false; delete d.dataset.closing; }
+  };
+  const fold = { opening, anim: null };
+  if (Math.abs(to - from) < 1) { d._fold = fold; done(); return; }
+  d.style.overflow = 'hidden';
+  fold.anim = d.animate([{ height: from + 'px' }, { height: to + 'px' }], { duration: MOTION.base, easing: MOTION.standard });
+  d._fold = fold;
+  fold.anim.onfinish = done;
+}
+$('#msgs').addEventListener('click', (e) => {
+  if (e.defaultPrevented || !e.target || typeof e.target.closest !== 'function') return;
+  const sum = e.target.closest('summary');
+  if (!sum || e.target.closest('a, button, input, textarea, select')) return;
+  const d = sum.parentElement;
+  if (d && d.tagName === 'DETAILS' && d.firstElementChild === sum) foldDetails(d, e);
+});
+// The live row's jobs and subagents: the row is redrawn on every toggle, so its detail opens
+// from no height to its own, and closes to none before the redraw drops it.
+function foldOpen(el) {
+  if (!canAnimate(el) || reducedMotion()) return;
+  const h = heightOf(el);
+  if (!h) return;
+  el.style.overflow = 'hidden';
+  el.animate([{ height: '0px' }, { height: h + 'px' }], { duration: MOTION.base, easing: MOTION.standard }).onfinish = () => { el.style.overflow = ''; };
+}
+function foldShut(el, then) {
+  if (!el || !canAnimate(el) || reducedMotion()) { then(); return; }
+  el.style.overflow = 'hidden';
+  el.animate([{ height: heightOf(el) + 'px' }, { height: '0px' }], { duration: MOTION.base, easing: MOTION.standard, fill: 'forwards' }).onfinish = then;
 }
 
 // Markdown stays produced by md(), which sanitises before it reaches the DOM. The
@@ -1498,13 +1715,23 @@ function updateJump() {
   const running = !!(S.cur && S.running.get(S.cur.id));
   $('#jumpBtn').hidden = pinned || !running;
 }
+// The handler itself reads no layout: it books one measurement for the next frame, however many
+// scroll events arrive before it. stick() checks `pinned` again when its own frame comes, so a
+// paint queued just before the user scrolled up cannot pull them back down.
+let feedMeasure = 0;
 feed.addEventListener('scroll', () => {
-  pinned = feed.scrollHeight - feed.scrollTop - feed.clientHeight < 120;
-  updateJump();
+  if (feedMeasure) return;
+  feedMeasure = requestAnimationFrame(() => {
+    feedMeasure = 0;
+    pinned = feed.scrollHeight - feed.scrollTop - feed.clientHeight < 120;
+    updateJump();
+  });
 }, { passive: true });
+// Following the bottom is always an instant jump, never a smooth scroll, so it is the same
+// with Reduce Motion on.
 function stick(force) {
   if (!(pinned || force)) return;
-  requestAnimationFrame(() => { feed.scrollTop = feed.scrollHeight; });
+  requestAnimationFrame(() => { if (pinned || force) feed.scrollTop = feed.scrollHeight; });
 }
 $('#jumpBtn').onclick = () => { pinned = true; updateJump(); stick(true); };
 // The jump-to-bottom button floats over the feed, so keep it above the dock:
@@ -1523,14 +1750,66 @@ if (typeof ResizeObserver !== 'undefined') {
 
 // ---------- Session view ----------
 function sessionMeta(id) { return S.sessions.find((s) => s.sessionId === id) || {}; }
-async function openSession(id, { push = true } = {}) {
+
+// ---------- View push and pop ----------
+// Sessions to a Session slides the session in from the right over 300ms while the board moves
+// to -24% and dims; Back reverses it over 260ms. When the direction is not known (the browser's
+// own back or forward, which may already have drawn its own swipe) the two crossfade over
+// 150ms, and under Reduce Motion every change is a 120ms fade. Only transform and opacity
+// animate. The [hidden] state flips at once, so the route, the tests and anything reading
+// `hidden` see the new view immediately; the leaving view is only drawn until the move ends.
+// A second navigation during a move settles the first at once before it starts.
+let viewMove = null; // { finish } while a push, pop or fade is running
+function showView(show, hide, mode) {
+  if (viewMove) viewMove.finish();
+  const wasShown = !show.hidden;
+  hide.hidden = true; show.hidden = false;
+  const app = $('#app');
+  if (!mode || wasShown || !canAnimate(show) || !canAnimate(hide) || !app || !app.classList) return;
+  const reduce = reducedMotion();
+  if (reduce) mode = 'fade';
+  const anims = [];
+  const run = (el, frames, ms, easing) => anims.push(el.animate(frames, { duration: ms, easing, fill: 'both' }));
+  hide.inert = true;
+  hide.classList.add('vt-leaving');
+  // The view that moves over the other is on top: the incoming one on a push or a fade, the
+  // outgoing one on a pop.
+  (mode === 'pop' ? hide : show).classList.add('vt-top');
+  app.classList.add('vt');
+  if (mode === 'push') {
+    run(show, [{ transform: 'translateX(100%)' }, { transform: 'translateX(0)' }], MOTION.push, MOTION.emphasized);
+    run(hide, [{ transform: 'translateX(0)', opacity: 1 }, { transform: 'translateX(-24%)', opacity: 0.7 }], MOTION.push, MOTION.emphasized);
+  } else if (mode === 'pop') {
+    run(hide, [{ transform: 'translateX(0)' }, { transform: 'translateX(100%)' }], MOTION.pop, MOTION.emphasized);
+    run(show, [{ transform: 'translateX(-24%)', opacity: 0.7 }, { transform: 'translateX(0)', opacity: 1 }], MOTION.pop, MOTION.emphasized);
+  } else {
+    const ms = reduce ? MOTION.fast : MOTION.cross;
+    run(show, [{ opacity: 0 }, { opacity: 1 }], ms, reduce ? 'linear' : MOTION.standard);
+    run(hide, [{ opacity: 1 }, { opacity: 0 }], ms, reduce ? 'linear' : MOTION.standard);
+  }
+  let done = false;
+  const finish = () => {
+    if (done) return;
+    done = true;
+    viewMove = null;
+    for (const a of anims) { try { a.cancel(); } catch {} }
+    app.classList.remove('vt');
+    hide.classList.remove('vt-leaving', 'vt-top');
+    show.classList.remove('vt-leaving', 'vt-top');
+    hide.inert = sheetOpen(); // a sheet open over the views keeps both inert
+  };
+  viewMove = { finish };
+  anims[0].onfinish = finish;
+}
+
+async function openSession(id, { push = true, anim } = {}) {
   if (push && location.hash !== '#s/' + id) history.pushState(null, '', '#s/' + id);
   if (dictation.listening) dictateStop(); // the mic button is only in the chat view
   if (S.cur && S.cur.id !== id) markSeen(S.cur.id);
   markSeen(id);
   S.cur = { id, events: [], lastSeq: -1, loading: false, buffer: [], hasMore: false, gen: 0 };
   S.images = []; renderAttachments(); S.steer = false; queueEditing = null; queueOpen = false;
-  $('#listView').hidden = true; $('#chatView').hidden = false;
+  showView($('#chatView'), $('#listView'), anim !== undefined ? anim : push ? 'push' : 'fade');
   stopDashTick(); // the dashboard is off screen while a chat is open
   const m = sessionMeta(id);
   setNavTitle(S.titles.get(id) || basename(m.cwd) || 'Session', [tildify(m.cwd), m.agentPreset].filter(Boolean).join(' · '));
@@ -1545,19 +1824,21 @@ async function openSession(id, { push = true } = {}) {
   loadModel(id);
   refreshGoal(id);
 }
-function showList({ push = true } = {}) {
+function showList({ push = true, anim } = {}) {
   if (push && location.hash) history.pushState(null, '', location.pathname);
   if (dictation.listening) dictateStop();
   if (S.cur) markSeen(S.cur.id); // everything it did while open has been seen
   S.cur = null;
-  $('#chatView').hidden = true; $('#listView').hidden = false;
+  showView($('#listView'), $('#chatView'), anim !== undefined ? anim : push ? 'pop' : 'fade');
   loadSessions();
 }
-window.addEventListener('popstate', route);
-function route() {
+// The browser's back and forward (popstate) cannot say which way they went, so they crossfade;
+// the first route at boot draws the screen straight away.
+window.addEventListener('popstate', () => route('fade'));
+function route(anim = null) {
   const m = /^#s[=/](.+)$/.exec(location.hash);
-  if (m) openSession(decodeURIComponent(m[1]), { push: false });
-  else showList({ push: false });
+  if (m) openSession(decodeURIComponent(m[1]), { push: false, anim });
+  else showList({ push: false, anim });
 }
 $('#backBtn').onclick = () => showList();
 
@@ -1632,6 +1913,10 @@ function applyLive(frame) {
   if (t === 'turn/start') { S.running.set(cur.id, true); if (typeof frame.event.time === 'number') S.turnStart.set(cur.id, frame.event.time); }
   if (t === 'turn/end') { S.turnStart.delete(cur.id); S.running.set(cur.id, false); }
   R.apply(frame);
+  // A frame only reaches here when it is accepted and painted (not buffered during history load,
+  // not a duplicate, not a gap that triggers a reload). The receipt is already drawn, so its
+  // counts and verdict are available. A duplicate's seq is rejected above and says nothing.
+  if (t === 'turn/end') announceTurnEnd(cur.id, frame.event);
   if (t === 'turn/start' || t === 'turn/end') renderRunning();
 }
 
@@ -2093,6 +2378,8 @@ function renderGoalBar() {
   const st = window.dsh02.goalStatus(g);
   bar.replaceChildren(h('span', { class: 'goal-glyph ' + st.level, 'aria-hidden': 'true' }, st.glyph),
     h('span', { class: 'goal-text' }, g.objective), h('span', { class: 'goal-stat' }, st.text));
+  // Its name says what it is and what it holds; a bare "Session goal" would hide the goal itself.
+  bar.setAttribute('aria-label', ['Goal: ' + (g.objective || ''), st.text].filter(Boolean).join(', '));
 }
 async function refreshGoal(id) {
   if (!dsh2) return;
@@ -2120,7 +2407,7 @@ async function goalCall(verb, args, done) {
   }
   await refreshGoal(cur.id).catch(() => {});
   // Redraw the sheet after a success or a stale ref; after any other failure keep what was typed.
-  if ((r || stale) && !$('#sheet').hidden && S.cur === cur && $('#sheetBody').querySelector('[data-goal-sheet]')) goalSheet();
+  if ((r || stale) && sheetOpen() && S.cur === cur && $('#sheetBody').querySelector('[data-goal-sheet]')) goalSheet();
   return r;
 }
 function goalForm({ objective = '', maxRounds = null, label, onSave, editing = false }) {
@@ -2192,7 +2479,7 @@ function goalSheet(creating = false) {
   // The armed state may have moved since the last push.
   refreshGoal(cur.id).then(() => {
     const n = goalFor(cur.id);
-    if (n && n.activation !== g.activation && !$('#sheet').hidden && $('#sheetBody').querySelector('[data-goal-sheet]')) goalSheet();
+    if (n && n.activation !== g.activation && sheetOpen() && $('#sheetBody').querySelector('[data-goal-sheet]')) goalSheet();
   });
 }
 
@@ -2243,15 +2530,29 @@ function activeSessions() {
   return list.sort((a, b) => (sessionStart(b.sessionId) || b.updatedAt || 0) - (sessionStart(a.sessionId) || a.updatedAt || 0));
 }
 function toggleDashCard(id, refocus) {
-  if (S.dashOpen.has(id)) S.dashOpen.delete(id); else S.dashOpen.add(id);
-  dashSig = null;
-  renderDashboard();
-  // The rows are redrawn, so a footer tapped from the keyboard hands focus to its new self.
-  if (refocus && typeof CSS !== 'undefined' && CSS.escape) {
-    const btn = $('#runningCards').querySelector(`.run-row[data-session="${CSS.escape(id)}"] .run-more`);
-    if (btn) btn.focus();
-  }
+  const row = () => (typeof CSS !== 'undefined' && CSS.escape ? $('#runningCards').querySelector(`.run-row[data-session="${CSS.escape(id)}"]`) : null);
+  const opening = !S.dashOpen.has(id);
+  if (opening) S.dashOpen.add(id); else S.dashOpen.delete(id);
+  const redraw = () => {
+    dashSig = null;
+    renderDashboard();
+    const r = row();
+    // The rows are redrawn, so a footer tapped from the keyboard hands focus to its new self.
+    const btn = r && r.querySelector('.run-more');
+    if (refocus && btn) btn.focus();
+    if (opening && r) { const detail = r.querySelector('.run-detail'); if (detail) foldOpen(detail); }
+  };
+  const turn = (dashToggles.get(id) || 0) + 1;
+  dashToggles.set(id, turn);
+  if (opening) { redraw(); return; }
+  // Closing folds the detail that is on screen first, with the chevron already turned back. A
+  // tap that reopens it meanwhile wins: the late fold end then leaves the rows alone.
+  const r = row();
+  const more = r && r.querySelector('.run-more');
+  if (more) more.setAttribute('aria-expanded', 'false');
+  foldShut(r && r.querySelector('.run-detail'), () => { if (dashToggles.get(id) === turn) redraw(); });
 }
+const dashToggles = new Map(); // sessionId -> how many times its footer was toggled
 // ----- subagent catalogs -----
 // The catalog is a snapshot, not a push, so it is refreshed while a card stays
 // on screen. Children with children are followed a few levels down; the budget
@@ -2799,6 +3100,32 @@ function liveRow(s) {
   row.append(more, detail);
   return row;
 }
+// The todo bar moves from where it was to where it is over 240ms. The rows are rebuilt on a
+// change, so the old fill is read before the rebuild and the new bar starts as a scale of
+// itself from the left edge back to its own width: transform only, nothing reflows. The
+// "2 of 5" beside it changes at once.
+function todoFills() {
+  const out = new Map();
+  const box = $('#runningCards');
+  if (!box || typeof box.querySelectorAll !== 'function') return out;
+  for (const row of box.querySelectorAll('.run-row')) {
+    const fill = row.querySelector && row.querySelector('.run-fill');
+    const v = fill && fill.style && typeof fill.style.getPropertyValue === 'function' ? parseFloat(fill.style.getPropertyValue('--fill')) : NaN;
+    if (Number.isFinite(v)) out.set(row.getAttribute('data-session'), v);
+  }
+  return out;
+}
+function growTodoFills(before) {
+  if (!before.size || reducedMotion()) return;
+  for (const row of $('#runningCards').querySelectorAll('.run-row')) {
+    const was = before.get(row.getAttribute('data-session'));
+    const fill = row.querySelector('.run-fill');
+    if (was == null || !canAnimate(fill)) continue;
+    const now = parseFloat(fill.style.getPropertyValue('--fill'));
+    if (!(now > 0) || now === was) continue;
+    fill.animate([{ transform: `scaleX(${was / now})` }, { transform: 'none' }], { duration: MOTION.progress, easing: MOTION.standard });
+  }
+}
 function agentsSig(parentId, depth) {
   const tree = S.subagents.get(parentId);
   if (!tree || depth > 3) return '';
@@ -2867,8 +3194,10 @@ function renderDashboard() {
   if (sig !== dashSig) {
     dashSig = sig;
     claudePanels.clear();
+    const fills = todoFills();
     $('#runningCards').replaceChildren(...active.map(liveRow));
     $('#runningCount').textContent = String(active.length);
+    growTodoFills(fills);
   }
   startDashTick();
   syncClaudeFeed();
@@ -2942,7 +3271,7 @@ function renderPending() {
   // The plan was answered elsewhere: the review sheet has nothing left to decide. An expired
   // plan can still be answered, so its sheet stays.
   if (planSheetRpc && !live.has(planSheetRpc)) {
-    const open = !$('#sheet').hidden && !!planSheetHead && sheetCur.heading === planSheetHead;
+    const open = sheetOpen() && !!planSheetHead && sheetCur.heading === planSheetHead;
     planSheetRpc = null;
     if (open) closeSheet();
   }
@@ -3476,13 +3805,19 @@ scrollEdges($('#feed'), $('#chatNav'), null);
 function segmented(options, value, onChange, label) {
   const group = h('div', { class: 'seg', role: 'radiogroup', 'aria-label': label || null });
   let current = value;
-  const buttons = options.map((o) => h('button', { type: 'button', role: 'radio', 'data-value': o.value }, o.label));
+  // data-label lets each label reserve its semibold width (style.css), so choosing never reflows.
+  const buttons = options.map((o) => h('button', { type: 'button', role: 'radio', 'data-value': o.value, 'data-label': o.label }, o.label));
+  // The thumb is the track's ::before: --seg-n sizes it, --seg-i says which label it sits under,
+  // and the stylesheet slides it there over 220ms.
+  const prop = (k, v) => { if (group.style && typeof group.style.setProperty === 'function') group.style.setProperty(k, v); };
+  prop('--seg-n', String(options.length));
   const paint = () => {
-    for (const b of buttons) {
+    buttons.forEach((b, i) => {
       const on = b.getAttribute('data-value') === String(current);
       b.setAttribute('aria-checked', String(on));
       b.tabIndex = on ? 0 : -1;
-    }
+      if (on) prop('--seg-i', String(i));
+    });
   };
   const pick = (v, focus) => {
     if (String(v) === String(current)) return;
@@ -3562,12 +3897,120 @@ function focusSheet() {
   if (typeof sheet.focus === 'function') sheet.focus({ preventScroll: true });
 }
 function setSheetInert(on) { $('#listView').inert = on; $('#chatView').inert = on; }
+
+// ----- Sheet motion -----
+// The sheet rises with a CSS animation (style.css). Everything after that is here: a drag that
+// follows the finger, the 220ms dismissal, the spring back, and a sheet caught while it is still
+// rising. Closing is logical at once (the stack, the inert views and focus are settled before the
+// sheet has left the screen) and visual over 220ms; `sheetClosing` covers that gap, so code that
+// asks whether a sheet is open asks sheetOpen(), not `hidden`.
+let sheetClosing = false;
+let sheetMotion = []; // the running sheet and scrim animations
+function sheetOpen() { return !$('#sheet').hidden && !sheetClosing; }
+// How far down the sheet is drawn right now: mid-rise, mid-drag, mid-spring or at rest. A
+// layout read, made once at the start of a gesture or a close, never per frame.
+function sheetOffset() {
+  const sheet = $('#sheet');
+  if (typeof getComputedStyle !== 'function') return 0;
+  const tf = getComputedStyle(sheet).transform;
+  if (!tf || tf === 'none') return 0;
+  try { if (typeof DOMMatrixReadOnly === 'function') return Math.max(0, new DOMMatrixReadOnly(tf).m42); } catch {}
+  const m = /matrix(3d)?\(([^)]+)\)/.exec(tf);
+  if (!m) return 0;
+  const v = m[2].split(',').map(Number);
+  return Math.max(0, (m[1] ? v[13] : v[5]) || 0);
+}
+function scrimOpacity() {
+  const scrim = $('#scrim');
+  if (typeof getComputedStyle !== 'function') return 1;
+  const o = Number(getComputedStyle(scrim).opacity);
+  return Number.isFinite(o) ? o : 1;
+}
+// Stop whatever is moving the sheet and leave it drawn where it is, held by inline style.
+function holdSheet() {
+  const sheet = $('#sheet'), scrim = $('#scrim');
+  const y = sheetOffset(), o = scrimOpacity();
+  for (const a of sheetMotion) { try { a.cancel(); } catch {} }
+  sheetMotion = [];
+  sheet.classList.add('held'); scrim.classList.add('held');
+  placeSheet(y, o);
+  return y;
+}
+function placeSheet(y, scrimO) {
+  const sheet = $('#sheet'), scrim = $('#scrim');
+  sheet.style.transform = y > 0 ? `translateY(${y}px)` : '';
+  scrim.style.opacity = scrimO >= 1 ? '' : String(Math.max(0, scrimO));
+}
+function releaseSheet() {
+  const sheet = $('#sheet'), scrim = $('#scrim');
+  for (const a of sheetMotion) { try { a.cancel(); } catch {} }
+  sheetMotion = [];
+  sheet.style.transform = ''; scrim.style.opacity = '';
+  // .held stays until the sheet is hidden: dropping it while shown would replay the rise.
+  if (sheet.hidden) { sheet.classList.remove('held'); scrim.classList.remove('held'); }
+}
+// Take the sheet off screen: 220ms down on the exit curve (a 120ms fade under Reduce Motion),
+// from wherever it is. `fromY` is the drag's own last offset when a drag let go of it.
+function hideSheet(fromY) {
+  const sheet = $('#sheet'), scrim = $('#scrim');
+  const gone = () => {
+    sheetClosing = false;
+    sheet.hidden = true; scrim.hidden = true; sheet.inert = false;
+    releaseSheet();
+  };
+  if (sheet.hidden || !canAnimate(sheet) || !canAnimate(scrim)) { gone(); return; }
+  const o = scrimOpacity();
+  const held = holdSheet();
+  const y = fromY == null ? held : fromY;
+  sheetClosing = true;
+  sheet.inert = true; // nothing in a leaving sheet can be focused or pressed
+  const at = `translateY(${y}px)`;
+  const opts = (ms, easing) => ({ duration: ms, easing, fill: 'forwards' });
+  sheetMotion = reducedMotion()
+    ? [sheet.animate([{ transform: at, opacity: 1 }, { transform: at, opacity: 0 }], opts(MOTION.fast, 'linear')),
+      scrim.animate([{ opacity: o }, { opacity: 0 }], opts(MOTION.fast, 'linear'))]
+    : [sheet.animate([{ transform: at }, { transform: 'translateY(100%)' }], opts(MOTION.base, MOTION.exit)),
+      scrim.animate([{ opacity: o }, { opacity: 0 }], opts(MOTION.base, MOTION.exit))];
+  sheetMotion[0].onfinish = gone;
+}
+// A closing sheet that is asked to open again stops leaving and opens fresh.
+function stopHidingSheet() {
+  if (!sheetClosing) return;
+  const sheet = $('#sheet'), scrim = $('#scrim');
+  sheetClosing = false;
+  sheet.hidden = true; scrim.hidden = true; sheet.inert = false;
+  releaseSheet();
+}
+// Back to the sheet's resting place: 320ms on the emphasized curve, like the rise it interrupted.
+function settleSheet(fromY) {
+  const sheet = $('#sheet'), scrim = $('#scrim');
+  const o = scrimOpacity();
+  if (!fromY || !canAnimate(sheet) || reducedMotion()) { releaseSheet(); return; }
+  placeSheet(0, 1);
+  const opts = { duration: MOTION.slow, easing: MOTION.emphasized };
+  sheetMotion = [sheet.animate([{ transform: `translateY(${fromY}px)` }, { transform: 'translateY(0)' }], opts),
+    scrim.animate([{ opacity: o }, { opacity: 1 }], opts)];
+  sheetMotion[0].onfinish = () => { sheetMotion = []; };
+}
+// A sub-sheet slides its title and body in from the right (Back: from the left), 220ms. The
+// title row's buttons and the footer change in place.
+function slideSheet(dir) {
+  const parts = [$('#sheetTitle'), $('#sheetBody')];
+  if (!parts.every(canAnimate)) return;
+  const reduce = reducedMotion();
+  const from = reduce ? { opacity: 0 } : { transform: `translateX(${dir === 'back' ? -24 : 24}px)`, opacity: 0 };
+  const to = reduce ? { opacity: 1 } : { transform: 'translateX(0)', opacity: 1 };
+  for (const el of parts) el.animate([from, to], { duration: reduce ? MOTION.fast : MOTION.base, easing: reduce ? 'linear' : MOTION.standard });
+}
+
 function openSheet(...kids) {
   const opts = kids.length && kids[0] && typeof kids[0] === 'object' && !kids[0].nodeType && !Array.isArray(kids[0]) ? kids.shift() : {};
   let nodes = kids.flat().filter((k) => k != null && k !== false);
   const sheet = $('#sheet');
   const heading = sheetHeading(nodes);
   const title = heading ? String(heading.textContent || '').trim() : '';
+  stopHidingSheet();
+  let slide = null;
   if (sheet.hidden) {
     sheetStack.length = 0;
     const a = document.activeElement;
@@ -3576,6 +4019,7 @@ function openSheet(...kids) {
     const back = sheetStack.findIndex((e) => e.title === title);
     if (back >= 0) sheetStack.length = back;
     else sheetStack.push(sheetSnapshot());
+    slide = back >= 0 ? 'back' : 'forward';
   }
   if (heading) nodes = nodes.filter((n) => n !== heading);
   let foot = [];
@@ -3589,20 +4033,25 @@ function openSheet(...kids) {
   const size = opts.size || (sheetHasField(nodes.concat(foot)) ? 'large' : 'medium');
   paintSheet({ title, heading, body: nodes, foot, size, scroll: 0, grouped: !!opts.grouped });
   $('#scrim').hidden = false; sheet.hidden = false;
+  if (slide) slideSheet(slide);
   setSheetInert(true);
   focusSheet();
 }
 // Back to the sheet below, exactly as it was left.
 function sheetBack() {
+  if (!sheetOpen()) return;
   const prev = sheetStack.pop();
   if (!prev) { closeSheet(); return; }
   paintSheet(prev);
+  slideSheet('back');
   focusSheet();
 }
-function closeSheet() {
+// `fromY`: where a drag let go of it, so the dismissal carries on from the finger.
+function closeSheet(fromY) {
   const sheet = $('#sheet');
-  const wasOpen = !sheet.hidden;
-  $('#scrim').hidden = true; sheet.hidden = true;
+  const wasOpen = sheetOpen();
+  if (!wasOpen) { if (sheet.hidden) $('#scrim').hidden = true; return; }
+  hideSheet(typeof fromY === 'number' ? fromY : null);
   sheetStack.length = 0;
   sheetCur = { title: '', heading: null };
   setSheetInert(false);
@@ -3622,7 +4071,7 @@ $('#sheetBack').addEventListener('click', sheetBack);
 const FOCUSABLE = 'button, [href], input:not([type="hidden"]), select, textarea, [tabindex]:not([tabindex="-1"])';
 document.addEventListener('keydown', (e) => {
   const sheet = $('#sheet');
-  if (sheet.hidden) return;
+  if (!sheetOpen()) return;
   if (e.key === 'Escape') { e.preventDefault(); closeSheet(); return; }
   if (e.key !== 'Tab' || typeof sheet.querySelectorAll !== 'function') return;
   // A focus trap: Tab and Shift-Tab wrap inside the sheet (the views behind are inert too).
@@ -3632,23 +4081,96 @@ document.addEventListener('keydown', (e) => {
   if (e.shiftKey && (a === first || a === sheet || !sheet.contains(a))) { e.preventDefault(); last.focus(); }
   else if (!e.shiftKey && (a === last || !sheet.contains(a))) { e.preventDefault(); first.focus(); }
 });
-// Swipe down on the sheet (from its header, or when its body is scrolled to the top) to dismiss.
+// Drag to dismiss. A drag starts on the header, or anywhere in the body when nothing under the
+// finger is scrolled away from its top; in the body it is claimed only once the finger has
+// moved 6px and mostly downward, so an upward or sideways move stays the body's (or a code
+// block's) own scroll. From then on the sheet follows the finger 1:1 from where it came down,
+// with resistance past 120px, and the scrim thins with it. Let go past 30% of the sheet's
+// height, or with a downward flick, and it leaves over 220ms; otherwise it springs back. A sheet
+// still rising can be caught: a finger anywhere on it stops it where it is, and a drag carries
+// on from there (let go without dragging and it carries on up). Under Reduce Motion the drag still follows the finger (it is the user's own
+// movement, and how a sheet is swiped away) but the exit is a fade and the return is
+// immediate. Touch for fingers; a mouse can drag the header.
 (() => {
-  const sheet = $('#sheet'), body = $('#sheetBody'); let y0 = null, dy = 0;
+  const sheet = $('#sheet');
+  const SLOP = 6, RESIST = 120, DISMISS = 0.3, FLICK = 0.5; // px, px, share of height, px/ms
+  let g = null; // the gesture: { x0, y0, base, h, claimed, y, samples, mouse }
+  const near = (n, sel) => (n && typeof n.closest === 'function' ? n.closest(sel) : null);
+  // Anything between the touch and the sheet that is scrolled down keeps the gesture.
+  const scrolledUnder = (n) => { for (; n && n !== sheet; n = n.parentNode) if (n.scrollTop > 0) return true; return false; };
+  // Is something (the rise, a spring, a fade) moving the sheet right now?
+  const moving = () => sheetMotion.length > 0 || (typeof sheet.getAnimations === 'function' && sheet.getAnimations().length > 0);
+  function begin(x, y, target, mouse) {
+    g = null;
+    if (!sheetOpen()) return;
+    const onHead = near(target, '.sheethead');
+    if (mouse && (!onHead || near(target, 'button'))) return;
+    if (!onHead && (near(target, 'input, textarea, select, [contenteditable]') || scrolledUnder(target))) return;
+    g = { x0: x, y0: y, base: 0, h: 1, claimed: false, moved: false, y: 0, samples: [], mouse };
+    // A finger that lands on the sheet while it is moving (still rising, or springing back)
+    // catches it there and then, rather than after the first few pixels of travel. Nothing in
+    // it can be mid-scroll yet, so there is no scroll to take the gesture from.
+    if (!mouse && moving()) claim();
+  }
+  function claim() {
+    g.claimed = true;
+    g.base = g.y = holdSheet();
+    const r = typeof sheet.getBoundingClientRect === 'function' ? sheet.getBoundingClientRect() : null;
+    g.h = Math.max(1, (r && r.height) || sheet.offsetHeight || 1); // a translate leaves the height alone
+  }
+  function track(y, t) {
+    // 1:1 from where the finger came down; past 120px (or past where a moving sheet was caught,
+    // if that is lower) it moves at half speed.
+    const raw = Math.max(0, g.base + (y - g.y0));
+    const limit = Math.max(RESIST, g.base);
+    g.y = raw <= limit ? raw : limit + (raw - limit) * 0.5;
+    g.samples.push({ t, y: g.y });
+    while (g.samples.length > 2 && t - g.samples[0].t > 100) g.samples.shift();
+    placeSheet(g.y, 1 - g.y / g.h);
+  }
+  function move(x, y, t, e) {
+    if (!g) return;
+    const dx = x - g.x0, dy = y - g.y0;
+    if (!g.moved) {
+      if (Math.abs(dx) < SLOP && Math.abs(dy) < SLOP) return; // still a tap: leave it to click
+      if (!g.claimed && (dy <= 0 || Math.abs(dx) > Math.abs(dy))) { g = null; return; } // the content's scroll, not ours
+      g.moved = true;
+      if (!g.claimed) claim();
+    }
+    if (e && e.cancelable) e.preventDefault(); // the body must not scroll under a drag
+    track(y, t);
+  }
+  function end(cancelled) {
+    const was = g; g = null;
+    if (!was || !was.claimed) return;
+    const s = was.samples, first = s[0], last = s[s.length - 1];
+    const v = first && last && last.t > first.t ? (last.y - first.y) / (last.t - first.t) : 0;
+    // A sheet caught mid-rise and let go without a drag carries on up: that was a touch, not a
+    // dismissal, however low it was caught.
+    const away = !cancelled && was.moved && v > -0.1 && (was.y > was.h * DISMISS || (v > FLICK && was.y > 16));
+    if (away) closeSheet(was.y); else settleSheet(was.y);
+  }
+  const now = (e) => (e && typeof e.timeStamp === 'number' ? e.timeStamp : Date.now());
   sheet.addEventListener('touchstart', (e) => {
-    const onHead = e.target && typeof e.target.closest === 'function' && e.target.closest('.sheethead');
-    y0 = onHead || body.scrollTop <= 0 ? e.touches[0].clientY : null; dy = 0;
+    if (!e.touches || e.touches.length !== 1) { if (g && g.claimed) end(true); g = null; return; }
+    begin(e.touches[0].clientX, e.touches[0].clientY, e.target, false);
   }, { passive: true });
+  // Not passive: once a drag has the gesture it must stop the body scrolling under it. Before
+  // that, and for every touch that is not a drag, it returns without a layout read.
   sheet.addEventListener('touchmove', (e) => {
-    if (y0 == null) return;
-    dy = e.touches[0].clientY - y0;
-    if (dy > 0) sheet.style.transform = `translateY(${dy}px)`;
-  }, { passive: true });
-  sheet.addEventListener('touchend', () => {
-    sheet.style.transform = '';
-    if (y0 != null && dy > 90) closeSheet();
-    y0 = null; dy = 0;
+    if (!g || g.mouse || !e.touches || !e.touches[0]) return;
+    move(e.touches[0].clientX, e.touches[0].clientY, now(e), e);
+  }, { passive: false });
+  sheet.addEventListener('touchend', () => { if (g && !g.mouse) end(false); }, { passive: true });
+  sheet.addEventListener('touchcancel', () => { if (g && !g.mouse) end(true); }, { passive: true });
+  sheet.addEventListener('pointerdown', (e) => {
+    if (e.pointerType !== 'mouse' || e.button !== 0) return;
+    begin(e.clientX, e.clientY, e.target, true);
+    if (g && typeof sheet.setPointerCapture === 'function') { try { sheet.setPointerCapture(e.pointerId); } catch {} }
   });
+  sheet.addEventListener('pointermove', (e) => { if (g && g.mouse) move(e.clientX, e.clientY, now(e), null); });
+  sheet.addEventListener('pointerup', () => { if (g && g.mouse) end(false); });
+  sheet.addEventListener('pointercancel', () => { if (g && g.mouse) end(true); });
 })();
 
 // ---------- Prompt templates ----------
@@ -3757,9 +4279,9 @@ function folderChoices(workspaces) {
 const untilde = (p) => (p.startsWith('~') ? home().replace(/\/$/, '') + p.slice(1) : p);
 
 $('#newBtn').onclick = async () => {
-  const path = h('input', { type: 'text', class: 'mono', autocapitalize: 'off', autocorrect: 'off', spellcheck: 'false' });
+  const path = h('input', { type: 'text', class: 'mono', id: 'newPath', autocapitalize: 'off', autocorrect: 'off', spellcheck: 'false' });
   const list = h('div', { class: 'folders' });
-  const preset = h('select', {});
+  const preset = h('select', { id: 'newPreset' });
   const go = h('button', { type: 'button', class: 'go' }, 'Start session');
   let touched = false;
   path.addEventListener('input', () => { touched = true; });
@@ -3789,8 +4311,8 @@ $('#newBtn').onclick = async () => {
     } catch (e) { toast('Cannot open folder: ' + e.message); }
   };
   openSheet(h('h3', {}, 'New session'),
-    h('label', {}, 'Folder'), path, list,
-    h('label', {}, 'Agent preset'), preset, go);
+    h('label', { for: 'newPath' }, 'Folder'), path, list,
+    h('label', { for: 'newPreset' }, 'Agent preset'), preset, go);
   let choices = folderChoices([]);
   showChoices(choices); if (choices[0]) select(choices[0].path);
   rpc('workspace.list', {}).then((v) => {
@@ -4397,6 +4919,14 @@ const isField = (el) => !!el && (el.tagName === 'TEXTAREA' || el.isContentEditab
 function fitViewport() {
   const vv = window.visualViewport, root = document.documentElement;
   if (!root || !root.classList) return;
+  // Large text: the user's iOS text size (or a browser zoom) leaves too little width for the
+  // 44pt controls and a readable field on one row. Say so with a class, and let style.css put
+  // the composer's field on its own row and let the nav title use what is left between the
+  // bars' buttons instead of trying to centre in a space that is no longer there.
+  let rootPx = 17;
+  try { if (typeof getComputedStyle === 'function') rootPx = parseFloat(getComputedStyle(root).fontSize) || 17; } catch {}
+  const widthPx = window.innerWidth || root.clientWidth || 390;
+  root.classList.toggle('type-large', widthPx / rootPx < 18);
   const standalone = navigator.standalone === true || (window.matchMedia && matchMedia('(display-mode: standalone)').matches);
   // Only a page drawn under the status bar (top inset > 0) has the iOS 26 shortfall;
   // with an opaque status bar the page starts below it and reaches the home indicator.
@@ -4478,7 +5008,7 @@ fitViewport();
   loadTunnelUrl().then((url) => {
     S.tunnelUrl = url;
     // The Settings page can be open before this local read finishes; add This device in place.
-    if (url && !$('#sheet').hidden && sheetCur.title === 'Settings') settingsSheet();
+    if (url && sheetOpen() && sheetCur.title === 'Settings') settingsSheet();
   });
   connect();
   await loadSessions();

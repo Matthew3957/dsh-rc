@@ -3,7 +3,8 @@
 // paint, so the saved theme is on <html data-theme> before anything is drawn. The colours
 // themselves live in style.css as token overrides; this file only picks one, remembers it and
 // keeps the iOS status-bar colour (the theme-color meta tags) in step with the page background.
-// Every theme follows the device's light or dark setting.
+// Every theme follows the device's light or dark setting. Why the status bar is the opaque
+// "default" style in every theme is noted beside its meta tag in index.html.
 (function () {
   const KEY = 'dsh-rc.theme';
   // `bg` is each theme's --bg, as [light, dark]; test/theme-contrast.test.mjs keeps them equal
