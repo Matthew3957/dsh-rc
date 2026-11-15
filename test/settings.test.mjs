@@ -288,6 +288,14 @@ test('Notifications: a switch that asks inside the tap, and puts itself back whe
   assert.equal(sw.disabled, true, 'blocked: only the browser’s settings can change it now');
 });
 
+test('Notifications: Send a test is a real button, so keyboards reach it and it can be disabled', async () => {
+  const t = harness();
+  await t.notificationsSheet();
+  const row = rowNamed(t, 'Send a test');
+  assert.ok(row, 'the test row');
+  assert.equal(String(row.tagName).toUpperCase(), 'BUTTON');
+});
+
 test('Notifications without push support: no switch to flip, and the reason', async () => {
   const t = harness();
   await t.notificationsSheet();
