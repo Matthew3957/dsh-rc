@@ -4146,7 +4146,14 @@ async function notificationsSheet() {
   const errSlot = h('div', { class: 'set-note-slot', 'aria-live': 'polite' });
   const testSlot = h('div', { class: 'set-note-slot' });
   const perm = h('span', { class: 'set-val' }, permissionLabel());
-  const testRow = setRow('Send a test', { tone: 'action', chevron: false });
+  // A real button, so it is reachable by keyboard and VoiceOver and its disabled state holds
+  // off a second send while the first is in flight.
+  const testRow = setRow('Send a test', { tone: 'action', chevron: false, onclick: async () => {
+    testRow.disabled = true; testSlot.replaceChildren();
+    try { await sendTestPush(); toast('Test notification sent'); }
+    catch (e) { testSlot.replaceChildren(setError('The test was not sent.', e.message)); }
+    finally { testRow.disabled = false; }
+  } });
   const testGroup = setGroup({ foot: 'Sends one notification to every device that has them on.' }, testRow);
   const iosSteps = isIOS() && !isStandalone();
   let busy = false;
@@ -4166,7 +4173,7 @@ async function notificationsSheet() {
   // Inside the change event, before any await: enablePush asks for permission first thing.
   sw.addEventListener('change', () => {
     const want = sw.checked;
-    busy = true; sw.disabled = true; errSlot.replaceChildren();
+    busy = true; sw.disabled = true; errSlot.replaceChildren(); testSlot.replaceChildren();
     state.textContent = want ? 'Turning on… approve the browser’s prompt.' : 'Turning off…';
     (want ? enablePush() : disablePush()).then(() => {
       busy = false; paint(want ? 'on' : 'off');
@@ -4180,12 +4187,6 @@ async function notificationsSheet() {
         e.message));
     });
   });
-  testRow.onclick = async () => {
-    testRow.disabled = true; testSlot.replaceChildren();
-    try { await sendTestPush(); toast('Test notification sent'); }
-    catch (e) { testSlot.replaceChildren(setError('The test was not sent.', e.message)); }
-    finally { testRow.disabled = false; }
-  };
   const steps = iosSteps ? setGroup({ head: 'On iPhone and iPad', foot: 'iOS 16.4 or newer, over HTTPS. Notifications only reach a web app opened from the Home Screen.' },
     h('ol', { class: 'set-steps' },
       h('li', {}, 'In Safari, tap Share.'),
