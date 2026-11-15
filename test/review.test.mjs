@@ -657,3 +657,17 @@ test('dsh 0.1: the same cards render from the view the server attaches', async (
   assert.match(textOf(byClass(t.R.tools.get('t1').el, 'detail')[0]), /✓Report/);
 });
 
+
+test('a running turn keeps narration before a tool call out of the answer', async () => {
+  const t = await openWith([ev(1, 'turn/start', { turn: 1 }), assistant(2, [prose('Looking at the handler first.')]), toolCall(3, 'b', 'bash', { command: 'true' }, bashCall('true'))]);
+  const turn = byClass(t.el('#msgs'), 'transcript-turn')[0];
+  assert.equal(byClass(turn, 'turn-answer').length, 0);
+  assert.match(byClass(turn, 'act-text')[0].innerHTML, /Looking at the handler first/);
+});
+
+test('a command that never reported a result is not marked done', async () => {
+  const t = await openWith([ev(1, 'turn/start', { turn: 1 }), toolCall(2, 'n', 'bash', { command: 'sleep 9' }, bashCall('sleep 9')), ev(3, 'turn/end', { turn: 1, reason: { kind: 'aborted' } })]);
+  const row = t.R.tools.get('n').el;
+  assert.equal(byClass(row, 'done').length, 0);
+  assert.ok(byClass(row, 'idle').length);
+});
