@@ -155,6 +155,8 @@ export async function startDemoDsh({ port = 0, now = Date.now() } = {}) {
     'session.prompt': () => ok({ accepted: true }),
     'session.cancel': () => ok({ accepted: true }),
     'session.updateQueue': () => ok({ accepted: true }),
+    // The New session sheet's preset list: the one preset every demo session uses.
+    'agentPreset.list': () => ok({ presets: [{ id: 'standard', name: 'Standard', isDefault: true }] }),
     'commands/list': () => ok([]),
     'fileReferences/list': () => ok([]),
   };

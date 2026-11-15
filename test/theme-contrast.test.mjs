@@ -82,6 +82,8 @@ function textPairs(p) {
   // surface (bg2), whose text pairs are already covered above.
   pairs.push(['sheet Done, Back and plain buttons (accent on card)', c('accent'), c('card')]);
   pairs.push(['segmented label on its track (fg on bg2)', c('fg'), c('bg2')], ['segmented label on its thumb (fg on card)', c('fg'), c('card')]);
+  // PR 7: the chosen label sits on the sliding thumb in the accent.
+  pairs.push(['segmented: chosen label on the thumb (accent on card)', c('accent'), c('card')]);
   pairs.push(['offline banner (fg on card)', c('fg'), c('card')]);
   // The board (PR 3). Rows sit on the page; a pressed row fills with bg2. Named so the default
   // theme's exemptions above never apply: these must pass on their own in every theme.

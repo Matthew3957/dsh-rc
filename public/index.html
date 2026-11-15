@@ -7,6 +7,14 @@
 <meta name="theme-color" content="#f6f7f8" media="(prefers-color-scheme: light)">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
+<!-- iOS home-screen status bar: "default", an opaque bar the page starts below, chosen for every
+     theme and both schemes. The two theme-color metas above always equal the page background
+     (theme.js sets them to the active theme's --bg, light and dark; test/theme-contrast.test.mjs
+     keeps theme.js equal to style.css), so where iOS paints the bar from theme-color it reads as
+     part of the page, and where it does not the bar is the system's plain light or dark one,
+     which still follows the scheme. "black-translucent" would draw the page under the bar: fine
+     on a dark page, but white status text over a light one, and in iOS 26 home-screen apps it
+     leaves the page one bar short of the bottom (WebKit bug 301108). Keep "default". -->
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
 <meta name="apple-mobile-web-app-title" content="dsh">
 <title>dsh-rc</title>
@@ -146,6 +154,8 @@
     <div id="sheetFoot" class="sheetfoot" hidden></div>
   </div>
   <div id="toast" role="status" aria-live="polite" hidden></div>
+  <!-- Screen reader announcements: a turn that just ended, a decision that just arrived. -->
+  <div id="announce" class="vh" role="status" aria-live="polite" aria-atomic="true"></div>
 </div>
 </body>
 </html>
