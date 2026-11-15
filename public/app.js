@@ -21,7 +21,7 @@ function h(tag, attrs = {}, ...kids) {
   return el;
 }
 
-function toast(msg, ms = 2600) {
+function toast(msg, ms = 2400) {
   const t = $('#toast');
   t.textContent = msg; t.hidden = false;
   clearTimeout(toast._t); toast._t = setTimeout(() => { t.hidden = true; }, ms);
@@ -177,7 +177,7 @@ function setTitle(id, t) {
   if (!t || typeof t !== 'string') return;
   if (S.titles.get(id) === t) return;
   S.titles.set(id, t); saveTitles();
-  if (S.cur && S.cur.id === id) $('#title').textContent = t;
+  if (S.cur && S.cur.id === id) setNavTitle(t);
   if (!$('#listView').hidden && !S.searchMode) renderList();
 }
 function titleFromProjection(v) {
@@ -416,9 +416,23 @@ function fmtUsd(n) {
 }
 
 // ---------- Connection ----------
+// Losing the socket shows a "Reconnecting…" banner under each view's bar; the list stays
+// readable. When the socket returns the banner fades out, with no toast. #app carries the
+// state as data-conn for the screenshot harness and anything else that needs to wait for it.
+let connFade = null;
 function setConn(up) {
   S.conn.up = up;
-  document.querySelectorAll('.conn').forEach((d) => d.classList.toggle('on', up));
+  $('#app').setAttribute('data-conn', up ? 'up' : 'down');
+  clearTimeout(connFade);
+  const banners = [...document.querySelectorAll('.conn-banner')];
+  if (!up) {
+    for (const b of banners) { b.classList.remove('out'); b.hidden = false; }
+    return;
+  }
+  const shown = banners.filter((b) => !b.hidden);
+  if (!shown.length) return;
+  for (const b of shown) b.classList.add('out');
+  connFade = setTimeout(() => { for (const b of shown) { b.hidden = true; b.classList.remove('out'); } }, 240);
 }
 function openWS(path, onFrame) {
   const ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + path);
@@ -757,23 +771,25 @@ function sessState(id) {
   return isUnread(id) ? 'unread' : 'idle';
 }
 const kindOf = (state) => state.split(' ')[0];
-// Small original line glyphs; currentColor, so each state colours them.
-const GLYPHS = {
-  approve: '<path d="M5.5 8.5V3.8a1 1 0 0 1 2 0V7.5M7.5 7V2.8a1 1 0 0 1 2 0V7.5M9.5 7.5V3.8a1 1 0 0 1 2 0v4.2M11.5 8V6a1 1 0 0 1 2 0v3.6a5 5 0 0 1-5 5 4.6 4.6 0 0 1-3.8-2L2.6 10a1 1 0 0 1 1.6-1.2l1.3 1.3V8.5"/>',
-  ask: '<path d="M3 3.5h10a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1H8l-3 2.5v-2.5H3a1 1 0 0 1-1-1v-6a1 1 0 0 1 1-1z"/><path d="M6.6 6.2a1.5 1.5 0 1 1 2.1 1.4c-.4.2-.7.5-.7.9v.2"/><circle cx="8" cy="10" r=".2"/>',
-  error: '<circle cx="8" cy="8" r="6.2"/><path d="M8 4.8v3.8"/><circle cx="8" cy="11" r=".2"/>',
-};
-function glyphEl(state) {
-  const k = state === 'wait approve' ? 'approve' : state === 'wait ask' ? 'ask' : kindOf(state);
-  const span = h('span', { class: 'glyph ' + state, 'aria-hidden': 'true' });
-  if (GLYPHS[k] && typeof document.createElementNS === 'function') {
-    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-    svg.setAttribute('viewBox', '0 0 16 16');
-    // Static, trusted markup defined above: no data reaches innerHTML here.
-    svg.innerHTML = GLYPHS[k];
-    span.append(svg);
-  }
-  return span;
+// ---------- Status glyphs ----------
+// One 16px vocabulary for the session list, tools, jobs and subagents, drawn by style.css with
+// the same shape in every theme. Callers name what they know; these maps turn it into a glyph.
+const GLYPH_STATES = ['idle', 'run', 'approve', 'ask', 'unread', 'done', 'failed', 'stopping', 'stopped'];
+// extra: role classes the layout and tests hook on (run-dot, jdot, adot, bullet).
+function statusGlyph(state, extra) {
+  const g = GLYPH_STATES.includes(state) ? state : 'idle';
+  return h('span', { class: 'glyph ' + g + (extra ? ' ' + extra : ''), 'aria-hidden': 'true' });
+}
+// A session row's state (sessState) to its glyph.
+const SESSION_GLYPH = { 'wait approve': 'approve', 'wait ask': 'ask', run: 'run', error: 'failed', unread: 'unread', idle: 'idle' };
+function glyphEl(state) { return statusGlyph(SESSION_GLYPH[state] || 'idle'); }
+// A background job's status (dsh's JobView) to its glyph: killed and cancelled ended by request.
+function jobGlyph(status) {
+  return { running: 'run', completed: 'done', failed: 'failed', killed: 'stopped', cancelled: 'stopped', stopping: 'stopping' }[status] || 'idle';
+}
+// A plugin or scheduled prompt's dot: on is healthy, late wants attention, off is switched off.
+function itemGlyph(st) {
+  return { on: 'done', failed: 'failed', late: 'stopping', off: 'stopped' }[st] || 'idle';
 }
 // One row: a status glyph, the title, and one muted line (state, age, folder).
 function sessRow(s, snippet) {
@@ -791,7 +807,8 @@ function sessRow(s, snippet) {
     glyphEl(state),
     h('div', { class: 'main' },
       h('div', { class: 't' + (t ? '' : ' untitled') }, t || folder || 'Untitled'),
-      snippet ? h('div', { class: 'snip' }, snippet) : h('div', { class: 'm' }, sub.filter(Boolean).join(' · '))));
+      snippet ? h('div', { class: 'snip' }, snippet) : h('div', { class: 'm' }, sub.filter(Boolean).join(' · '))),
+    h('span', { class: 'sess-chev', 'aria-hidden': 'true' }, '›'));
 }
 const FILTERS = { all: 'All sessions', running: 'Running', waiting: 'Waiting for you', unread: 'Unread' };
 const FILTER_KIND = { running: 'run', waiting: 'wait', unread: 'unread' };
@@ -808,6 +825,7 @@ function renderList() {
   ul.replaceChildren(...(rows.length ? rows : [h('li', { class: 'empty' }, none)]));
   $('#moreBtn').hidden = all.length <= S.shown;
   $('#filterBtn').classList.toggle('active', S.filter !== 'all');
+  $('#filterBtn').setAttribute('aria-pressed', String(S.filter !== 'all'));
   paintBanner();
 }
 // Approvals and questions change a row's glyph as well as the banner.
@@ -1054,7 +1072,7 @@ const R = {
       }
       delta = deltaEl(adds, dels);
     }
-    const summary = h('summary', {}, h('span', { class: 'bullet' }, '⏺'), h('span', { class: 'name' }, prettyTool(t.name)), h('span', { class: 'sum' }, sum), stat ? h('span', { class: 'stat' }, stat) : null, delta);
+    const summary = h('summary', {}, statusGlyph(t.done ? (t.isError ? 'failed' : 'done') : (t.orphan ? 'idle' : 'run'), 'bullet'), h('span', { class: 'name' }, prettyTool(t.name)), h('span', { class: 'sum' }, sum), stat ? h('span', { class: 'stat' }, stat) : null, delta);
     const res = t.done && resLine ? h('div', { class: 'res' }, resLine) : null;
     t.el.replaceChildren(...[summary, res, detail].filter(Boolean));
     // Build detail lazily when opened (keeps long histories fast)
@@ -1204,8 +1222,7 @@ async function openSession(id, { push = true } = {}) {
   $('#listView').hidden = true; $('#chatView').hidden = false;
   stopDashTick(); // the dashboard is off screen while a chat is open
   const m = sessionMeta(id);
-  $('#title').textContent = S.titles.get(id) || basename(m.cwd) || 'Session';
-  $('#subtitle').textContent = [tildify(m.cwd), m.agentPreset].filter(Boolean).join(' · ');
+  setNavTitle(S.titles.get(id) || basename(m.cwd) || 'Session', [tildify(m.cwd), m.agentPreset].filter(Boolean).join(' · '));
   R.reset(); pinned = true;
   renderRunning(); renderPending(); renderQueue();
   // Start collapsed and empty: the previous session's line must not linger over
@@ -2025,7 +2042,7 @@ function jobRow(j, sessionId) {
     ? h('button', { class: 'jlabel jtoggle', type: 'button', title: j.label || '', 'aria-expanded': String(expanded), onclick: () => toggleJobOutput(sessionId, j) }, j.label || '')
     : h('span', { class: 'jlabel', title: j.label || '' }, j.label || '');
   const row = h('div', { class: 'run-job' },
-    h('span', { class: 'jdot ' + String(j.status || '') }),
+    statusGlyph(jobGlyph(j.status), 'jdot'),
     h('span', { class: 'jkind' }, j.kind || 'job'),
     label);
   if (live && typeof j.startedAt === 'number') row.append(h('span', { class: 'jtime', 'data-since': String(j.startedAt) }, fmtElapsed(Date.now() - j.startedAt)));
@@ -2046,11 +2063,11 @@ function agentRow({ e, depth, parent }) {
   const row = h('div', { class: 'run-agent' });
   row.style.setProperty('--depth', String(depth));
   if (e.kind === 'diagnostic') {
-    row.append(h('span', { class: 'adot' }), h('span', { class: 'aname' }, e.id || 'subagent'), h('span', { class: 'afail' }, e.reason || 'unavailable'));
+    row.append(statusGlyph('failed', 'adot'), h('span', { class: 'aname' }, e.id || 'subagent'), h('span', { class: 'afail' }, e.reason || 'unavailable'));
     return row;
   }
   const live = agentLive(e, parent);
-  row.append(h('span', { class: 'adot ' + (live ? 'running' : 'settled') }));
+  row.append(statusGlyph(live ? 'run' : 'done', 'adot'));
   row.append(h('span', { class: 'aname', title: e.id || '' }, e.label || e.name || e.id || 'subagent'));
   if (e.mode) row.append(h('span', { class: 'amode' }, e.mode));
   const t = agentTiming(e);
@@ -2271,7 +2288,7 @@ function sessionCard(s) {
   const start = running ? sessionStart(id) : null;
   const title = S.titles.get(id) || basename(s.cwd) || 'Session';
   const top = h('button', { class: 'run-top', type: 'button', 'aria-label': 'Open ' + title, onclick: () => openSession(id) },
-    h('span', { class: 'run-dot' + (running ? '' : ' idle') }),
+    statusGlyph(running ? 'run' : 'idle', 'run-dot'),
     h('span', { class: 'run-name' }, title),
     running && typeof start === 'number' ? h('span', { class: 'run-elapsed', 'data-since': String(start) }, fmtElapsed(Date.now() - start)) : null);
 
@@ -2850,20 +2867,197 @@ function dictateStop() {
 micBtn.addEventListener('click', () => { dictation.listening ? dictateStop() : dictateStart(); });
 dictatePaint();
 
-// ---------- Sheets ----------
-function openSheet(...kids) {
-  $('#sheetBody').replaceChildren(...kids.flat().filter((k) => k != null && k !== false));
-  $('#sheet').scrollTop = 0;
-  $('#scrim').hidden = false; $('#sheet').hidden = false;
+// ---------- Shell: nav title, scroll edges, segmented control ----------
+// The chat bar's centred title and its one-line subtitle; a blank subtitle hides the line.
+// Either can be left undefined to keep what is there.
+function setNavTitle(title, subtitle) {
+  if (title !== undefined) $('#title').textContent = title;
+  if (subtitle !== undefined) $('#subtitle').textContent = subtitle || '';
 }
-function closeSheet() { $('#scrim').hidden = true; $('#sheet').hidden = true; }
+// A bar's hairline shows only while content sits under it. A 1px sentinel at each end of the
+// scroller says when that is, so no scroll handler has to read layout.
+function scrollEdges(scroller, top, bottom) {
+  if (typeof IntersectionObserver !== 'function' || !scroller) return;
+  const mark = () => h('div', { class: 'edge-sentinel', 'aria-hidden': 'true' });
+  const head = mark(), foot = bottom ? mark() : null;
+  scroller.prepend(head);
+  if (foot) scroller.append(foot);
+  const io = new IntersectionObserver((entries) => {
+    for (const e of entries) {
+      const bar = e.target === head ? top : bottom;
+      if (bar) bar.classList.toggle('edge', !e.isIntersecting);
+    }
+  }, { root: scroller });
+  io.observe(head);
+  if (foot) io.observe(foot);
+}
+scrollEdges($('#listScroll'), $('#listNav'), $('#listDock'));
+scrollEdges($('#feed'), $('#chatNav'), null);
+// Segmented control: options [{ value, label }], the current value and onChange(value). A
+// radiogroup, so a screen reader announces it as one choice and the arrow keys move it.
+function segmented(options, value, onChange, label) {
+  const group = h('div', { class: 'seg', role: 'radiogroup', 'aria-label': label || null });
+  let current = value;
+  const buttons = options.map((o) => h('button', { type: 'button', role: 'radio', 'data-value': o.value }, o.label));
+  const paint = () => {
+    for (const b of buttons) {
+      const on = b.getAttribute('data-value') === String(current);
+      b.setAttribute('aria-checked', String(on));
+      b.tabIndex = on ? 0 : -1;
+    }
+  };
+  const pick = (v, focus) => {
+    if (String(v) === String(current)) return;
+    current = v; paint();
+    if (focus) { const b = buttons.find((x) => x.getAttribute('data-value') === String(v)); if (b) b.focus(); }
+    if (onChange) onChange(v);
+  };
+  buttons.forEach((b, i) => {
+    b.addEventListener('click', () => pick(options[i].value));
+    b.addEventListener('keydown', (e) => {
+      const step = e.key === 'ArrowRight' || e.key === 'ArrowDown' ? 1 : e.key === 'ArrowLeft' || e.key === 'ArrowUp' ? -1 : 0;
+      if (!step) return;
+      e.preventDefault();
+      pick(options[(i + step + options.length) % options.length].value, true);
+    });
+  });
+  group.append(...buttons);
+  paint();
+  group.segValue = () => current;
+  return group;
+}
+
+// ---------- Sheets ----------
+// One shell (index.html #sheet): a grabber, a title row, a scrolling body and a footer.
+// openSheet(...kids) fills it. A leading <h3> (or the first child of a leading wrapper) becomes
+// the title; a primary `.go` button, with the buttons right after it, moves to the footer; a
+// sheet with a field opens large, others medium. An options object first overrides:
+// { size: 'medium' | 'large', replace: true }.
+// While a sheet is open, opening one with another title pushes it: the title row shows Back,
+// which returns to the one below as it was. Opening the same title again (a reload or a
+// redraw) replaces it in place, and opening a title already in the stack goes back to it.
+// The sheet traps focus while open and hands it back to whatever opened it.
+const sheetStack = [];
+let sheetCur = { title: '', heading: null };
+let sheetReturn = null;
+const isEl = (n) => !!n && n.nodeType === 1;
+const hasClass = (n, c) => isEl(n) && String(n.className || '').split(/\s+/).includes(c);
+function sheetHeading(nodes) {
+  const first = nodes.find(isEl);
+  if (!first) return null;
+  if (first.tagName === 'H3') return first;
+  const inner = [...(first.childNodes || [])].find(isEl);
+  return inner && inner.tagName === 'H3' ? inner : null;
+}
+function sheetHasField(nodes) {
+  return nodes.some((n) => isEl(n) && ((typeof n.matches === 'function' && n.matches('input, textarea, select'))
+    || (typeof n.querySelector === 'function' && n.querySelector('input, textarea, select'))));
+}
+function paintSheet(st) {
+  const sheet = $('#sheet'), body = $('#sheetBody'), foot = $('#sheetFoot');
+  $('#sheetTitle').replaceChildren(...(st.heading ? [st.heading] : []));
+  body.replaceChildren(...st.body);
+  foot.replaceChildren(...st.foot);
+  foot.hidden = !st.foot.length;
+  sheet.setAttribute('data-size', st.size);
+  // A footer with a primary action makes this a form: the way out is Cancel, not Done.
+  $('#sheetClose').textContent = st.foot.some((n) => hasClass(n, 'go')) ? 'Cancel' : 'Done';
+  $('#sheetBack').hidden = !sheetStack.length;
+  body.scrollTop = st.scroll || 0;
+  sheetCur = { title: st.title, heading: st.heading };
+}
+function sheetSnapshot() {
+  const sheet = $('#sheet'), body = $('#sheetBody');
+  return {
+    title: sheetCur.title, heading: sheetCur.heading,
+    body: [...(body.childNodes || [])], foot: [...($('#sheetFoot').childNodes || [])],
+    size: sheet.getAttribute('data-size') || 'medium', scroll: body.scrollTop,
+  };
+}
+// Keep focus in the sheet: on the sheet itself unless something inside already has it.
+function focusSheet() {
+  const sheet = $('#sheet'), a = document.activeElement;
+  if (a && a !== sheet && typeof sheet.contains === 'function' && sheet.contains(a)) return;
+  if (typeof sheet.focus === 'function') sheet.focus({ preventScroll: true });
+}
+function setSheetInert(on) { $('#listView').inert = on; $('#chatView').inert = on; }
+function openSheet(...kids) {
+  const opts = kids.length && kids[0] && typeof kids[0] === 'object' && !kids[0].nodeType && !Array.isArray(kids[0]) ? kids.shift() : {};
+  let nodes = kids.flat().filter((k) => k != null && k !== false);
+  const sheet = $('#sheet');
+  const heading = sheetHeading(nodes);
+  const title = heading ? String(heading.textContent || '').trim() : '';
+  if (sheet.hidden) {
+    sheetStack.length = 0;
+    const a = document.activeElement;
+    sheetReturn = a && a !== document.body ? a : null;
+  } else if (!opts.replace && title !== sheetCur.title) {
+    const back = sheetStack.findIndex((e) => e.title === title);
+    if (back >= 0) sheetStack.length = back;
+    else sheetStack.push(sheetSnapshot());
+  }
+  if (heading) nodes = nodes.filter((n) => n !== heading);
+  let foot = [];
+  const go = nodes.findIndex((n) => hasClass(n, 'go'));
+  if (go >= 0) {
+    let end = go + 1;
+    while (end < nodes.length && isEl(nodes[end]) && nodes[end].tagName === 'BUTTON') end++;
+    foot = nodes.slice(go, end);
+    nodes = nodes.slice(0, go).concat(nodes.slice(end));
+  }
+  const size = opts.size || (sheetHasField(nodes.concat(foot)) ? 'large' : 'medium');
+  paintSheet({ title, heading, body: nodes, foot, size, scroll: 0 });
+  $('#scrim').hidden = false; sheet.hidden = false;
+  setSheetInert(true);
+  focusSheet();
+}
+// Back to the sheet below, exactly as it was left.
+function sheetBack() {
+  const prev = sheetStack.pop();
+  if (!prev) { closeSheet(); return; }
+  paintSheet(prev);
+  focusSheet();
+}
+function closeSheet() {
+  const sheet = $('#sheet');
+  const wasOpen = !sheet.hidden;
+  $('#scrim').hidden = true; sheet.hidden = true;
+  sheetStack.length = 0;
+  sheetCur = { title: '', heading: null };
+  setSheetInert(false);
+  const back = sheetReturn;
+  sheetReturn = null;
+  if (!wasOpen || !back || !back.isConnected || typeof back.focus !== 'function') return;
+  // Hand focus back to whatever opened the sheet, even a text field: a sheet is a modal detour,
+  // and the plan requires focus to return to the trigger. Returning to an editor may raise the
+  // iOS keyboard again, which is the browser's native behaviour and the right one here.
+  const a = document.activeElement;
+  const lost = !a || a === document.body || (typeof sheet.contains === 'function' && sheet.contains(a));
+  if (lost) back.focus({ preventScroll: true });
+}
 $('#scrim').addEventListener('click', closeSheet);
 $('#sheetClose').addEventListener('click', closeSheet);
-document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !$('#sheet').hidden) closeSheet(); });
-// Swipe down on the sheet (when scrolled to top) to dismiss.
+$('#sheetBack').addEventListener('click', sheetBack);
+const FOCUSABLE = 'button, [href], input:not([type="hidden"]), select, textarea, [tabindex]:not([tabindex="-1"])';
+document.addEventListener('keydown', (e) => {
+  const sheet = $('#sheet');
+  if (sheet.hidden) return;
+  if (e.key === 'Escape') { e.preventDefault(); closeSheet(); return; }
+  if (e.key !== 'Tab' || typeof sheet.querySelectorAll !== 'function') return;
+  // A focus trap: Tab and Shift-Tab wrap inside the sheet (the views behind are inert too).
+  const items = [...sheet.querySelectorAll(FOCUSABLE)].filter((el) => !el.disabled && el.getClientRects().length);
+  if (!items.length) { e.preventDefault(); sheet.focus(); return; }
+  const first = items[0], last = items[items.length - 1], a = document.activeElement;
+  if (e.shiftKey && (a === first || a === sheet || !sheet.contains(a))) { e.preventDefault(); last.focus(); }
+  else if (!e.shiftKey && (a === last || !sheet.contains(a))) { e.preventDefault(); first.focus(); }
+});
+// Swipe down on the sheet (from its header, or when its body is scrolled to the top) to dismiss.
 (() => {
-  const sheet = $('#sheet'); let y0 = null, dy = 0;
-  sheet.addEventListener('touchstart', (e) => { y0 = sheet.scrollTop <= 0 ? e.touches[0].clientY : null; dy = 0; }, { passive: true });
+  const sheet = $('#sheet'), body = $('#sheetBody'); let y0 = null, dy = 0;
+  sheet.addEventListener('touchstart', (e) => {
+    const onHead = e.target && typeof e.target.closest === 'function' && e.target.closest('.sheethead');
+    y0 = onHead || body.scrollTop <= 0 ? e.touches[0].clientY : null; dy = 0;
+  }, { passive: true });
   sheet.addEventListener('touchmove', (e) => {
     if (y0 == null) return;
     dy = e.touches[0].clientY - y0;
@@ -3089,7 +3283,7 @@ async function pluginsSheet() {
   const row = (e, label) => {
     const st = state(e);
     return h('div', { class: 'plug' },
-      h('span', { class: 'pdot ' + st }),
+      statusGlyph(itemGlyph(st), 'pdot'),
       h('div', { class: 'pmain' }, h('b', {}, label || name(e)),
         e.description ? h('small', { class: 'pdesc' }, e.description) : (e.moduleName ? h('small', {}, e.moduleName) : null)),
       h('span', { class: 'pstate ' + st }, st));
@@ -3115,7 +3309,7 @@ async function pluginsSheet() {
     const st = p.broken || p.failed ? 'failed' : 'on';
     const detail = p.broken || `${p.rows.length} plugin${p.rows.length === 1 ? '' : 's'}${p.failed ? `, ${p.failed} failed` : ''}`;
     return h('div', { class: 'plug' },
-      h('span', { class: 'pdot ' + st }),
+      statusGlyph(itemGlyph(st), 'pdot'),
       h('div', { class: 'pmain' }, h('b', {}, p.name + (p.isDefault ? ' · default' : '')), h('small', { class: 'pdesc' }, detail)),
       h('span', { class: 'pstate ' + st }, p.broken ? 'broken' : (p.failed ? `${p.failed} failed` : '')));
   };

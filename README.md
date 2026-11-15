@@ -476,12 +476,19 @@ The longest prefix wins and an override beats the shipped table. It is saved in 
 
 ## Session list
 
-The main screen is kept quiet. The header has a menu button (notifications, plugins and
+The main screen is kept quiet. The bar at the top has a menu button (notifications, plugins and
 connectors, the tunnel QR code while `--tunnel` runs, the full dsh web UI) and a view button that
-filters the list to running sessions or sessions waiting for you. Each session is one row: a
-status glyph (spinner while working, amber while it waits for an approval or answer, a hollow
-ring when idle), the title, and one muted line with the state, age and folder. Search and
-**New session** float at the bottom; the round button opens a search field in place.
+filters the list to running sessions or sessions waiting for you; a dot on it says a filter is on.
+Each session is one row: a status glyph, the title, and one muted line with the state, age and
+folder. The bar at the bottom holds search and **New session**; search opens a field in the same
+bar, and Cancel puts it away. If the connection to dsh drops, a "Reconnecting…" banner sits under
+the top bar until it is back; the list stays readable meanwhile.
+
+The status glyphs are one set, used for sessions, tool calls, background jobs and subagents, and
+drawn the same way in every theme, so no state relies on colour alone: a hollow ring for idle, a
+spinner for working, an amber disc with `!` for an approval and with `?` for a question, a filled
+dot for unread, a tick for done, a cross for failed, a triangle while stopping and a square once
+stopped.
 
 ## Running now
 
@@ -515,7 +522,7 @@ say `external` and nothing more. Claude Code writes its own transcript as it wor
 can read it and show the last few tool calls and lines of text under the run's row
 (`Bash: npm test`, `Read: public/app.js`, `Grep: foo in server`), updating every few seconds
 while the card is open. A transcript written in the last five minutes also marks the run as
-working: its dot stays live and its parent stays in Running now after the parent's turn ends,
+working: its glyph keeps spinning and its parent stays in Running now after the parent's turn ends,
 whether or not the card is expanded.
 
 Point dsh-rc at the same config dir the provider uses. If your dsh profile sets
@@ -566,6 +573,10 @@ npm run screenshots
 
 The output is byte-identical between runs. Edit the fixtures, rerun, and commit the new images.
 Keep each image under around 250 KB, and never point this at a real instance.
+
+The committed set is the default theme in the dark scheme. To review another theme or the light
+scheme, add `--scheme light|dark` and `--theme <id>` (one of the ids in `public/theme.js`) and
+write somewhere outside the repo with `--out`; those images are for review, not for committing.
 
 ## Roadmap
 

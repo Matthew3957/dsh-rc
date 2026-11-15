@@ -32,11 +32,19 @@
 
   <!-- Session list -->
   <section id="listView" class="view">
-    <header class="bar listbar">
-      <button id="menuListBtn" class="icon round-btn" aria-label="Menu" title="Menu"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M4 7h16M4 12h11M4 17h16"/></svg></button>
-      <h1 class="listtitle">Sessions<span class="conn dot" title="connection"></span></h1>
-      <button id="filterBtn" class="icon round-btn" aria-label="View" title="View" aria-haspopup="dialog"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M4 7h10M18 7h2M4 17h2M10 17h10"/><circle cx="16" cy="7" r="2"/><circle cx="8" cy="17" r="2"/></svg></button>
+    <header class="nav" id="listNav">
+      <div class="nav-lead">
+        <button id="menuListBtn" class="navbtn" type="button" aria-label="Menu" title="Menu" aria-haspopup="dialog"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16"/></svg></button>
+      </div>
+      <h1 class="nav-title listtitle" id="listTitle">Sessions</h1>
+      <div class="nav-trail">
+        <button id="filterBtn" class="navbtn" type="button" aria-label="View" title="View" aria-haspopup="dialog" aria-pressed="false"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h9M17 7h3M4 17h3M11 17h9"/><circle cx="15" cy="7" r="2"/><circle cx="9" cy="17" r="2"/></svg></button>
+      </div>
     </header>
+    <!-- Banner slot: conditions that last (offline) sit here, under the bar, not in a toast. -->
+    <div class="banner-slot">
+      <div class="banner offline conn-banner" role="status" hidden><span class="glyph run" aria-hidden="true"></span><span>Reconnecting…</span></div>
+    </div>
     <div id="listScroll" class="listscroll">
       <div id="pendingGlobal"></div>
       <div id="api403"></div>
@@ -44,40 +52,45 @@
            A quiet one-line row, folded by default; tapping it opens the cards. -->
       <section id="running" class="running" hidden aria-label="Running now">
         <button id="runningHead" class="running-head" type="button" aria-expanded="false" aria-controls="runningCards">
-          <span class="running-dot" aria-hidden="true"></span>
           <span class="running-label">Running now</span>
           <span id="runningCount" class="running-count"></span>
-          <span class="running-caret" aria-hidden="true">▾</span>
+          <svg class="ico running-caret" viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
         </button>
         <div id="runningCards" class="running-cards" hidden></div>
       </section>
       <ul id="sessions" class="sessions"></ul>
-      <button id="moreBtn" class="ghost wide" hidden>Show more</button>
+      <button id="moreBtn" class="btn btn-plain wide" type="button" hidden>Show more</button>
     </div>
-    <!-- Floating actions. Search opens into the same strip instead of a permanent bar. -->
-    <div id="listDock" class="listdock">
+    <!-- Bottom bar: search and the one primary action. Search opens into the same bar. -->
+    <footer id="listDock" class="bottombar">
       <div class="dockrow" id="dockActions">
-        <button id="searchBtn" class="fab" aria-label="Search sessions" title="Search"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="m20 20-4.2-4.2"/></svg></button>
-        <button id="newBtn" class="newpill"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>New session</button>
+        <button id="searchBtn" class="navbtn" type="button" aria-label="Search sessions" title="Search"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="m20 20-4.2-4.2"/></svg></button>
+        <button id="newBtn" class="btn btn-primary" type="button" aria-haspopup="dialog"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>New session</button>
       </div>
       <div class="dockrow searchrow" id="searchRow" hidden>
-        <input id="q" type="search" placeholder="Search sessions" autocomplete="off" enterkeyhint="search" aria-label="Search sessions">
-        <button id="searchClose" class="fab" aria-label="Close search" title="Close search">✕</button>
+        <input id="q" class="field" type="search" placeholder="Search sessions" autocomplete="off" enterkeyhint="search" aria-label="Search sessions">
+        <button id="searchClose" class="btn btn-plain" type="button">Cancel</button>
       </div>
-    </div>
+    </footer>
   </section>
 
   <!-- Chat -->
   <section id="chatView" class="view" hidden>
-    <header class="bar">
-      <button id="backBtn" class="icon" aria-label="Back">‹</button>
-      <div class="titles">
-        <div id="title" class="title">Session</div>
-        <div id="subtitle" class="subtitle"></div>
+    <header class="nav" id="chatNav">
+      <div class="nav-lead">
+        <button id="backBtn" class="navbtn" type="button" aria-label="Back" title="Sessions"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="m15 5-7 7 7 7"/></svg></button>
       </div>
-      <span class="conn dot" title="connection"></span>
-      <button id="menuBtn" class="icon" aria-label="Menu">⋯</button>
+      <div class="titles nav-titles">
+        <div id="title" class="title nav-title">Session</div>
+        <div id="subtitle" class="subtitle nav-sub"></div>
+      </div>
+      <div class="nav-trail">
+        <button id="menuBtn" class="navbtn" type="button" aria-label="Session menu" title="Menu" aria-haspopup="dialog"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="5.5" cy="12" r="1.25"/><circle cx="12" cy="12" r="1.25"/><circle cx="18.5" cy="12" r="1.25"/></svg></button>
+      </div>
     </header>
+    <div class="banner-slot">
+      <div class="banner offline conn-banner" role="status" hidden><span class="glyph run" aria-hidden="true"></span><span>Reconnecting…</span></div>
+    </div>
     <!-- Status line: model and route, context fill, session tokens, estimated cost.
          Hidden until dsh reports something real to show. Tapping expands the
          per-turn breakdown. -->
@@ -115,10 +128,27 @@
     </div>
   </section>
 
-  <!-- Bottom sheet -->
+  <!-- Sheet: one shell for every sheet. A grabber, a title row (back while a sub-sheet is open,
+       Done or Cancel), a scrolling body, and a sticky footer for the primary action.
+       app.js fills the title from the sheet's leading heading and keeps the back stack. -->
   <div id="scrim" hidden></div>
-  <div id="sheet" hidden><div class="sheethead"><div class="grab"></div><button id="sheetClose" class="icon" aria-label="Close">✕</button></div><div id="sheetBody"></div></div>
-  <div id="toast" hidden></div>
+  <div id="sheet" role="dialog" aria-modal="true" aria-labelledby="sheetTitle" tabindex="-1" data-size="medium" hidden>
+    <div class="sheethead">
+      <div class="grab" aria-hidden="true"></div>
+      <div class="sheet-titlerow">
+        <div class="nav-lead">
+          <button id="sheetBack" class="navbtn" type="button" aria-label="Back" hidden><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="m15 5-7 7 7 7"/></svg></button>
+        </div>
+        <div id="sheetTitle" class="sheet-title"></div>
+        <div class="nav-trail">
+          <button id="sheetClose" class="btn btn-plain textbtn" type="button">Done</button>
+        </div>
+      </div>
+    </div>
+    <div id="sheetBody"></div>
+    <div id="sheetFoot" class="sheetfoot" hidden></div>
+  </div>
+  <div id="toast" role="status" aria-live="polite" hidden></div>
 </div>
 </body>
 </html>
