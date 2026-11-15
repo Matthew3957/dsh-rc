@@ -175,7 +175,7 @@ html.kb #input { max-height: calc(var(--vvh) * .4); }
 html.kb #queueLine { max-height: calc(var(--vvh) * .25); }
 /* Typing into a question or plan card: the card gets the room, the composer steps aside. */
 html.kb #pending { max-height: calc(var(--vvh) * .3); }
-html.kb-card #feed, html.kb-card #statusBar, html.kb-card #goalBar, html.kb-card #jumpBtn,
+html.kb-card #feed, html.kb-card #goalBar, html.kb-card #jumpBtn,
 html.kb-card #composer, html.kb-card #queueLine, html.kb-card #attachments { display: none; }
 html.kb-card #dock { flex: 1; min-height: 0; }
 html.kb-card #pending { flex: 1; min-height: 0; max-height: none; }
@@ -435,96 +435,162 @@ html[data-theme="contrast"] .field:focus { box-shadow: none; outline: 2px solid 
 .dockrow { display: flex; align-items: center; gap: var(--s-2); }
 #newBtn { flex: 1; min-width: 0; min-height: max(52px, calc(52rem / 17)); }
 
-/* Feed */
-/* The transcript keeps its own type until PR 4; the shell only centres it in the 680px column. */
-#feed { flex: 1; min-height: 0; overflow-y: auto; -webkit-overflow-scrolling: touch; padding: var(--s-2) max(14px, calc((100% - var(--col)) / 2 + 14px)) var(--s-4); overscroll-behavior: contain; }
-#msgs { display: flex; flex-direction: column; gap: 10px; }
-.user { align-self: flex-end; max-width: 88%; background: var(--user); padding: var(--s-2) var(--s-3); border-radius: 18px 18px 4px 18px; white-space: pre-wrap; word-wrap: break-word; font-size: 14px; line-height: 1.45; }
+/* Feed: prose, then the turn's activity and its receipt. Body copy is 17/24; the
+   machine register is 13/18 mono. The column is capped at 680px and centred. */
+#feed { flex: 1; min-height: 0; overflow-y: auto; -webkit-overflow-scrolling: touch; padding: var(--s-2) var(--pad-x) var(--s-4); overscroll-behavior: contain; }
+#msgs { display: flex; flex-direction: column; gap: var(--s-3); max-width: 680px; margin: 0 auto; }
+.user {
+  align-self: flex-end; max-width: 82%;
+  background: var(--user); color: var(--text);
+  padding: 10px 14px; border-radius: var(--r-bubble) var(--r-bubble) 6px var(--r-bubble);
+  white-space: pre-wrap; word-wrap: break-word;
+  font-size: var(--text-body); line-height: var(--text-body-lh);
+}
 .user.pending { opacity: .6; }
-.user .img { font-size: 12px; color: var(--text-2); }
-.asst { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
-.md { font-size: 14px; line-height: 1.5; word-wrap: break-word; overflow-wrap: anywhere; }
+.user .img { display: block; margin-top: var(--s-2); font-size: var(--text-caption); color: var(--text-2); }
+.transcript-image { display: block; width: 120px; height: 120px; object-fit: cover; border-radius: var(--r-sm); margin-top: var(--s-2); }
+.transcript-turn { display: flex; flex-direction: column; gap: var(--s-3); min-width: 0; }
+.turn-answer { min-width: 0; }
+.md { font-size: var(--text-body); line-height: var(--text-body-lh); word-wrap: break-word; overflow-wrap: anywhere; }
 .md > :first-child { margin-top: 0; }
 .md > :last-child { margin-bottom: 0; }
-.md p { margin: .5em 0; }
-.md ul, .md ol { padding-left: 1.3em; margin: .4em 0; }
+.md p { margin: 0 0 .75em; }
+.md ul, .md ol { padding-left: 1.3em; margin: .4em 0 .75em; }
 .md li { margin: .15em 0; }
-.md h1, .md h2, .md h3, .md h4 { font-size: 1.05em; margin: .8em 0 .3em; }
-.md a { color: var(--tint); }
-.md code { font-family: var(--font-mono); font-size: .88em; background: var(--surface-sunk); padding: .1em .35em; border-radius: 5px; }
-.md pre { background: var(--surface-sunk); border: 1px solid var(--separator); border-radius: var(--r-sm); padding: 10px var(--s-3); overflow-x: auto; font-size: 12.5px; line-height: 1.45; }
+.md h1, .md h2, .md h3, .md h4 { font-size: 1.05em; line-height: 1.25; margin: .8em 0 .3em; }
+.md a { color: var(--tint); text-decoration: none; }
+.md a:active { text-decoration: underline; }
+.md code { font-family: var(--font-mono); font-size: .88em; background: var(--surface-sunk); padding: .1em .35em; border-radius: var(--r-sm); }
+.md pre { background: var(--surface-sunk); border: 1px solid var(--separator); border-radius: var(--r-sm); padding: var(--s-3); overflow-x: auto; font-size: var(--text-mono); line-height: 1.5; white-space: pre; tab-size: 2; }
 .md pre code { background: none; padding: 0; font-size: inherit; }
-.md table { border-collapse: collapse; display: block; overflow-x: auto; font-size: 13px; }
+.md table { border-collapse: collapse; display: block; overflow-x: auto; font-size: var(--text-mono); }
 .md th, .md td { border: 1px solid var(--separator); padding: var(--s-1) var(--s-2); }
-.md blockquote { margin: .5em 0; padding-left: 10px; border-left: 3px solid var(--separator); color: var(--text-2); }
+.md blockquote { margin: .5em 0; padding-left: var(--s-3); border-left: 3px solid var(--separator); color: var(--text-2); }
 
-.think { font-size: 13px; color: var(--text-2); }
-.think summary { list-style: none; cursor: pointer; padding: 2px 0; }
+/* Copy is added to each rendered code block after sanitising; the button overlays
+   the top-right corner and the code starts below it. */
+.codeblock { position: relative; margin: var(--s-2) 0; }
+.codeblock pre { margin: 0; padding-top: calc(var(--hit) + var(--s-1)); }
+.code-copy {
+  position: absolute; top: var(--s-1); right: var(--s-1); z-index: 1;
+  min-height: var(--hit); min-width: var(--hit); padding: 0 var(--s-3);
+  border: 1px solid var(--separator); border-radius: var(--r-sm);
+  background: var(--surface); color: var(--text-2);
+  font-size: var(--text-caption); line-height: var(--text-caption-lh);
+}
+.code-copy:active { background: var(--surface-fill); }
+
+/* One thinking row, collapsed by default. */
+.think { font-size: var(--text-caption); line-height: var(--text-caption-lh); color: var(--text-2); }
+.think summary { list-style: none; cursor: pointer; min-height: var(--hit); display: flex; align-items: center; gap: var(--s-1); }
 .think summary::-webkit-details-marker { display: none; }
-.think summary::before { content: "▸ "; }
-.think[open] summary::before { content: "▾ "; }
-.think .body { white-space: pre-wrap; font-style: italic; padding: var(--s-1) 0 var(--s-1) var(--s-3); border-left: 2px solid var(--separator); max-height: 40vh; overflow-y: auto; }
+.think summary::before { content: "▸"; }
+.think[open] summary::before { content: "▾"; }
+.think .body { white-space: pre-wrap; font-style: italic; padding: var(--s-1) 0 var(--s-2) var(--s-3); border-left: 2px solid var(--separator); max-height: 40vh; overflow-y: auto; }
 
-.tool { font-family: var(--font-mono); font-size: 12px; }
-.tool > summary { list-style: none; display: flex; gap: 7px; align-items: baseline; cursor: pointer; padding: 3px 0; }
+/* Live activity: the last three rows, with a quiet disclosure above them. */
+.live-activity { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.activity-more {
+  align-self: flex-start; min-height: var(--hit); padding: 0 var(--s-2);
+  color: var(--text-2); font-size: var(--text-caption); line-height: var(--text-caption-lh);
+}
+.activity-more:active { opacity: .72; }
+.act-text { font-size: var(--text-caption); line-height: var(--text-caption-lh); color: var(--text-2); }
+.act-text p { margin: 0 0 .5em; }
+.act-text pre { font-size: var(--text-mono); }
+
+/* Tool rows: 36px of ink in a 44px row. The machine face names the tool and its
+   summary; the status is a glyph plus a word when it failed. */
+.tool { font-family: var(--font-mono); font-size: var(--text-mono); line-height: var(--text-mono-lh); min-width: 0; }
+.tool > summary { list-style: none; display: flex; gap: var(--s-2); align-items: center; min-height: var(--hit); cursor: pointer; padding: var(--s-1) 0; }
 .tool > summary::-webkit-details-marker { display: none; }
-.tool .bullet { flex-shrink: 0; align-self: center; }
-.tool .name { font-weight: 600; flex-shrink: 0; }
+.tool .bullet { flex: 0 0 16px; width: 16px; height: 16px; }
+.tool .name { font-weight: var(--weight-semibold); flex-shrink: 0; }
 .tool .sum { color: var(--text-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
-.tool .res { color: var(--text-2); font-size: 12px; padding-left: 18px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tool .stat { flex-shrink: 0; margin-left: auto; color: var(--text-2); font-family: var(--font-mono); }
+.tool .delta { flex-shrink: 0; margin-left: auto; font-family: var(--font-mono); font-size: var(--text-mono); }
+.tool-failed { flex-shrink: 0; color: var(--danger); font-weight: var(--weight-semibold); }
+.tool .res { color: var(--text-2); padding-left: calc(16px + var(--s-2)); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .tool .res::before { content: "⎿  "; }
 .tool.err .res { color: var(--danger); }
-.tool .detail { margin: var(--s-1) 0 6px 18px; }
-.tool pre { margin: var(--s-1) 0; background: var(--surface-sunk); border: 1px solid var(--separator); border-radius: 8px; padding: var(--s-2) 10px; font-size: 12px; line-height: 1.4; white-space: pre-wrap; word-break: break-word; max-height: 50vh; overflow-y: auto; }
-.tool .delta { flex-shrink: 0; margin-left: auto; font-size: 12px; }
+.tool .detail { margin: var(--s-2) 0 var(--s-2) calc(16px + var(--s-2)); }
+.tool pre { margin: var(--s-1) 0; background: var(--surface-sunk); border: 1px solid var(--separator); border-radius: var(--r-sm); padding: var(--s-3); font-size: var(--text-mono); line-height: 1.5; white-space: pre-wrap; word-break: break-word; max-height: 50vh; overflow-y: auto; }
+.tool .lbl { font-size: var(--text-caption); line-height: var(--text-caption-lh); color: var(--text-2); font-weight: var(--weight-semibold); margin-top: var(--s-2); }
 .delta .add { color: var(--success); }
 .delta .del { color: var(--danger); }
 
-/* Diff cards: lines wrap rather than scroll sideways, which is hard on a phone. */
-.diff { margin: var(--s-1) 0 var(--s-2); border: 1px solid var(--separator); border-radius: 8px; overflow: hidden; background: var(--surface-sunk); }
-.diff .dhead { display: flex; gap: var(--s-2); align-items: baseline; padding: 6px 10px; border-bottom: 1px solid var(--separator); font-size: 12px; }
-.diff .dpath { flex: 1; min-width: 0; overflow-wrap: anywhere; font-weight: 600; }
-.diff .dbody { max-height: 60vh; overflow-y: auto; overscroll-behavior: contain; font-size: 12px; line-height: 1.45; }
-.dl { position: relative; padding: 0 10px 0 var(--s-6); min-height: 1.45em; white-space: pre-wrap; overflow-wrap: anywhere; }
-.dl .sg { position: absolute; left: 8px; color: var(--text-2); user-select: none; -webkit-user-select: none; }
+/* Diff cards: lines wrap rather than scroll sideways, which is hard on a phone.
+   No line numbers: dsh does not send any. The +/- gutter is the primary cue. */
+.diff { margin: var(--s-1) 0 var(--s-2); border: 1px solid var(--separator); border-radius: var(--r-sm); overflow: hidden; background: var(--surface-sunk); }
+.diff > summary.dhead { list-style: none; display: flex; gap: var(--s-2); align-items: baseline; min-height: var(--hit); padding: var(--s-2) var(--s-3); border-bottom: 1px solid var(--separator); font-family: var(--font-mono); font-size: var(--text-mono); line-height: var(--text-mono-lh); cursor: pointer; }
+.diff > summary.dhead::-webkit-details-marker { display: none; }
+.diff > summary.dhead:active { background: var(--surface-fill); }
+.diff .dpath { flex: 1; min-width: 0; overflow-wrap: anywhere; font-weight: var(--weight-semibold); }
+.diff .dbody { max-height: 60vh; overflow-y: auto; overscroll-behavior: contain; font-family: var(--font-mono); font-size: var(--text-mono); line-height: 1.5; }
+.dl { position: relative; padding: 0 var(--s-3) 0 var(--s-6); min-height: 1.5em; white-space: pre-wrap; overflow-wrap: anywhere; }
+.dl .sg { position: absolute; left: var(--s-2); color: var(--text-2); user-select: none; -webkit-user-select: none; }
 .dl.add { background: color-mix(in srgb, var(--success) 16%, transparent); }
 .dl.add .sg { color: var(--success); }
 .dl.del { background: color-mix(in srgb, var(--danger) 14%, transparent); }
 .dl.del .sg { color: var(--danger); }
-.dl.skip { color: var(--text-2); font-style: italic; padding-left: 10px; background: var(--surface-sunk); }
+.dl.skip { color: var(--text-2); font-style: italic; padding-left: var(--s-3); background: var(--surface-sunk); }
 
-/* Per-turn summary */
-.turncard { border: 1px solid var(--separator); border-left: 3px solid var(--success); border-radius: var(--r-sm); padding: var(--s-2) 10px; background: var(--surface); font-size: 13px; }
+/* Receipt: one row for a finished turn. The verdict word stays in --text; only
+   the glyph carries the status colour. A failed receipt is open; a passed one is
+   closed. */
+.turncard {
+  border: 1px solid var(--separator); border-left: 3px solid var(--success);
+  border-radius: var(--r-md); background: var(--surface);
+  font-size: var(--text-receipt); line-height: var(--text-receipt-lh);
+  overflow: hidden;
+}
 .turncard.failed { border-left-color: var(--danger); }
 .turncard.stopped { border-left-color: var(--warning); }
-.tc-head { display: flex; align-items: center; justify-content: space-between; gap: var(--s-2); }
-.verdict { font-size: 12px; font-weight: 600; padding: 2px var(--s-2); border-radius: var(--r-pill); background: color-mix(in srgb, var(--success) 16%, transparent); color: var(--success); }
-.verdict.failed { background: color-mix(in srgb, var(--danger) 14%, transparent); color: var(--danger); }
-.verdict.stopped { background: color-mix(in srgb, var(--warning) 16%, transparent); color: var(--warning); }
-.tc-why { color: var(--text-2); font-size: 12px; margin-top: 2px; }
-.tc-sec { display: flex; gap: var(--s-2); justify-content: space-between; margin-top: var(--s-2); font-weight: 600; font-size: 12px; color: var(--text-2); }
-.tc-row { display: flex; gap: var(--s-2); align-items: baseline; width: 100%; text-align: left; padding: 6px 0; min-height: 32px; border-top: 1px solid var(--separator); font-size: 13px; color: inherit; }
-.tc-row .tc-main { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--font-mono); font-size: 12px; }
-.tc-row .delta, .tc-exit { flex-shrink: 0; font-family: var(--font-mono); font-size: 12px; }
-.tc-exit { color: var(--text-2); }
-.tc-mark { flex-shrink: 0; width: 1em; text-align: center; color: var(--text-2); }
-.tc-mark.ok { color: var(--success); }
-.tc-mark.err { color: var(--danger); }
-.tc-more { color: var(--text-2); font-size: 12px; padding-top: var(--s-1); }
+.turncard > summary.receipt {
+  list-style: none; display: flex; align-items: center; gap: var(--s-2);
+  min-height: var(--hit); padding: 0 var(--s-3); cursor: pointer;
+}
+.turncard > summary.receipt::-webkit-details-marker { display: none; }
+.receipt-mark { flex: 0 0 16px; }
+.receipt b { color: var(--text); font-size: var(--text-receipt); font-weight: var(--weight-semibold); flex-shrink: 0; }
+.receipt-meta { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-2); }
+.receipt-chevron { margin-left: auto; flex-shrink: 0; color: var(--text-2); font-size: 18px; line-height: 1; transform: rotate(90deg); }
+.turncard[open] .receipt-chevron { transform: rotate(-90deg); }
+.tc-why { color: var(--text-2); padding: var(--s-1) var(--s-3) var(--s-2); }
+.tc-sec { display: flex; gap: var(--s-2); justify-content: space-between; padding: var(--s-2) var(--s-3) 0; color: var(--text-2); font-weight: var(--weight-semibold); }
+.tc-more { color: var(--text-2); padding: var(--s-2) var(--s-3) 0; }
+.receipt-activity { display: flex; flex-direction: column; gap: 2px; padding: var(--s-2) var(--s-3) var(--s-3); }
+.receipt-activity:empty { display: none; }
+.receipt-activity .think summary { min-height: 0; padding: var(--s-1) 0; }
 
-.tool .lbl { font-size: 11px; color: var(--text-2); text-transform: uppercase; letter-spacing: .5px; margin-top: 6px; }
+.note { font-size: var(--text-caption); line-height: var(--text-caption-lh); color: var(--text-2); text-align: center; padding: var(--s-1) 0; }
+.note.err { color: var(--danger); text-align: left; background: color-mix(in srgb, var(--danger) 10%, transparent); border-radius: var(--r-sm); padding: var(--s-2) var(--s-3); white-space: pre-wrap; }
+.note.cmd { text-align: left; font-family: var(--font-mono); font-size: var(--text-mono); white-space: pre-wrap; background: var(--surface-sunk); border-radius: var(--r-sm); padding: var(--s-2) var(--s-3); color: var(--text); }
 
-.note { font-size: 13px; color: var(--text-2); text-align: center; padding: var(--s-1) 0; }
-.note.err { color: var(--danger); text-align: left; background: color-mix(in srgb, var(--danger) 10%, transparent); border-radius: 8px; padding: var(--s-2) 10px; white-space: pre-wrap; }
-.note.cmd { text-align: left; font-family: var(--font-mono); font-size: 12.5px; white-space: pre-wrap; background: var(--surface-sunk); border-radius: 8px; padding: var(--s-2) 10px; color: var(--text); }
-
-#working { font-size: 13px; color: var(--text-2); padding: 10px 0 2px; }
-.spin { display: inline-block; color: var(--tint); animation: blink 1s steps(2, start) infinite; }
-@keyframes blink { to { visibility: hidden; } }
+#working { display: flex; align-items: center; gap: var(--s-2); min-height: var(--hit); padding: var(--s-1) 0 var(--s-2); color: var(--text-2); font-size: var(--text-caption); line-height: var(--text-caption-lh); }
+.working-elapsed { margin-left: auto; font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
 @keyframes pulse { 50% { opacity: .3; } }
 
-.jump { position: absolute; right: 16px; bottom: 130px; width: 38px; height: 38px; border-radius: 50%; background: var(--surface); border: 1px solid var(--separator); box-shadow: var(--shadow-float); font-size: 18px; z-index: 5; }
+/* Jump-to-live: a 44px pill above the composer, not a permanent circle. app.js
+   positions it above the dock. */
+.jump {
+  position: absolute; left: 50%; transform: translateX(-50%);
+  display: inline-flex; align-items: center; gap: var(--s-1);
+  min-width: var(--hit); min-height: var(--hit); padding: 0 var(--s-4);
+  border: 1px solid var(--separator); border-radius: var(--r-pill);
+  background: var(--surface); color: var(--text);
+  box-shadow: var(--shadow-float); font-size: var(--text-caption); line-height: var(--text-caption-lh);
+  z-index: 5;
+}
+.jump:active { background: var(--surface-fill); }
 #chatView { position: relative; }
+#olderBtn {
+  display: block; width: auto; margin: 0 auto var(--s-2); min-height: var(--hit);
+  padding: 0 var(--s-3); color: var(--text-2);
+  font-size: var(--text-caption); line-height: var(--text-caption-lh);
+}
+#olderBtn:active { opacity: .72; }
+
 
 /* Dock / composer */
 #dock { flex-shrink: 0; border-top: 1px solid var(--separator); background: var(--canvas); padding: var(--s-2) max(10px, calc((100% - var(--col)) / 2 + 10px)) calc(var(--safe-b) + 8px); display: flex; flex-direction: column; gap: var(--s-2); }
@@ -761,36 +827,6 @@ html[data-theme="contrast"] #sheetBody :is(input, select, textarea):focus { box-
 .goal-acts button.armed { color: var(--danger); border-color: var(--danger); }
 #sheetBody .goal-rounds { display: flex; align-items: center; gap: var(--s-2); margin-top: 10px; font-size: 13px; color: var(--text-2); }
 #sheetBody .goal-rounds input { width: 6em; }
-/* Status line */
-.status-bar { flex-shrink: 0; border-bottom: 1px solid var(--separator); background: var(--surface-sunk); }
-.status-line { display: flex; align-items: baseline; gap: 6px; width: 100%; text-align: left; padding: 5px var(--s-3); font-family: var(--font-mono); font-size: 11px; line-height: 1.4; color: var(--text-2); }
-.status-line:active { background: var(--canvas); }
-.status-summary { flex: 1; min-width: 0; display: flex; flex-wrap: wrap; align-items: baseline; gap: 3px 9px; }
-.status-part { white-space: nowrap; }
-/* Four labeled buckets do not fit across a phone, so this one part wraps
-   between buckets instead of running off the edge. */
-.status-part.tokens { white-space: normal; }
-.status-part.tokens .bucket { white-space: nowrap; }
-.status-part.model { color: var(--text); }
-.status-track { display: inline-block; width: 42px; height: 4px; border-radius: 2px; background: var(--separator); overflow: hidden; vertical-align: middle; }
-.status-fill { display: block; height: 100%; width: var(--fill, 0%); background: var(--tint); }
-.status-fill.warn { background: var(--warning); }
-.status-fill.err { background: var(--danger); }
-.status-pct { margin-left: var(--s-1); }
-.status-caret { flex-shrink: 0; display: inline-block; }
-.status-line[aria-expanded="true"] .status-caret { transform: rotate(180deg); }
-.status-breakdown { padding: 2px var(--s-3) 9px; font-family: var(--font-mono); font-size: 11px; color: var(--text-2); }
-/* Shared columns keep the per-turn figures aligned and, unlike a single line,
-   never truncate one. */
-.status-table { display: grid; grid-template-columns: auto repeat(4, minmax(2.2em, 1fr)) auto; column-gap: 6px; row-gap: 2px; align-items: baseline; }
-.status-table .num { text-align: right; }
-.status-table .th { opacity: .7; }
-.status-table .turn { color: var(--text); }
-.status-table .cost { text-align: right; white-space: nowrap; }
-/* Breathing room so the write column's figures do not read as part of "est.". */
-.status-table > :nth-child(6n) { padding-left: var(--s-2); }
-.status-note { padding-top: var(--s-1); font-family: var(--font-sans); }
-
 /* Running now: a live row per active session, in the same list as the rest of the board. The
    top opens the session; the footer expands its jobs and subagents inline. Two hit areas. */
 .run-rows { list-style: none; margin: 0; padding: 0; }
@@ -1009,7 +1045,6 @@ html[data-theme="contrast"] .dl.del { background: color-mix(in srgb, var(--dange
 
 /* Read, search, web and todo tool cards: dsh 0.1 attaches these views, dsh02.js rebuilds
    them for 0.2. The stat sits at the right edge like a diff's delta. */
-.tool .stat { flex-shrink: 0; margin-left: auto; color: var(--text-2); font-size: 12px; }
 .tool .srcs { margin: var(--s-1) 0; }
 .tool .spath { margin-top: 6px; color: var(--text-2); font-family: var(--font-mono); font-size: 11px; }
 .tool .src { padding: 2px 0; line-height: 1.35; }
@@ -1027,3 +1062,65 @@ html[data-theme="contrast"] .dl.del { background: color-mix(in srgb, var(--dange
    indicator, so its safe-area padding would only stack on top of the dead band. app.js
    sets .ios-short when it sees that shortfall. */
 html.ios-short { --safe-b: 0px; }
+
+/* Session details: the telemetry the old strip showed, grouped in one large sheet.
+   Rows are label + value; notes carry the caveats, not a subtitle on every row. */
+.session-details { display: flex; flex-direction: column; gap: var(--s-4); padding-bottom: var(--s-2); }
+.details-group {
+  background: var(--surface); border: 1px solid var(--card-border);
+  border-radius: var(--r-md); overflow: hidden;
+}
+.details-group h3 {
+  margin: 0; padding: var(--s-3) var(--s-4) var(--s-1);
+  font-size: var(--text-section); line-height: var(--text-section-lh);
+  font-weight: var(--weight-semibold); color: var(--text-2);
+}
+.details-fact {
+  display: flex; align-items: center; justify-content: space-between; gap: var(--s-3);
+  min-height: var(--hit); padding: var(--s-2) var(--s-4);
+  border-top: 1px solid var(--separator);
+  font-size: var(--text-caption); line-height: var(--text-caption-lh); color: var(--text-2);
+}
+.details-fact b {
+  min-width: 0; text-align: right; overflow-wrap: anywhere;
+  font-family: var(--font-mono); font-size: var(--text-mono); line-height: var(--text-mono-lh);
+  font-weight: var(--weight-regular); color: var(--text);
+}
+.details-group .menuitem { padding: 0 var(--s-4); border-bottom: 1px solid var(--separator); }
+.details-group .menuitem:last-child { border-bottom: 0; }
+.context-track { height: 4px; margin: var(--s-3) var(--s-4) var(--s-1); border-radius: var(--r-pill); background: var(--surface-sunk); overflow: hidden; }
+.context-fill { display: block; height: 100%; background: var(--tint); }
+.context-fill.warn { background: var(--warning); }
+.context-fill.err { background: var(--danger); }
+.session-details .status-table {
+  display: grid; grid-template-columns: auto repeat(4, minmax(2.2em, 1fr)) auto;
+  column-gap: var(--s-1); row-gap: 2px; align-items: baseline;
+  padding: var(--s-2) var(--s-4) var(--s-1);
+  font-family: var(--font-mono); font-size: var(--text-mono-sm); line-height: var(--text-mono-sm-lh);
+  letter-spacing: var(--track-mono-sm); font-variant-numeric: tabular-nums; color: var(--text-2);
+}
+.session-details .status-table .num { text-align: right; }
+.session-details .status-table .th { color: var(--text-2); }
+.session-details .status-table .turn { color: var(--text); }
+.session-details .status-table .cost { text-align: right; white-space: nowrap; color: var(--text); }
+.session-details .status-table > :nth-child(6n) { padding-left: var(--s-2); }
+.status-note { margin: 0; padding: var(--s-2) var(--s-4); font-size: var(--text-caption); line-height: var(--text-caption-lh); color: var(--text-2); }
+.status-note:last-child { padding-bottom: var(--s-3); }
+
+/* The chat title is the details trigger. It keeps the 44px bar target even when
+   the subtitle is one line. */
+#sessionTitleButton {
+  min-height: var(--hit); display: flex; flex-direction: column;
+  align-items: center; justify-content: center;
+  border-radius: var(--r-sm); cursor: pointer;
+}
+#sessionTitleButton:focus-visible { outline: 2px solid var(--tint); outline-offset: 2px; }
+
+/* The header's one telemetry figure. The tint carries the warning colour; the
+   text stays --text so it passes contrast in the default light theme. */
+.nav-sub.warn, .nav-sub.danger {
+  display: inline-block; margin-top: 1px; padding: 0 var(--s-2);
+  border-radius: var(--r-pill); color: var(--text);
+  background: color-mix(in srgb, var(--warning) 14%, transparent);
+}
+.nav-sub.danger { background: color-mix(in srgb, var(--danger) 14%, transparent); }

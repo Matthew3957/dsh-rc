@@ -251,7 +251,7 @@ function md(text) {
     try { return DOMPurify.sanitize(marked.parse(text, { gfm: true, breaks: true })); } catch {}
   }
   const d = document.createElement('div'); d.textContent = text;
-  return d.innerHTML.replace(/\n/g, '<br>');
+  return (typeof d.innerHTML === 'string' ? d.innerHTML : String(text).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')).replace(/\n/g, '<br>');
 }
 // The same markdown as nodes rather than an HTML string, so a caller appends it
 // and never assigns innerHTML. Without the vendored libraries it is plain text.
@@ -403,7 +403,7 @@ function fillTodos(detail, card) {
 }
 const clip = (s, n) => (s.length > n ? s.slice(0, n) + `\n… (${s.length - n} more chars)` : s);
 const textOf = (content) => (content || []).filter((b) => b.type === 'text').map((b) => b.text).join('\n');
-// dsh's own token formatting, so the status line reads like the web UI.
+// dsh's own token formatting, so the figures read like the web UI.
 function fmtTokens(n) {
   if (typeof n !== 'number' || !Number.isFinite(n) || n < 0) return '';
   const scaled = (v) => (v >= 100 ? String(Math.round(v)) : String(Math.round(v * 10) / 10));
@@ -1059,37 +1059,88 @@ function listMenuSheet() {
 $('#menuListBtn').onclick = listMenuSheet;
 
 // ---------- Renderer ----------
+// A turn is an answer plus its activity. The model below is built only from events,
+// so replaying history and applying live frames go through the same path and group
+// the same way. Activity collapses into a receipt when the turn ends; while a turn
+// runs, the last three rows stay visible with a quiet disclosure for the rest.
 const R = {
-  live: new Map(),   // "turn:step" -> {el, blocks: Map(index -> {type, text, el})}
-  tools: new Map(),  // callId -> {el, ...}
-  fin: new Set(),
-  turn: null,        // {tools, sawStart}: the calls of the turn being rendered, for its summary card
-  reset() { this.live.clear(); this.tools.clear(); this.fin = new Set(); this.turn = null; $('#msgs').replaceChildren(); },
+  tools: new Map(),  // callId -> tool model; .el is the details row the tests and revealTool use
+  fin: new Set(),    // "turn:step" final messages already rendered
+  turns: [],
+  turn: null,
+
+  reset() {
+    this.tools.clear();
+    this.fin = new Set();
+    this.turns = [];
+    this.turn = null;
+    $('#msgs').replaceChildren();
+  },
   add(el) { $('#msgs').append(el); return el; },
   note(text, kind = '') { const el = this.add(h('div', { class: 'note ' + kind }, text)); stick(); return el; },
 
-  apply(f) {
-    const ev = f.event; if (!ev) return;
+  startTurn(sawStart, time) {
+    const T = {
+      sawStart: !!sawStart,
+      startedAt: typeof time === 'number' ? time : null,
+      endedAt: null,
+      reason: null,
+      why: '',
+      items: [],       // text, reasoning and tool rows in event order
+      tools: [],
+      liveKey: null,
+      liveText: '',
+      liveThink: '',
+      liveNarration: '',
+      showAll: false,
+      done: false,
+      el: null, // created at the first painted step, so a user message logged after turn/start stays above it
+    };
+    this.turns.push(T);
+    this.turn = T;
+    return T;
+  },
+  ensureTurn(time) { return this.turn || this.startTurn(false, time); },
+  addTool(T, t) {
+    if (!T.tools.includes(t)) T.tools.push(t);
+    if (!T.items.some((i) => i.kind === 'tool' && i.tool === t)) T.items.push({ kind: 'tool', tool: t });
+  },
+
+  apply(frame) {
+    const ev = frame.event; if (!ev) return;
     const d = ev.data || {};
     switch (ev.type) {
+      case 'turn/start':
+        this.startTurn(true, ev.time);
+        return;
       case 'user/message': {
         const src = d.source || {};
         if (src.kind !== 'user') return;
         if (src.rpcId) { const p = document.querySelector(`.user.pending[data-rpc="${CSS.escape(src.rpcId)}"]`); if (p) p.remove(); }
-        const imgs = (d.content || []).filter((b) => b.type === 'image').length;
-        this.add(h('div', { class: 'user' }, textOf(d.content), imgs ? h('div', { class: 'img' }, `🖼 ${imgs} image${imgs > 1 ? 's' : ''}`) : null));
-        break;
+        const imgs = (d.content || []).filter((b) => b.type === 'image');
+        const body = (d.content || []).filter((b) => b.type !== 'image').map((b) => b.text || '').join('');
+        const attachments = imgs.map((b) => {
+          let src = b.url || b.image || '';
+          if (b.data) { const data = String(b.data); src = data.startsWith('data:') ? data : `data:${b.mediaType || 'image/png'};base64,${data}`; }
+          return src ? h('img', { class: 'transcript-image', src, alt: 'Image attachment' }) : h('span', { class: 'img' }, b.text || 'Image attachment');
+        });
+        this.add(h('div', { class: 'user' }, body, ...attachments));
+        return;
       }
-      case 'assistant/chunk': this.chunk(d); break;
-      case 'assistant/message': this.final(d); break;
+      case 'assistant/chunk': this.chunk(d); return;
+      case 'assistant/message': this.final(d); return;
       case 'tool/call': {
+        const T = this.ensureTurn(ev.time);
         const t = this.tool(d.callId, d.name, d.arguments);
+        this.addTool(T, t);
         // dsh 0.2 sends no view: rebuild it from the arguments, as dsh's own web client does.
-        const v = (f.view && f.view.view) || (dsh2 ? window.dsh02.toolCallView(d.name, d.arguments) : null);
+        const v = (frame.view && frame.view.view) || (dsh2 ? window.dsh02.toolCallView(d.name, d.arguments) : null);
         if (v) { t.view = v; this.paintTool(t); }
-        break;
+        this.paintTurn(T);
+        return;
       }
       case 'tool/result': {
+        const T = this.ensureTurn(ev.time);
         const m = d.message || {};
         // dsh 0.1 nests the result in a tool-result block; dsh 0.2 puts its text blocks, isError and
         // toolCallId on the tool message itself (seen on the wire, 0.2.0-rc.2).
@@ -1101,92 +1152,103 @@ const R = {
         t.isError = !!block.isError || !!d.error;
         t.result = textOf(block.content) || (d.error && (d.error.message || String(d.error))) || '';
         // dsh 0.2: from the call, the result text and the tool's `meta` (a write or edit's applied hunks).
-        const rv = (f.view && f.view.view) || (dsh2 ? window.dsh02.toolResultView(t.name, t.args, { content: block.content, isError: t.isError, meta: d.meta }) : null);
+        const rv = (frame.view && frame.view.view) || (dsh2 ? window.dsh02.toolResultView(t.name, t.args, { content: block.content, isError: t.isError, meta: d.meta }) : null);
         if (rv) t.rview = rv;
+        this.addTool(T, t);
         this.paintTool(t);
-        break;
+        this.paintTurn(T);
+        return;
       }
-      case 'turn/end': {
-        const r = d.reason || {};
-        if (r.kind === 'error') this.note('Error: ' + ((r.error && r.error.message) || 'turn failed'), 'err');
-        else if (r.kind === 'aborted' || r.kind === 'interrupted') this.note('Interrupted');
-        else if (r.kind === 'max-tokens') this.note('Stopped: output limit reached');
-        else if (r.kind === 'blocked') this.note('Turn blocked');
-        for (const t of this.tools.values()) if (!t.done) { t.done = true; t.orphan = true; this.paintTool(t); }
-        this.summary(r);
-        this.turn = null;
-        break;
-      }
-      case 'turn/start':
-        this.turn = { tools: [], sawStart: true };
-        break;
+      case 'turn/end': this.endTurn(ev); return;
       case 'command/done':
         if (d.text) this.note(d.text, d.kind === 'error' ? 'err' : 'cmd');
-        break;
+        return;
       case 'session/title':
         if (S.cur) setTitle(S.cur.id, d.title);
-        break;
+        return;
       case 'compaction/end':
       case 'compaction/done':
         this.note('Context compacted');
-        break;
+        return;
     }
   },
 
   key(d) { return `${d.turn}:${d.step}`; },
-  liveFor(d) {
-    const k = this.key(d);
-    let L = this.live.get(k);
-    if (!L) { L = { el: this.add(h('div', { class: 'asst' })), blocks: new Map() }; this.live.set(k, L); }
-    return L;
-  },
   chunk(d) {
+    const T = this.ensureTurn();
     const k = this.key(d);
     if (this.fin.has(k)) return;
+    if (T.liveKey !== k) { T.liveKey = k; T.liveText = ''; T.liveThink = ''; }
     const c = d.chunk || {};
-    const L = this.liveFor(d);
-    const blk = (idx, type) => {
-      let b = L.blocks.get(idx);
-      if (!b) {
-        b = { type, text: '' };
-        if (type === 'reasoning') { b.body = h('div', { class: 'body' }); b.el = h('details', { class: 'think' }, h('summary', {}, 'Thinking…'), b.body); }
-        else if (type === 'text') b.el = h('div', { class: 'md' });
-        else b.el = h('div');
-        L.el.append(b.el); L.blocks.set(idx, b);
-      }
-      return b;
-    };
     switch (c.type) {
-      case 'block-start': if (c.blockType !== 'tool-call') blk(c.index, c.blockType); break;
-      case 'text-delta': { const b = blk(c.index, 'text'); b.text += c.text || ''; paintSoon(b); break; }
-      case 'reasoning-delta': { const b = blk(c.index, 'reasoning'); b.text += c.text || ''; b.body.textContent = b.text; break; }
-      case 'tool-call-delta': if (c.id) { const t = this.tool(c.id, c.name, undefined, L.el); if (c.name && !t.name) { t.name = c.name; this.paintTool(t); } } break;
+      case 'text-delta':
+        T.liveText += c.text || '';
+        break;
+      case 'reasoning-delta':
+        T.liveThink += c.text || '';
+        break;
+      case 'tool-call-delta':
+        if (c.id) {
+          const t = this.tool(c.id, c.name, undefined);
+          this.addTool(T, t);
+          // The text before a tool call is narration, not the answer. Keep it visible
+          // in the live activity; the final message replaces this whole step.
+          if (T.liveText) { T.liveNarration = T.liveText; T.liveText = ''; }
+        }
+        break;
     }
+    this.paintTurn(T);
     stick();
   },
   final(d) {
+    const T = this.ensureTurn();
     const k = this.key(d);
     this.fin.add(k);
     const msg = d.message || {};
-    const box = h('div', { class: 'asst' });
+    T.liveText = ''; T.liveThink = ''; T.liveNarration = '';
     for (const b of msg.content || []) {
-      if (b.type === 'reasoning' && b.text) box.append(h('details', { class: 'think' }, h('summary', {}, 'Thought'), h('div', { class: 'body' }, b.text)));
-      else if (b.type === 'text' && b.text) { const el = h('div', { class: 'md' }); el.innerHTML = md(b.text); box.append(el); }
-      else if (b.type === 'tool-call') { const t = this.tool(b.id, b.name, b.arguments, box); box.append(t.el); }
-      else if (b.type === 'image') box.append(h('div', { class: 'note' }, '🖼 image'));
+      if (b.type === 'text' && b.text) T.items.push({ kind: 'text', text: b.text });
+      else if (b.type === 'reasoning' && b.text) T.items.push({ kind: 'reasoning', text: b.text });
+      else if (b.type === 'tool-call') { const t = this.tool(b.id, b.name, b.arguments); this.addTool(T, t); }
+      else if (b.type === 'image') T.items.push({ kind: 'text', text: 'Image attachment' });
     }
-    if (d.interrupted) box.append(h('div', { class: 'note' }, 'Interrupted'));
-    const L = this.live.get(k);
-    if (L) { L.el.replaceWith(box); this.live.delete(k); } else this.add(box);
+    if (d.interrupted) T.why = 'Interrupted';
+    this.paintTurn(T);
     stick();
   },
-  tool(id, name, args, parent) {
+  endTurn(ev) {
+    const T = this.turn;
+    const d = ev.data || {};
+    const r = d.reason || {};
+    const why = r.kind === 'error' ? ((r.error && r.error.message) || 'turn failed')
+      : (r.kind === 'aborted' || r.kind === 'interrupted') ? 'Interrupted'
+        : r.kind === 'max-tokens' ? 'Output limit reached'
+          : r.kind === 'blocked' ? 'Turn blocked' : '';
+    if (!T) { if (why) this.note(why, r.kind === 'error' ? 'err' : ''); return; }
+    T.done = true;
+    T.endedAt = typeof ev.time === 'number' ? ev.time : null;
+    T.reason = r;
+    if (why) T.why = why;
+    for (const t of T.tools) if (!t.done) { t.done = true; t.orphan = true; this.paintTool(t); }
+    // A turn can end before its last step is finalized (an abort or a killed
+    // stream). Keep what had already streamed instead of dropping it with the
+    // live element.
+    if (T.liveNarration) T.items.push({ kind: 'text', text: T.liveNarration });
+    if (T.liveText) T.items.push({ kind: 'text', text: T.liveText });
+    if (T.liveThink) T.items.push({ kind: 'reasoning', text: T.liveThink });
+    T.liveText = ''; T.liveThink = ''; T.liveNarration = '';
+    this.paintTurn(T);
+    this.turn = null;
+    // A turn with no tools has no receipt to carry the reason, so keep a note.
+    if (!T.tools.length && why) this.note(why, r.kind === 'error' ? 'err' : '');
+    stick();
+  },
+
+  tool(id, name, args) {
     let t = this.tools.get(id);
     if (!t) {
       t = { id, name, args, el: h('details', { class: 'tool run' }) };
       this.tools.set(id, t);
-      (this.turn || (this.turn = { tools: [], sawStart: false })).tools.push(t);
-      (parent || $('#msgs')).append(t.el);
     }
     if (name && !t.name) t.name = name;
     if (args != null && t.args == null) t.args = args;
@@ -1194,7 +1256,11 @@ const R = {
     return t;
   },
   paintTool(t) {
-    const cls = t.done ? (t.isError ? 'err' : 'ok') : (t.orphan ? '' : 'run');
+    const terminal = t.rview && t.rview.card === 'terminal';
+    const failed = !!t.isError
+      || !!(terminal && ((typeof t.rview.exitCode === 'number' && t.rview.exitCode !== 0)
+        || (typeof t.rview.signal === 'string' && !!t.rview.signal)));
+    const cls = t.done ? (failed ? 'err' : 'ok') : (t.orphan ? '' : 'run');
     t.el.className = 'tool ' + cls;
     const open = t.el.open;
     // dsh 0.1 attaches the presentation view to each event; dsh 0.2 rebuilds it in dsh02.js.
@@ -1206,7 +1272,12 @@ const R = {
     const structured = kind === 'read' || kind === 'search' || kind === 'web' || kind === 'todos';
     let sum = toolSummary(t.args, t.view, t.name);
     if (kind === 'todos') sum = '';
-    const stat = cardStat(card);
+    let stat = cardStat(card);
+    if (t.done && kind === 'terminal') {
+      const res = t.rview || t.view;
+      stat = res && typeof res.exitCode === 'number' ? 'exit ' + res.exitCode
+        : res && res.signal ? res.signal : stat;
+    }
     const first = (t.result || '').split('\n').find((l) => l.trim()) || '';
     const lines = (t.result || '').split('\n').length;
     const resLine = t.done && !structured ? (t.orphan && !t.result ? 'no result' : (first.slice(0, 160) + (lines > 1 ? `  (+${lines - 1} lines)` : ''))) : '';
@@ -1215,20 +1286,23 @@ const R = {
     let delta = null;
     if (diffs) {
       let adds = 0, dels = 0;
-      for (const d of diffs) {
-        const st = window.dshReview.diffStats(window.dshReview.diffLines(d.oldText, d.newText));
+      for (const df of diffs) {
+        const st = window.dshReview.diffStats(window.dshReview.diffLines(df.oldText, df.newText));
         adds += st.adds; dels += st.dels;
       }
       delta = deltaEl(adds, dels);
     }
-    const summary = h('summary', {}, statusGlyph(t.done ? (t.isError ? 'failed' : 'done') : (t.orphan ? 'idle' : 'run'), 'bullet'), h('span', { class: 'name' }, prettyTool(t.name)), h('span', { class: 'sum' }, sum), stat ? h('span', { class: 'stat' }, stat) : null, delta);
+    const glyph = statusGlyph(t.done ? (failed ? 'failed' : 'done') : (t.orphan ? 'idle' : 'run'), 'bullet');
+    const summary = h('summary', {}, glyph, h('span', { class: 'name' }, prettyTool(t.name)),
+      failed ? h('span', { class: 'tool-failed' }, 'Failed') : null,
+      h('span', { class: 'sum' }, sum), stat ? h('span', { class: 'stat' }, stat) : null, delta);
     const res = t.done && resLine ? h('div', { class: 'res' }, resLine) : null;
     t.el.replaceChildren(...[summary, res, detail].filter(Boolean));
     // Build detail lazily when opened (keeps long histories fast)
     const fill = () => {
       if (detail.childElementCount) return;
       if (diffs) {
-        for (const d of diffs) detail.append(diffBlock(d));
+        for (const df of diffs) detail.append(diffBlock(df));
         if (t.isError && t.result) detail.append(h('div', { class: 'lbl' }, 'error'), h('pre', {}, clip(t.result, 20000)));
         return;
       }
@@ -1244,16 +1318,7 @@ const R = {
     t.el.ontoggle = () => { if (t.el.open) fill(); };
     if (open) { t.el.open = true; fill(); }
   },
-  // A card closing a turn that touched files or ran commands. A history window
-  // can open mid-turn, so a turn whose start was not loaded says so.
-  summary(reason) {
-    const lib = window.dshReview, T = this.turn;
-    if (!lib || !T || !T.tools.length) return;
-    const s = lib.summarizeTurn(T.tools, reason);
-    if (!s.files.length && !s.commands.length) return;
-    this.add(turnCard(s, !T.sawStart));
-    stick();
-  },
+  paintTurn(T) { paintTurn(T); },
 };
 
 // ---------- Review: diffs and turn summaries ----------
@@ -1272,8 +1337,8 @@ function diffBlock(d) {
   const lib = window.dshReview;
   const ops = lib.diffLines(d.oldText, d.newText);
   const st = lib.diffStats(ops);
-  const box = h('div', { class: 'diff' });
-  box.append(h('div', { class: 'dhead' }, h('span', { class: 'dpath' }, relPath(d.path)), deltaEl(st.adds, st.dels)));
+  const box = h('details', { class: 'diff', open: true });
+  box.append(h('summary', { class: 'dhead' }, h('span', { class: 'dpath' }, relPath(d.path)), deltaEl(st.adds, st.dels)));
   const folded = lib.foldContext(ops);
   const body = h('div', { class: 'dbody' });
   for (let i = 0; i < folded.length; i++) {
@@ -1288,63 +1353,162 @@ function diffBlock(d) {
   box.append(body);
   return box;
 }
-// Open a tool row from the summary card and bring it into view.
+// The answer/activity split is a pure function of the item list, so history replay
+// and live streaming cannot disagree. With tools, the last text after the last tool
+// call is the answer; if the turn ended on a tool call, the last text before it is.
+// A turn without tools is all prose.
+function turnView(T) {
+  const items = T.items || [];
+  let lastTool = -1;
+  for (let i = items.length - 1; i >= 0; i--) if (items[i].kind === 'tool') { lastTool = i; break; }
+  let answerItem = null;
+  if (lastTool >= 0) {
+    for (let i = items.length - 1; i > lastTool; i--) if (items[i].kind === 'text') { answerItem = items[i]; break; }
+    if (!answerItem) for (let i = lastTool - 1; i >= 0; i--) if (items[i].kind === 'text') { answerItem = items[i]; break; }
+  }
+  const live = !T.done && T.liveText ? T.liveText : '';
+  if (live) answerItem = null;
+  let answer = live;
+  if (!answer && lastTool < 0) answer = items.filter((i) => i.kind === 'text').map((i) => i.text).join('\n\n');
+  else if (!answer && answerItem) answer = answerItem.text;
+  const activity = [];
+  if (!T.done && T.liveNarration) activity.push({ kind: 'text', text: T.liveNarration });
+  for (const item of items) {
+    if (item === answerItem) continue;
+    if (lastTool < 0 && (item.kind === 'text' || item.kind === 'reasoning')) continue;
+    activity.push(item);
+  }
+  const thinking = lastTool < 0 ? items.filter((i) => i.kind === 'reasoning') : [];
+  return { answer: answer || '', answerItem, activity, thinking, lastTool };
+}
+
+function thinkRow(text) {
+  return h('details', { class: 'think' }, h('summary', {}, 'Thought'), h('div', { class: 'body' }, text));
+}
+
+function activityEl(item) {
+  if (item.kind === 'tool') return item.tool.el;
+  if (item.kind === 'reasoning') return thinkRow(item.text);
+  const el = h('div', { class: 'act-text md' });
+  el.innerHTML = md(item.text);
+  addCodeCopy(el);
+  return el;
+}
+
+function turnCard(T, view) {
+  const lib = window.dshReview;
+  const s = lib ? lib.summarizeTurn(T.tools, T.reason) : { files: [], commands: [], adds: 0, dels: 0, failedCommands: 0, outcome: 'passed', why: '' };
+  s.toolCount = T.tools.length;
+  if (typeof T.startedAt === 'number' && typeof T.endedAt === 'number') s.elapsed = Math.max(0, T.endedAt - T.startedAt);
+  const label = s.outcome === 'passed' ? 'Passed' : s.outcome === 'failed' ? 'Failed' : 'Stopped';
+  const elapsed = typeof s.elapsed === 'number' ? fmtElapsed(s.elapsed) : '';
+  const meta = [
+    s.files.length ? plural(s.files.length, 'file') : '',
+    s.commands.length ? plural(s.commands.length, 'command') : '',
+    !s.files.length && !s.commands.length ? plural(s.toolCount, 'step') : '',
+    elapsed,
+  ].filter(Boolean).join(' · ');
+  const state = s.outcome === 'passed' ? 'done' : s.outcome === 'stopped' ? 'stopped' : 'failed';
+  const card = h('details', { class: 'turncard ' + s.outcome });
+  card.open = s.outcome === 'failed';
+  card.append(h('summary', { class: 'receipt' },
+    statusGlyph(state, 'receipt-mark'),
+    h('b', {}, label),
+    h('span', { class: 'receipt-meta' }, meta),
+    h('span', { class: 'receipt-chevron', 'aria-hidden': 'true' }, '›')));
+  const why = T.why || (s.outcome !== 'passed' ? s.why : '');
+  if (why) card.append(h('div', { class: 'tc-why' }, why));
+  if (s.files.length) card.append(h('div', { class: 'tc-sec' }, h('span', {}, plural(s.files.length, 'file') + ' changed'), deltaEl(s.adds, s.dels)));
+  if (s.commands.length) card.append(h('div', { class: 'tc-sec' }, h('span', {}, plural(s.commands.length, 'command') + ' run' + (s.failedCommands ? `, ${s.failedCommands} failed` : ''))));
+  const body = h('div', { class: 'receipt-activity' });
+  for (const item of view.activity) body.append(activityEl(item));
+  if (!view.activity.length) body.append(h('div', { class: 'tc-more' }, 'No tool activity recorded.'));
+  card.append(body);
+  if (!T.sawStart) card.append(h('div', { class: 'tc-more' }, 'Earlier steps of this turn are not loaded.'));
+  for (const t of T.tools) t.card = card;
+  return card;
+}
+
+function paintTurn(T) {
+  if (!T) return;
+  const view = turnView(T);
+  if (!T.el) {
+    if (!T.items.length && !T.tools.length && !T.liveText && !T.liveThink) return;
+    T.el = R.add(h('section', { class: 'transcript-turn running' }));
+  }
+  T.el.className = 'transcript-turn' + (T.done ? '' : ' running');
+  const nodes = [];
+  if (view.answer) {
+    const el = h('div', { class: 'turn-answer md' });
+    el.innerHTML = md(view.answer);
+    addCodeCopy(el);
+    nodes.push(el);
+  }
+  if (T.done) {
+    if (T.tools.length) nodes.push(turnCard(T, view));
+    else for (const r of view.thinking) nodes.push(thinkRow(r.text));
+  } else {
+    const rows = view.activity.slice();
+    if (T.liveThink) rows.push({ kind: 'reasoning', text: T.liveThink });
+    if (!T.showAll && rows.length > 3) {
+      nodes.push(h('button', { type: 'button', class: 'activity-more', onclick: () => { T.showAll = true; paintTurn(T); } },
+        `${rows.length - 3} earlier step${rows.length - 3 === 1 ? '' : 's'}`));
+    }
+    const wrap = h('div', { class: 'live-activity' });
+    for (const row of (T.showAll ? rows : rows.slice(-3))) wrap.append(activityEl(row));
+    if (wrap.childNodes.length) nodes.push(wrap);
+  }
+  T.el.replaceChildren(...nodes);
+}
+
+// Open a tool row from a receipt and bring it into view. The receipt itself has to
+// open first: a row hidden inside a closed <details> cannot be read.
 function revealTool(id) {
   const t = R.tools.get(id);
   if (!t) return;
+  if (t.card) t.card.open = true;
   t.el.open = true;
   R.paintTool(t);
   t.el.scrollIntoView({ block: 'start', behavior: 'smooth' });
 }
-const firstLine = (s) => String(s || '').split('\n')[0];
-function turnCard(s, partial) {
-  const verdict = { passed: '✓ passed', failed: '✗ failed', stopped: '■ stopped' }[s.outcome];
-  const card = h('div', { class: 'turncard ' + s.outcome },
-    h('div', { class: 'tc-head' }, h('b', {}, 'Turn summary'), h('span', { class: 'verdict ' + s.outcome }, verdict)),
-    s.why ? h('div', { class: 'tc-why' }, s.why.charAt(0).toUpperCase() + s.why.slice(1)) : null);
-  const MAX = 8;
-  if (s.files.length) {
-    card.append(h('div', { class: 'tc-sec' }, h('span', {}, plural(s.files.length, 'file') + ' changed'), deltaEl(s.adds, s.dels)));
-    for (const f of s.files.slice(0, MAX)) {
-      card.append(h('button', { type: 'button', class: 'tc-row', onclick: () => revealTool(f.callIds[f.callIds.length - 1]) },
-        h('span', { class: 'tc-main' }, relPath(f.path)), deltaEl(f.adds, f.dels)));
-    }
-    if (s.files.length > MAX) card.append(h('div', { class: 'tc-more' }, `and ${s.files.length - MAX} more`));
-  }
-  if (s.commands.length) {
-    card.append(h('div', { class: 'tc-sec' }, h('span', {}, plural(s.commands.length, 'command') + ' run' + (s.failedCommands ? `, ${s.failedCommands} failed` : ''))));
-    // The latest commands matter most: the verdict rests on the last one.
-    const shown = s.commands.slice(-MAX);
-    if (s.commands.length > MAX) card.append(h('div', { class: 'tc-more' }, `${s.commands.length - MAX} earlier not shown`));
-    for (const c of shown) {
-      const mark = !c.done ? '·' : c.failed ? '✗' : c.noResult ? '?' : '✓';
-      const exit = c.signal ? c.signal : c.exitCode != null ? 'exit ' + c.exitCode : '';
-      card.append(h('button', { type: 'button', class: 'tc-row', onclick: () => revealTool(c.callId) },
-        h('span', { class: 'tc-mark ' + (c.failed ? 'err' : c.done && !c.noResult ? 'ok' : '') }, mark),
-        h('span', { class: 'tc-main mono' }, firstLine(c.title) || 'command'),
-        exit ? h('span', { class: 'tc-exit' }, exit) : null));
+
+// Markdown stays produced by md(), which sanitises before it reaches the DOM. The
+// action is added after rendering, so a code block needs no special parser.
+function addCodeCopy(root, source) {
+  const pres = root && root.querySelectorAll ? Array.from(root.querySelectorAll('pre')) : [];
+  for (const pre of pres) {
+    if (pre.parentNode && pre.parentNode.classList && pre.parentNode.classList.contains('codeblock')) continue;
+    const wrap = h('div', { class: 'codeblock' });
+    const button = h('button', { type: 'button', class: 'code-copy', 'aria-label': 'Copy code' }, 'Copy');
+    const code = pre.textContent || source || '';
+    button.onclick = () => copyText(code, button);
+    if (pre.parentNode) {
+      pre.parentNode.insertBefore(wrap, pre);
+      wrap.append(pre);
+      wrap.append(button);
     }
   }
-  if (partial) card.append(h('div', { class: 'tc-more' }, 'Earlier steps of this turn are not loaded.'));
-  return card;
 }
-function paintSoon(b) {
-  if (b.raf) return;
-  b.raf = requestAnimationFrame(() => { b.raf = 0; b.el.innerHTML = md(b.text); stick(); });
-}
+
 
 // ---------- Scrolling ----------
 let pinned = true;
 const feed = $('#feed');
+function updateJump() {
+  // Jump-to-live only exists while a turn is running; a finished conversation has
+  // nothing new to jump to, and a permanent floating pill would sit over the text.
+  const running = !!(S.cur && S.running.get(S.cur.id));
+  $('#jumpBtn').hidden = pinned || !running;
+}
 feed.addEventListener('scroll', () => {
   pinned = feed.scrollHeight - feed.scrollTop - feed.clientHeight < 120;
-  $('#jumpBtn').hidden = pinned;
+  updateJump();
 }, { passive: true });
 function stick(force) {
   if (!(pinned || force)) return;
   requestAnimationFrame(() => { feed.scrollTop = feed.scrollHeight; });
 }
-$('#jumpBtn').onclick = () => { pinned = true; stick(true); };
+$('#jumpBtn').onclick = () => { pinned = true; updateJump(); stick(true); };
 // The jump-to-bottom button floats over the feed, so keep it above the dock:
 // with a pending card open the dock is tall and the button would sit on the
 // card's buttons. The dock is the bottom flex row, so its height is the offset.
@@ -1376,8 +1540,6 @@ async function openSession(id, { push = true } = {}) {
   renderRunning(); renderPending(); renderQueue();
   // Start collapsed and empty: the previous session's line must not linger over
   // this one while its history is still loading.
-  $('#statusBreakdown').hidden = true;
-  $('#statusLine').setAttribute('aria-expanded', 'false');
   renderStatusLine(); renderGoalBar();
   await loadHistory();
   S.commands = [];
@@ -1510,13 +1672,14 @@ function renderRunning() {
   const cur = S.cur; if (!cur) return;
   const running = !!S.running.get(cur.id);
   $('#working').hidden = !running;
+  updateJump();
   paintComposer();
   $('#steerBtn').classList.toggle('on', S.steer);
   $('#steerBtn').textContent = S.steer ? 'steer' : 'queue';
   clearInterval(workTimer);
   if (running) {
     const t0 = turnStartTime(cur) || Date.now();
-    const tick = () => { $('#workingText').textContent = `Working… ${Math.max(0, Math.floor((Date.now() - t0) / 1000))}s`; }; // clamp: phone and laptop clocks can differ slightly
+    const tick = () => { $('#workingText').textContent = fmtClock(Date.now() - t0); }; // clamp: phone and laptop clocks can differ slightly
     tick(); workTimer = setInterval(tick, 1000);
     stick();
   }
@@ -1550,7 +1713,7 @@ function queueText(it) { return textOf((it.message && it.message.content) || [])
 function queueRow(sessionId, it) {
   const imgs = ((it.message && it.message.content) || []).filter((b) => b.type === 'image').length;
   const row = h('div', { class: 'qitem' },
-    h('div', { class: 'qtext' }, queueText(it) || (imgs ? '' : '(empty)'), imgs ? ` 🖼 ${imgs}` : null));
+    h('div', { class: 'qtext' }, queueText(it) || (imgs ? '' : '(empty)'), imgs ? h('span', { class: 'qimgs' }, plural(imgs, 'image')) : null));
   const edit = h('button', { type: 'button', class: 'qact', 'aria-label': 'Edit queued message' }, '✎');
   const rm = h('button', { type: 'button', class: 'qact', 'aria-label': 'Remove queued message' }, '✕');
   // Focus inside the tap itself: iOS only raises the keyboard for focus during a user gesture.
@@ -1602,7 +1765,7 @@ $('#stopBtn').onclick = async () => {
 };
 $('#steerBtn').onclick = () => { S.steer = !S.steer; renderRunning(); };
 
-// ---------- Status line ----------
+// ---------- Session details ----------
 // A compact line under the session header: which model and route are in use,
 // how full the context is, the tokens this session has spent, and what that
 // works out to in dollars. Every part is dropped when dsh has not reported it,
@@ -1706,87 +1869,93 @@ function priceRowFor(cur) {
 }
 // `contextPressure` is the wire view of dsh-token-meter's unit: provider-anchored
 // prompt tokens plus the newest route capacity. Neither side alone is a reading,
-// so both must be present or there is no fill to show.
+// so both must be present or there is no fill to show. 80% is the point where the
+// number starts changing what to do next; 95% is when it is nearly out of room.
 function contextFill(cp) {
   if (!cp) return null;
   const used = typeof cp.projectedTokens === 'number' ? cp.projectedTokens : cp.pressureTokens;
   const capacity = cp.contextWindow;
   if (typeof used !== 'number' || typeof capacity !== 'number' || capacity <= 0) return null;
   const pct = Math.min(100, Math.round((used / capacity) * 100));
-  return { pct, level: pct >= 90 ? ' err' : (pct >= 70 ? ' warn' : '') };
+  return { pct, level: pct >= 95 ? ' err' : (pct >= 80 ? ' warn' : '') };
 }
-function renderStatusLine() {
-  const bar = $('#statusBar');
-  const cur = S.cur;
-  if (!cur) { bar.hidden = true; renderStatusBreakdown(); return; }
-  const parts = [];
-
+// The long model prefix that priced this route, for the details sheet. Prices
+// match by longest prefix; the shipped table and the device overrides are both
+// small, so this stays a display-only scan and does not change pricing itself.
+function pricePrefixFor(cur) {
+  const lib = window.dshPrices;
+  if (!lib || !lib.DEFAULT_PRICES) return null;
   const route = routeFor(cur);
-  if (route) parts.push(h('span', { class: 'status-part model' }, route.model, route.provider ? ` · ${route.provider}` : null));
-
-  // Context fill: the provider-anchored prompt size over the route's capacity.
-  // dsh reports neither until a request has run, so a fresh session shows no bar.
-  const fill = contextFill(projectionValue(cur.id, 'contextPressure'));
-  if (fill) {
-    const bar = h('span', { class: 'status-fill' + fill.level });
-    bar.style.setProperty('--fill', fill.pct + '%');
-    parts.push(h('span', { class: 'status-part' },
-      h('span', { class: 'status-track' }, bar),
-      h('span', { class: 'status-pct' }, fill.pct + '%')));
+  const id = route && route.model;
+  if (!id) return null;
+  const table = { ...lib.DEFAULT_PRICES, ...priceOverrides() };
+  let best = null;
+  for (const prefix of Object.keys(table)) {
+    if (id.startsWith(prefix) && (!best || prefix.length > best.length)) best = prefix;
   }
-
-  // Session tokens. Buckets dsh has not billed stay out of the line rather than
-  // reading as zero, and a session with no usage yet shows no token part at all.
+  return best;
+}
+// The one telemetry figure that stays on the glass: the context percentage that
+// changes what to do next. Below 80% it is quiet folder + number; at 80% it reads
+// "Context N%" in a tinted chip, with the status colour in the tint rather than in
+// the text (the default theme's amber is below AA on the canvas).
+function renderStatusLine() {
+  const cur = S.cur;
+  if (!cur) return;
+  const fill = contextFill(projectionValue(cur.id, 'contextPressure'));
+  const folder = basename(sessionMeta(cur.id).cwd);
+  const high = !!fill && fill.pct >= 80;
+  const subtitle = high ? `Context ${fill.pct}%` : [folder, fill && `${fill.pct}%`].filter(Boolean).join(' · ');
+  const el = $('#subtitle');
+  el.textContent = subtitle;
+  el.classList.toggle('warn', high && fill.pct < 95);
+  el.classList.toggle('danger', high && fill.pct >= 95);
+  // Details stay a snapshot while open: re-rendering on every projection would
+  // lose its scroll and focus. Opening it, or Refresh, reads the current figures.
+}
+// Session details: everything the old three-line strip above every conversation
+// showed, one tap from the title or the first row of the session menu. The box is
+// passed in so a test (and the sheet itself) can render without guessing selectors.
+function renderSessionDetails(box = null) {
+  const content = box || $('#detailsContent');
+  const cur = S.cur;
+  if (!cur || !content) return;
+  const lib = window.dshPrices;
+  const route = routeFor(cur);
+  const row = priceRowFor(cur);
+  const turns = turnUsage(cur.events);
+  const meta = sessionMeta(cur.id);
+  const cp = projectionValue(cur.id, 'contextPressure');
+  const fill = contextFill(cp);
   const usage = projectionValue(cur.id, 'tokenUsage');
   const buckets = usage ? projectedBuckets(usage) : null;
   const billed = buckets ? sumBuckets(buckets) : 0;
-  if (billed > 0) {
-    // Four labeled buckets are wider than a phone, so this part alone wraps
-    // between them; each bucket stays whole so a break never splits a figure
-    // from its label. `.tokens` clears the nowrap the other parts keep.
-    const kids = [];
-    for (const [key, label] of BUCKETS) {
-      if (buckets[key] <= 0) continue;
-      if (kids.length) kids.push(' · ');
-      kids.push(h('span', { class: 'bucket' }, `${label} ${fmtTokens(buckets[key])}`));
-    }
-    parts.push(h('span', { class: 'status-part tokens' }, kids));
-    // Only price a model we know. Until `session.models` answers, the route is
-    // unknown rather than unpriced, and "cost n/a" would be a claim about a
-    // model we have not identified yet.
-    if (route) {
-      const cost = window.dshPrices ? window.dshPrices.costOf(buckets, priceRowFor(cur)) : null;
-      parts.push(h('span', { class: 'status-part' }, cost === null ? 'cost n/a' : `est. ${fmtUsd(cost)}`));
-    }
-  }
+  const total = billed > 0 && route && lib ? lib.costOf(buckets, row) : null;
+  const group = (title, ...children) => h('section', { class: 'details-group' }, h('h3', {}, title), ...children);
+  const fact = (label, value) => h('div', { class: 'details-fact' }, h('span', {}, label), h('b', {}, value == null || value === '' ? 'n/a' : String(value)));
 
-  $('#statusSummary').replaceChildren(...parts);
-  bar.hidden = parts.length === 0;
-  const caret = $('#statusCaret');
-  caret.hidden = parts.length === 0 || !turnUsage(cur.events).length;
-  if (!$('#statusBreakdown').hidden) renderStatusBreakdown();
-}
-function renderStatusBreakdown() {
-  const box = $('#statusBreakdown');
-  const cur = S.cur;
-  if (!cur) { box.replaceChildren(); return; }
-  const lib = window.dshPrices;
-  const row = priceRowFor(cur);
-  const turns = turnUsage(cur.events);
-  if (!turns.length) { box.replaceChildren(h('div', { class: 'status-note' }, 'No per-turn usage reported yet.')); return; }
-  // A table rather than a line per turn: four buckets plus a cost do not fit
-  // across a phone, and truncating them would hide the numbers this panel exists
-  // to show. Columns are shared, so a bucket dsh billed nothing for reads as 0
-  // here — the compact line above is the place where a spent-nothing bucket is
-  // left out.
-  const table = h('div', { class: 'status-table' });
-  // Header cells; the four bucket columns are right-aligned to match their figures.
+  const routeGroup = group('Route',
+    fact('Model', route && route.model),
+    fact('Provider', route && route.provider),
+    fact('Agent preset', meta.agentPreset),
+    fact('Folder path', meta.cwd));
+
+  const contextKids = fill
+    ? [
+      h('div', { class: 'context-track', 'aria-hidden': 'true' }, h('span', { class: 'context-fill' + fill.level, style: `width:${fill.pct}%` })),
+      fact('Context', `${fill.pct}%`),
+      fact('Window', cp.contextWindow ? fmtTokens(cp.contextWindow) : null),
+    ]
+    : [h('div', { class: 'status-note' }, 'Context not reported.')];
+  if (fill && fill.pct >= 80) contextKids.push(h('p', { class: 'status-note' }, 'Context is nearly full. Start a new session or compact before the next long turn.'));
+
+  const usageTable = h('div', { class: 'status-table' });
   for (const [label, alignRight] of [['turn', false], ['in', true], ['out', true], ['read', true], ['write', true], ['est.', false]]) {
-    table.append(h('span', { class: 'th' + (alignRight ? ' num' : '') }, label));
+    usageTable.append(h('span', { class: 'th' + (alignRight ? ' num' : '') }, label));
   }
   for (const { turn, buckets } of turns) {
     const cost = lib ? lib.costOf(buckets, row) : null;
-    table.append(
+    usageTable.append(
       h('span', { class: 'turn' }, String(turn)),
       h('span', { class: 'num' }, fmtTokens(buckets.uncachedInputTokens) || '0'),
       h('span', { class: 'num' }, fmtTokens(buckets.outputTokens) || '0'),
@@ -1794,19 +1963,53 @@ function renderStatusBreakdown() {
       h('span', { class: 'num' }, fmtTokens(buckets.cacheWriteTokens) || '0'),
       h('span', { class: 'cost' }, cost === null ? 'n/a' : fmtUsd(cost)));
   }
-  box.replaceChildren(table, h('div', { class: 'status-note' }, 'read and write are cache read and cache write.'));
-  // The line above counts the whole session log; these rows only cover the turns
-  // paged in, so say so instead of letting the two look like they disagree.
-  if (cur.hasMore) box.append(h('div', { class: 'status-note' }, 'Earlier turns are not loaded yet.'));
+  const usageKids = turns.length
+    ? [usageTable, h('div', { class: 'status-note' }, 'Rows cover loaded history. read and write are cache read and cache write.')]
+    : [h('div', { class: 'status-note' }, 'No per-turn usage reported yet.')];
+  if (cur.hasMore && turns.length) usageKids.push(h('div', { class: 'status-note' }, 'Earlier turns are not loaded yet.'));
+
+  const messages = (cur.events || []).filter((f) => f.event && (f.event.type === 'user/message' || f.event.type === 'assistant/message')).length;
+  // dsh does not report a session creation time, so there is no honest "started"
+  // row to show. The list row's updated time and the loaded message count are
+  // real; the loading note above says when the history is partial.
+  const facts = [
+    fact('Folder', meta.cwd),
+    fact('Preset', meta.agentPreset),
+    fact('Updated', meta.updatedAt ? new Date(meta.updatedAt).toLocaleString() : null),
+    fact('Loaded messages', messages || null),
+  ];
+  const refresh = h('button', {
+    class: 'menuitem', type: 'button',
+    onclick: async () => {
+      refresh.disabled = true;
+      try { await loadHistory(); renderSessionDetails(content); }
+      finally { refresh.disabled = false; }
+    },
+  }, 'Refresh');
+  const copy = h('button', {
+    class: 'menuitem', type: 'button', disabled: !meta.cwd,
+    onclick: () => copyText(meta.cwd, copy),
+  }, 'Copy folder path');
+  content.replaceChildren(
+    routeGroup,
+    group('Context', ...contextKids),
+    group('Usage', ...usageKids),
+    group('Estimated cost',
+      fact('Total', total == null ? 'n/a' : 'est. ' + fmtUsd(total)),
+      h('div', { class: 'status-note' }, 'USD, from the shipped table; override in Settings > Prices.'),
+      h('div', { class: 'status-note' }, `Model prefix: ${pricePrefixFor(cur) || 'n/a'}`)),
+    group('Session', ...facts),
+    group('Actions', refresh, copy));
 }
-$('#statusLine').onclick = () => {
-  const line = $('#statusLine');
-  const box = $('#statusBreakdown');
-  const open = box.hidden;
-  if (open) renderStatusBreakdown();
-  box.hidden = !open;
-  line.setAttribute('aria-expanded', String(open));
-};
+function sessionDetailsSheet() {
+  if (!S.cur) return;
+  const content = h('div', { id: 'detailsContent', class: 'session-details' });
+  openSheet({ size: 'large' }, h('h3', {}, 'Session details'), content);
+  renderSessionDetails(content);
+}
+$('#sessionTitleButton').onclick = sessionDetailsSheet;
+$('#sessionTitleButton').onkeydown = (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); sessionDetailsSheet(); } };
+
 
 // ---------- Goals (dsh 0.2) ----------
 // The `goal` projection carries the goal and its admitted rounds and arrives like any other
@@ -2901,7 +3104,7 @@ async function send() {
   if (text) content.push({ type: 'text', text });
   for (const im of images) content.push({ type: 'image', mediaType: im.mediaType, data: im.data, name: im.name });
   const rpcId = rid();
-  const bubble = R.add(h('div', { class: 'user pending', 'data-rpc': rpcId }, text, images.length ? h('div', { class: 'img' }, `🖼 ${images.length}`) : null));
+  const bubble = R.add(h('div', { class: 'user pending', 'data-rpc': rpcId }, text, ...images.map((im) => h('img', { class: 'transcript-image', src: im.url, alt: 'Image attachment' }))));
   pinned = true; stick(true);
   input.value = ''; grow(); S.images = []; renderAttachments();
   const payload = { sessionId: cur.id, mode: S.steer && S.running.get(cur.id) ? 'steer' : 'queue', content };
@@ -3436,6 +3639,7 @@ $('#menuBtn').onclick = () => {
   const notifRow = h('button', { class: 'menuitem', onclick: () => notificationsSheet() }, 'Notifications', notifState);
   refreshPushState().then((st) => { notifState.textContent = pushStateLabel(st); }).catch(() => {});
   openSheet(h('h3', {}, $('#title').textContent),
+    h('button', { class: 'menuitem', onclick: sessionDetailsSheet }, 'Session details', h('small', {}, 'Route, context, usage and session facts')),
     h('button', { class: 'menuitem', onclick: modelSheet }, 'Model', h('small', {}, 'Switch the model for this session')),
     h('button', { class: 'menuitem', onclick: pricesSheet }, 'Prices', h('small', {}, 'Override the price table behind "est. cost"')),
     dsh2 ? h('button', { class: 'menuitem', onclick: () => goalSheet() }, 'Goal', h('small', {}, goalFor(cur.id) ? 'View, edit, pause or clear' : 'Keep this session working toward one objective')) : null,
@@ -3537,7 +3741,7 @@ async function modelSheet() {
             const payload = { sessionId: cur.id, provider: g.id, model: m.id };
             if (m.reasoning && m.reasoning.defaultEffort) payload.reasoningEffort = m.reasoning.defaultEffort;
             await rpc('session.selectModel', payload);
-            await loadModel(cur.id); // relabel the status line for the new route
+            await loadModel(cur.id); // refresh the route shown in the header and details
             toast('Model: ' + (m.name || m.id)); closeSheet();
           } catch (e) { toast('Switch failed: ' + e.message, 4000); }
         } }, (isCur ? '✓ ' : '') + (m.name || m.id), m.description ? h('small', {}, m.description) : null));

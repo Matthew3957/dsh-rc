@@ -9,6 +9,10 @@ import * as prices from '../public/prices.js';
 // through querySelector, fetch and the two event sockets. The harness below runs
 // the real file in a vm context over a small DOM stub, so these tests exercise the
 // shipped renderer rather than a copy of its arithmetic.
+//
+// PR 4 moved the old three-line status strip above the conversation into Session
+// details. The header subtitle keeps only the folder and context percentage; the
+// route, tokens, per-turn table and estimated cost live in the details sheet.
 
 const APP = fs.readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
 
@@ -29,7 +33,12 @@ function stubEl(selector) {
     clientHeight: 0,
     scrollWidth: 0,
     clientWidth: 0,
-    classList: { toggle() {}, add() {}, remove() {}, contains: () => false },
+    classList: {
+      add(c) { const s = new Set(String(el.className || '').split(/\s+/).filter(Boolean)); s.add(c); el.className = [...s].join(' '); },
+      remove(c) { el.className = String(el.className || '').split(/\s+/).filter((x) => x && x !== c).join(' '); },
+      toggle(c, on) { const has = String(el.className || '').split(/\s+/).includes(c); (on === undefined ? !has : on) ? el.classList.add(c) : el.classList.remove(c); },
+      contains: (c) => String(el.className || '').split(/\s+/).includes(c),
+    },
     addEventListener() {},
     removeEventListener() {},
     setAttribute(name, value) { el[name] = value; },
@@ -44,6 +53,8 @@ function stubEl(selector) {
     click() {},
     querySelector: () => null,
     querySelectorAll: () => [],
+    contains: () => false,
+    getClientRects: () => [],
     getContext: () => ({}),
     toBlob() {},
   };
@@ -59,24 +70,25 @@ function textOf(node) {
   return '';
 }
 
-// The line is a row of segments the CSS lays out with a gap, so the tests read it
-// one segment at a time. That also pins the segmentation a phone depends on to
-// wrap the line.
-const segmentsOf = (el) => el.childNodes.map((n) => textOf(n).trim()).filter(Boolean);
-const lineOf = (el) => segmentsOf(el).join(' | ');
-// The breakdown renders a grid of cells (six to a row: turn, the four buckets,
-// then the estimate) followed by note lines.
 const elementKids = (el) => el.childNodes.filter((n) => n.nodeType === 1);
 const byClass = (el, re) => elementKids(el).filter((n) => re.test(n.className || ''));
+const find = (root, pred, out = []) => {
+  if (!root || typeof root !== 'object') return out;
+  if (root.nodeType === 1 && pred(root)) out.push(root);
+  for (const k of root.childNodes || []) find(k, pred, out);
+  return out;
+};
+// The details usage table is a grid of six cells per row: turn, the four token
+// buckets and the estimate, with a header row first.
 const tableRows = (box) => {
-  const table = byClass(box, /status-table/)[0];
+  const table = find(box, (n) => /status-table/.test(n.className || ''))[0];
   if (!table) return [];
   const cells = elementKids(table).map((n) => textOf(n).trim());
   const rows = [];
   for (let i = 0; i < cells.length; i += 6) rows.push(cells.slice(i, i + 6).join(' | '));
   return rows;
 };
-const notesOf = (box) => byClass(box, /status-note/).map((n) => textOf(n).trim());
+const notesOf = (box) => find(box, (n) => /status-note/.test(n.className || '')).map((n) => textOf(n).trim());
 
 // Values cross the vm realm boundary, where deepEqual would trip on prototypes.
 const plain = (o) => JSON.parse(JSON.stringify(o));
@@ -132,11 +144,18 @@ function harness({ respond } = {}) {
   vm.createContext(context);
   // The epilogue hands the tests the module-scope bindings (S and the renderers)
   // that a script would otherwise keep private.
-  const epilogue = '\n;globalThis.__t = { S, renderStatusLine, turnUsage, openSession, onMux };';
+  const epilogue = '\n;globalThis.__t = { S, renderStatusLine, renderSessionDetails, sessionDetailsSheet, turnUsage, openSession, onMux };';
   vm.runInContext(APP + epilogue, context, { filename: 'public/app.js' });
   const t = context.__t;
   t.el = (sel) => document.querySelector(sel);
-  t.line = () => lineOf(document.querySelector('#statusSummary'));
+  t.subtitle = () => document.querySelector('#subtitle').textContent;
+  // The details renderer takes the box it fills; the page passes the sheet body,
+  // and the tests make one directly so they do not need a real sheet.
+  t.details = () => {
+    const box = document.querySelector('#detailsContent');
+    t.renderSessionDetails(box);
+    return box;
+  };
   return t;
 }
 
@@ -167,19 +186,73 @@ function idleSession(t, id = 's1') {
   return id;
 }
 
-test('the line reads model, route, context fill, tokens and estimated cost', async () => {
+// --- Header subtitle ---------------------------------------------------------
+// The one telemetry figure that stays on the glass, because it changes what to
+// do next. Below 80% it is quiet folder + percentage; at 80% it becomes an
+// explicit, tinted "Context N%" warning.
+
+test('the header subtitle shows the folder and a quiet context percentage', () => {
+  const t = harness();
+  idleSession(t);
+  t.S.sessions = [{ sessionId: 's1', cwd: '/work/notes-api' }];
+  t.S.projections.set('s1', new Map([['contextPressure', { seq: 1, value: { projectedTokens: 61_234, contextWindow: 200_000 } }]]));
+  t.renderStatusLine();
+  assert.equal(t.subtitle(), 'notes-api · 31%');
+  assert.equal(t.el('#subtitle').classList.contains('warn'), false);
+});
+
+test('the header turns the context into a tinted warning at 80% and a danger at 95%', () => {
+  const t = harness();
+  idleSession(t);
+  t.S.sessions = [{ sessionId: 's1', cwd: '/work/notes-api' }];
+  const push = (value, seq) => t.onMux({ type: 'session/projection', sessionId: 's1', key: 'contextPressure', value, seq }, {});
+  push({ projectedTokens: 164_000, contextWindow: 200_000 }, 1);
+  assert.equal(t.subtitle(), 'Context 82%');
+  assert.equal(t.el('#subtitle').classList.contains('warn'), true);
+  assert.equal(t.el('#subtitle').classList.contains('danger'), false);
+  push({ projectedTokens: 194_000, contextWindow: 200_000 }, 2);
+  assert.equal(t.subtitle(), 'Context 97%');
+  assert.equal(t.el('#subtitle').classList.contains('danger'), true);
+});
+
+test('with no session the header renderer leaves the page alone', () => {
+  const t = harness();
+  t.renderStatusLine();
+  assert.equal(t.subtitle(), '');
+});
+
+// --- Session details ---------------------------------------------------------
+// Every figure the old strip showed has to be present, and only when dsh
+// reported it. The details sheet is a reading surface, not a compact line, so
+// the table keeps the existing shared columns.
+
+test('details read model, route, context, token buckets, estimate and the turn table', async () => {
   const t = harness({
     respond: (method) => {
       if (method === 'session.models') return { current: { provider: 'deepseek-v41', model: 'deepseek-flash' } };
-      if (method === 'session.history') return historyValue([routeEvent(1, 'deepseek-v41', 'deepseek-flash')]);
+      if (method === 'session.history') return historyValue([routeEvent(1, 'deepseek-v41', 'deepseek-flash'), usageFrame(2, 1, 1, { inputTokens: 1_200, outputTokens: 8_400, cacheReadTokens: 54_000, cacheWriteTokens: 9_000 })]);
       return undefined;
     },
   });
+  t.S.sessions = [{ sessionId: 's1', cwd: '/work/notes-api', agentPreset: 'standard' }];
   await t.openSession('s1');
-  // 61234 of 200000 is 30.6% -> 31%, taken from projectedTokens rather than the
-  // bare sample so that a compaction shows immediately.
-  assert.equal(t.line(), 'deepseek-flash · deepseek-v41 | 31% | in 1.2K · out 8.4K · cache read 54K · cache write 9K | est. $0.0108');
-  assert.equal(t.el('#statusBar').hidden, false);
+  const box = t.details();
+  const text = textOf(box);
+  assert.match(text, /deepseek-flash/);
+  assert.match(text, /deepseek-v41/);
+  assert.match(text, /standard/);
+  assert.match(text, /\/work\/notes-api/);
+  assert.match(text, /31%/);
+  assert.match(text, /200K/);
+  assert.match(text, /in 1\.2K|1\.2K/);
+  assert.match(text, /8\.4K/);
+  assert.match(text, /54K/);
+  assert.match(text, /9K/);
+  assert.match(text, /est\. \$0\.0108/);
+  assert.deepEqual(tableRows(box), [
+    'turn | in | out | read | write | est.',
+    '1 | 1.2K | 8.4K | 54K | 9K | $0.0108',
+  ]);
 });
 
 test('the estimate is the shipped table applied to the reported buckets', async () => {
@@ -190,12 +263,12 @@ test('the estimate is the shipped table applied to the reported buckets', async 
       return undefined;
     },
   });
+  t.S.sessions = [{ sessionId: 's1', cwd: '/work/notes-api' }];
   await t.openSession('s1');
-  // Sonnet 5 rates: (1200x2 + 8400x10 + 54000x0.2 + 9000x2.5) / 1e6 = 0.1197
-  assert.match(t.line(), /est\. \$0\.1197$/);
+  assert.match(textOf(t.details()), /est\. \$0\.1197/);
 });
 
-test('an unknown model says cost n/a rather than a number', async () => {
+test('an unknown model says n/a rather than a number', async () => {
   const t = harness({
     respond: (method) => {
       if (method === 'session.models') return { current: { provider: 'ollama-cloud', model: 'gpt-oss:120b' } };
@@ -203,11 +276,16 @@ test('an unknown model says cost n/a rather than a number', async () => {
       return undefined;
     },
   });
+  t.S.sessions = [{ sessionId: 's1', cwd: '/work/notes-api' }];
   await t.openSession('s1');
-  assert.equal(t.line(), 'gpt-oss:120b · ollama-cloud | 31% | in 1.2K · out 8.4K · cache read 54K · cache write 9K | cost n/a');
+  const text = textOf(t.details());
+  assert.match(text, /gpt-oss:120b/);
+  assert.match(text, /ollama-cloud/);
+  assert.match(text, /n\/a/);
+  assert.doesNotMatch(text, /est\. \$/);
 });
 
-test('router labels the line from session.models when the log has no route yet', async () => {
+test('router labels the details from session.models when the log has no route yet', async () => {
   const t = harness({
     respond: (method) => {
       if (method === 'session.models') return { current: { provider: 'anthropic', model: 'claude-sonnet-5' } };
@@ -215,12 +293,12 @@ test('router labels the line from session.models when the log has no route yet',
       return undefined;
     },
   });
+  t.S.sessions = [{ sessionId: 's1', cwd: '/work/notes-api' }];
   await t.openSession('s1');
-  // Before the models call lands the route is unknown, not unpriced, so the line
-  // carries no cost claim at all.
-  assert.equal(t.line(), '31% | in 1.2K · out 8.4K · cache read 54K · cache write 9K');
   await settle();
-  assert.equal(t.line(), 'claude-sonnet-5 · anthropic | 31% | in 1.2K · out 8.4K · cache read 54K · cache write 9K | est. $0.1197');
+  const text = textOf(t.details());
+  assert.match(text, /claude-sonnet-5/);
+  assert.match(text, /anthropic/);
 });
 
 test('the route falls back to the session log when session.models fails', async () => {
@@ -232,9 +310,12 @@ test('the route falls back to the session log when session.models fails', async 
       return undefined; // session.models 500s
     },
   });
+  t.S.sessions = [{ sessionId: 's1', cwd: '/work/notes-api' }];
   await t.openSession('s1');
   await settle();
-  assert.match(t.line(), /^claude-sonnet-5 · anthropic \|/);
+  const text = textOf(t.details());
+  assert.match(text, /claude-sonnet-5/);
+  assert.match(text, /anthropic/);
 });
 
 test('a user price override replaces the shipped table', async () => {
@@ -245,73 +326,75 @@ test('a user price override replaces the shipped table', async () => {
       return undefined;
     },
   });
+  t.S.sessions = [{ sessionId: 's1', cwd: '/work/notes-api' }];
   t.S.prices = { 'deepseek-flash': { input: 1, output: 1, cacheRead: 1, cacheWrite: 1 } };
   await t.openSession('s1');
   // 1200 + 8400 + 54000 + 9000 = 72600 tokens at $1 per million.
-  assert.match(t.line(), /est\. \$0\.0726$/);
+  assert.match(textOf(t.details()), /est\. \$0\.0726/);
 });
 
-test('with nothing reported the line stays hidden rather than reading zero', () => {
+test('with nothing reported the details say so rather than reading zero', () => {
   const t = harness();
   idleSession(t);
+  t.S.sessions = [{ sessionId: 's1', cwd: '/work/notes-api' }];
   t.renderStatusLine();
-  assert.equal(t.el('#statusBar').hidden, true);
-  assert.equal(t.line(), '');
+  assert.equal(t.subtitle(), 'notes-api');
+
+  const box = t.details();
+  const text = textOf(box);
+  assert.match(text, /Context not reported/);
+  assert.match(text, /No per-turn usage reported yet/);
+  assert.match(text, /Model prefix: n\/a/);
+  assert.doesNotMatch(text, /\$0\.0000/);
 
   // Pressure without a capacity cannot make a percentage: dsh omits each until
   // its own source has reported.
   t.S.projections.set('s1', new Map([['contextPressure', { seq: -1, value: { pressureTokens: 500 } }]]));
   t.renderStatusLine();
-  assert.equal(t.el('#statusBar').hidden, true);
+  assert.match(textOf(t.details()), /Context not reported/);
 
   // Capacity with no usage sample yet is likewise not a reading.
   t.S.projections.set('s1', new Map([['contextPressure', { seq: -1, value: { contextWindow: 200_000 } }]]));
   t.renderStatusLine();
-  assert.equal(t.el('#statusBar').hidden, true);
+  assert.match(textOf(t.details()), /Context not reported/);
 });
 
-test('a session that has spent nothing gets no token part and no cost', () => {
+test('a session that has spent nothing gets no cost and no invented zero', () => {
   const t = harness();
   idleSession(t);
+  t.S.sessions = [{ sessionId: 's1', cwd: '/work/notes-api' }];
   t.S.model.set('s1', { provider: 'deepseek-v41', model: 'deepseek-flash' });
   t.S.projections.set('s1', new Map([
     ['contextPressure', { seq: -1, value: { pressureTokens: 1_000, contextWindow: 200_000 } }],
     ['tokenUsage', { seq: -1, value: { uncachedInputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 } }],
   ]));
   t.renderStatusLine();
-  assert.equal(t.line(), 'deepseek-flash · deepseek-v41 | 1%');
-});
-
-test('a bucket dsh did not bill is left out instead of shown as zero', () => {
-  const t = harness();
-  idleSession(t);
-  t.S.model.set('s1', { provider: 'deepseek-v41', model: 'deepseek-flash' });
-  t.S.projections.set('s1', new Map([
-    ['contextPressure', { seq: -1, value: { pressureTokens: 1_500, contextWindow: 200_000 } }],
-    ['tokenUsage', { seq: -1, value: { uncachedInputTokens: 1_500, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 } }],
-  ]));
-  t.renderStatusLine();
-  assert.equal(t.line(), 'deepseek-flash · deepseek-v41 | 1% | in 1.5K | est. $0.0004');
+  assert.equal(t.subtitle(), 'notes-api · 1%');
+  const text = textOf(t.details());
+  assert.match(text, /No per-turn usage reported yet/);
+  assert.doesNotMatch(text, /\$0\.0000/);
 });
 
 test('context fill is clamped at 100% when pressure runs past the window', () => {
   const t = harness();
   idleSession(t);
+  t.S.sessions = [{ sessionId: 's1', cwd: '/work/notes-api' }];
   t.S.projections.set('s1', new Map([['contextPressure', { seq: -1, value: { pressureTokens: 250_000, contextWindow: 200_000 } }]]));
   t.renderStatusLine();
-  assert.equal(t.line(), '100%');
+  assert.equal(t.subtitle(), 'Context 100%');
 });
 
 test('a newer projection frame wins and a stale one is ignored', () => {
   const t = harness();
   idleSession(t);
+  t.S.sessions = [{ sessionId: 's1', cwd: '/work/notes-api' }];
   const push = (value, seq) => t.onMux({ type: 'session/projection', sessionId: 's1', key: 'contextPressure', value, seq }, {});
   push({ pressureTokens: 100_000, contextWindow: 200_000 }, 9);
-  assert.equal(t.line(), '50%');
+  assert.equal(t.subtitle(), 'notes-api · 50%');
   push({ pressureTokens: 20_000, contextWindow: 200_000 }, 4);
-  assert.equal(t.line(), '50%', 'a stale frame must not regress the value');
+  assert.equal(t.subtitle(), 'notes-api · 50%', 'a stale frame must not regress the value');
   push({ pressureTokens: 20_000, contextWindow: 200_000 }, 12);
-  assert.equal(t.line(), '10%');
+  assert.equal(t.subtitle(), 'notes-api · 10%');
 });
 
 test('per-turn rows replace a step\'s earlier sample and sum to the session total', () => {
@@ -329,7 +412,7 @@ test('per-turn rows replace a step\'s earlier sample and sum to the session tota
   assert.deepEqual(plain(turns[0].buckets), SESSION_USAGE);
   assert.deepEqual(plain(turns[1].buckets), { uncachedInputTokens: 500, outputTokens: 100, cacheReadTokens: 0, cacheWriteTokens: 0 });
 
-  // The rows have to add up to what the session line reports beside them.
+  // The rows have to add up to what the session total reports beside them.
   const total = { uncachedInputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 };
   for (const row of turns) for (const key of Object.keys(total)) total[key] += row.buckets[key];
   assert.deepEqual(total, { uncachedInputTokens: 1_700, outputTokens: 8_500, cacheReadTokens: 54_000, cacheWriteTokens: 9_000 });
@@ -347,7 +430,7 @@ test('a turn with several steps is one row, and a repeated step is not counted t
   assert.deepEqual(plain(turns[0].buckets), { uncachedInputTokens: 300, outputTokens: 30, cacheReadTokens: 0, cacheWriteTokens: 0 });
 });
 
-test('tapping the line expands the breakdown, then collapses it', async () => {
+test('the turn table names each bucket and pins the estimate column', async () => {
   const t = harness({
     respond: (method) => {
       if (method === 'session.models') return { current: { provider: 'anthropic', model: 'claude-sonnet-5-5' } };
@@ -361,29 +444,19 @@ test('tapping the line expands the breakdown, then collapses it', async () => {
       return undefined;
     },
   });
+  t.S.sessions = [{ sessionId: 's1', cwd: '/work/notes-api' }];
   await t.openSession('s1');
-  assert.equal(t.el('#statusBreakdown').hidden, true);
-  assert.equal(t.el('#statusLine').getAttribute('aria-expanded'), 'false');
-
-  t.el('#statusLine').onclick();
-  assert.equal(t.el('#statusBreakdown').hidden, false);
-  assert.equal(t.el('#statusLine').getAttribute('aria-expanded'), 'true');
-  const rows = tableRows(t.el('#statusBreakdown'));
-  // A header row, then one row per turn. Turn 1 carries the same 0.1197 the line
-  // above reports; turn 2's absent cache buckets read as 0 in a shared column.
-  assert.deepEqual(rows, [
+  const box = t.details();
+  assert.deepEqual(tableRows(box), [
     'turn | in | out | read | write | est.',
     '1 | 1.2K | 8.4K | 54K | 9K | $0.1197',
     '2 | 500 | 100 | 0 | 0 | $0.0020',
   ]);
-  assert.deepEqual(notesOf(t.el('#statusBreakdown')), ['read and write are cache read and cache write.']);
-
-  t.el('#statusLine').onclick();
-  assert.equal(t.el('#statusBreakdown').hidden, true);
-  assert.equal(t.el('#statusLine').getAttribute('aria-expanded'), 'false');
+  assert.ok(notesOf(box).some((n) => /read and write are cache read and cache write/.test(n)));
+  assert.ok(notesOf(box).some((n) => /Rows cover loaded history/.test(n)));
 });
 
-test('the breakdown says so when earlier turns are not paged in', async () => {
+test('the details say so when earlier turns are not paged in', async () => {
   const t = harness({
     respond: (method) => {
       if (method === 'session.models') return { current: { provider: 'deepseek-v41', model: 'deepseek-flash' } };
@@ -393,15 +466,16 @@ test('the breakdown says so when earlier turns are not paged in', async () => {
       return undefined;
     },
   });
+  t.S.sessions = [{ sessionId: 's1', cwd: '/work/notes-api' }];
   await t.openSession('s1');
-  t.el('#statusLine').onclick();
-  const rows = tableRows(t.el('#statusBreakdown'));
+  const box = t.details();
+  const rows = tableRows(box);
   assert.equal(rows.length, 2);
   assert.match(rows[1], /^4 \|/);
-  assert.equal(notesOf(t.el('#statusBreakdown')).at(-1), 'Earlier turns are not loaded yet.');
+  assert.ok(notesOf(box).some((n) => /Earlier turns are not loaded yet/.test(n)));
 });
 
-test('with no usage in the log the breakdown says so instead of showing turns', async () => {
+test('with no usage in the log the details say so instead of showing turns', async () => {
   const t = harness({
     respond: (method) => {
       if (method === 'session.models') return { current: { provider: 'deepseek-v41', model: 'deepseek-flash' } };
@@ -409,7 +483,47 @@ test('with no usage in the log the breakdown says so instead of showing turns', 
       return undefined;
     },
   });
+  t.S.sessions = [{ sessionId: 's1', cwd: '/work/notes-api' }];
   await t.openSession('s1');
-  t.el('#statusLine').onclick();
-  assert.equal(textOf(t.el('#statusBreakdown')).trim(), 'No per-turn usage reported yet.');
+  const box = t.details();
+  assert.equal(tableRows(box).length, 0);
+  assert.ok(notesOf(box).some((n) => /No per-turn usage reported yet/.test(n)));
+});
+
+test('the details warn when context is nearly full and keep the session actions', async () => {
+  const t = harness({
+    respond: (method) => {
+      if (method === 'session.models') return { current: { provider: 'deepseek-v41', model: 'deepseek-flash' } };
+      if (method === 'session.history') {
+        return historyValue([routeEvent(1, 'deepseek-v41', 'deepseek-flash')], {
+          hasMore: false,
+          projections: { contextPressure: { projectedTokens: 164_000, contextWindow: 200_000 }, tokenUsage: SESSION_USAGE },
+        });
+      }
+      return undefined;
+    },
+  });
+  t.S.sessions = [{ sessionId: 's1', cwd: '/work/notes-api', agentPreset: 'standard' }];
+  await t.openSession('s1');
+  const text = textOf(t.details());
+  assert.match(text, /Context is nearly full/);
+  assert.match(text, /Refresh/);
+  assert.match(text, /Copy folder path/);
+});
+
+test('the title opens the Session details sheet with the same content', async () => {
+  const t = harness({
+    respond: (method) => {
+      if (method === 'session.models') return { current: { provider: 'deepseek-v41', model: 'deepseek-flash' } };
+      if (method === 'session.history') return historyValue([routeEvent(1, 'deepseek-v41', 'deepseek-flash')]);
+      return undefined;
+    },
+  });
+  t.S.sessions = [{ sessionId: 's1', cwd: '/work/notes-api' }];
+  await t.openSession('s1');
+  t.el('#sessionTitleButton').onclick();
+  assert.equal(t.el('#sheet').hidden, false);
+  assert.match(textOf(t.el('#sheetTitle')), /Session details/);
+  assert.match(textOf(t.el('#sheetBody')), /deepseek-flash/);
+  assert.match(textOf(t.el('#sheetBody')), /Estimated cost/);
 });

@@ -124,6 +124,7 @@ const SCENES = [
     async run(page, ctx) {
       await ctx.open('/#s/' + ID.offByOne);
       await page.waitForSelector('.turncard');
+      await page.click('.turncard > summary');
       await page.click('.tool:has(.name:text-is("Edit")) > summary');
       await page.waitForSelector('.diff');
       await page.evaluate(() => {
@@ -137,8 +138,17 @@ const SCENES = [
     async run(page, ctx) {
       await ctx.open('/#s/' + ID.offByOne);
       await page.waitForSelector('.turncard');
+      await page.click('.turncard > summary');
+      await page.waitForSelector('.receipt-activity');
+      await page.waitForTimeout(150); // let the opened disclosure settle before measuring
       await page.evaluate(() => {
-        document.querySelector('.turncard').scrollIntoView({ block: 'center' });
+        const feed = document.querySelector('#feed');
+        const card = document.querySelector('.turncard');
+        // Absolute content offset, not the current scrollTop: Playwright's click may
+        // already have scrolled the summary under the bar, and the screenshot must
+        // land in the same place every run.
+        const top = card.getBoundingClientRect().top - feed.getBoundingClientRect().top + feed.scrollTop;
+        feed.scrollTop = Math.max(0, top - 56);
       });
     },
   },
@@ -147,9 +157,9 @@ const SCENES = [
     async run(page, ctx) {
       await ctx.open('/#s/' + ID.offByOne);
       await page.waitForSelector('.turncard');
-      await page.waitForSelector('#statusBar:not([hidden]) .status-part.model');
-      await page.click('#statusLine');
-      await page.waitForSelector('.status-table');
+      await page.waitForSelector('#subtitle');
+      await page.click('#sessionTitleButton');
+      await page.waitForSelector('.session-details .status-table');
     },
   },
   {
@@ -220,6 +230,9 @@ async function main() {
           await page.goto(base + route);
           // app.js marks #app once the live socket is up (the offline banner is down).
           await page.waitForFunction(() => document.querySelector('#app[data-conn="up"]'));
+          // Fonts change line boxes and therefore pinned scroll positions. Wait for
+          // them before a scene measures or scrolls, not only before the capture.
+          await page.evaluate(() => document.fonts.ready);
         },
       };
       await scene.run(page, ctx);
