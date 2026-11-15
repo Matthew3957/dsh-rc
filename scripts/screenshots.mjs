@@ -12,6 +12,12 @@
 //
 // Usage:
 //   PLAYWRIGHT_CORE=... node scripts/screenshots.mjs [--out docs/screenshots] [--scale 2] [--only sessions,chat]
+//                                                    [--scheme dark|light] [--theme <id>]
+//
+// The README set is the default: dark scheme, default theme. --scheme and --theme render the
+// same scenes in any theme and either scheme, for review, without committing them:
+//   for s in light dark; do for t in default colourblind contrast; do
+//     node scripts/screenshots.mjs --scheme $s --theme $t --out /tmp/shots/$t-$s; done; done
 
 import fs from 'node:fs';
 import os from 'node:os';
@@ -28,12 +34,27 @@ const HEIGHT = 844;
 // A Thursday afternoon, far from any real session: every fixture time is relative to it.
 const NOW = Date.UTC(2026, 0, 15, 14, 30, 0);
 
+// The theme ids public/theme.js offers, read from its THEMES table so the two cannot drift.
+function themeIds() {
+  const src = fs.readFileSync(path.join(ROOT, 'public', 'theme.js'), 'utf8');
+  return [...src.matchAll(/\{\s*id:\s*'([a-z0-9-]+)'/g)].map((m) => m[1]);
+}
+
 function parseArgs(argv) {
-  const out = { out: path.join(ROOT, 'docs', 'screenshots'), scale: 2, only: null };
+  const out = { out: path.join(ROOT, 'docs', 'screenshots'), scale: 2, only: null, scheme: 'dark', theme: 'default' };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--out') out.out = path.resolve(argv[++i]);
     else if (a === '--scale') out.scale = Number(argv[++i]);
+    else if (a === '--scheme') {
+      out.scheme = String(argv[++i]);
+      if (!['dark', 'light'].includes(out.scheme)) throw new Error('--scheme must be dark or light');
+    }
+    else if (a === '--theme') {
+      out.theme = String(argv[++i]);
+      const ids = themeIds();
+      if (!ids.includes(out.theme)) throw new Error(`unknown theme ${out.theme}; themes: ${ids.join(', ')}`);
+    }
     else if (a === '--only') {
       out.only = new Set(String(argv[++i]).split(',').filter(Boolean));
       const known = new Set(SCENES.map((s) => s.name));
@@ -160,18 +181,23 @@ async function main() {
         deviceScaleFactor: args.scale,
         isMobile: true,
         hasTouch: true,
-        colorScheme: 'dark',
+        colorScheme: args.scheme,
         locale: 'en-US',
         timezoneId: 'UTC',
         serviceWorkers: 'block',
       });
+      // The saved theme, as public/theme.js reads it before first paint. The default is no entry.
+      if (args.theme !== 'default') {
+        await context.addInitScript((id) => { try { localStorage.setItem('dsh-rc.theme', id); } catch {} }, args.theme);
+      }
       const page = await context.newPage();
       // Date.now() stands still at NOW, so "4m 12s" and "23m" read the same on every run.
       await page.clock.setFixedTime(NOW);
       const ctx = {
         async open(route) {
           await page.goto(base + route);
-          await page.waitForFunction(() => document.querySelector('.conn.on'));
+          // app.js marks #app once the live socket is up (the offline banner is down).
+          await page.waitForFunction(() => document.querySelector('#app[data-conn="up"]'));
         },
       };
       await scene.run(page, ctx);

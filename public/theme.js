@@ -10,7 +10,7 @@
   // to style.css.
   const THEMES = [
     { id: 'default', label: 'Default', hint: 'The standard look', bg: ['#f6f7f8', '#111416'] },
-    { id: 'colourblind', label: 'Colourblind-safe', hint: 'Blue and orange, no red against green, with shape cues', bg: ['#f7f7f5', '#121417'] },
+    { id: 'colourblind', label: 'Colourblind-safe', hint: 'Blue and orange, no red against green', bg: ['#f7f7f5', '#121417'] },
     { id: 'contrast', label: 'High contrast', hint: 'Black and white, strong borders', bg: ['#ffffff', '#000000'] },
     { id: 'autumn', label: 'Autumn', hint: 'Warm paper and rust', bg: ['#f8f3ec', '#181311'] },
     { id: 'winter', label: 'Winter', hint: 'Cool slate and ice', bg: ['#f3f6f9', '#0f151b'] },
