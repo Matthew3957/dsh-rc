@@ -18,7 +18,7 @@ test('index.html keeps every id the scripts and tests query', () => {
   const ids = ['app', 'listView', 'chatView', 'listScroll', 'pendingGlobal', 'api403', 'running', 'runningHead',
     'runningCount', 'runningCards', 'sessions', 'moreBtn', 'listDock', 'dockActions', 'searchBtn', 'newBtn',
     'searchRow', 'q', 'searchClose', 'menuListBtn', 'listTitle', 'listLargeTitle', 'searchResults', 'backBtn', 'title', 'subtitle', 'menuBtn',
-    'statusBar', 'statusLine', 'statusSummary', 'statusCaret', 'statusBreakdown', 'goalBar', 'feed', 'olderBtn',
+    'sessionTitleButton', 'goalBar', 'feed', 'olderBtn',
     'msgs', 'working', 'workingText', 'jumpBtn', 'dock', 'pending', 'queueLine', 'cmdpop', 'attachments',
     'composer', 'attachBtn', 'fileInput', 'tmplBtn', 'input', 'micBtn', 'steerBtn', 'sendBtn', 'stopBtn',
     'scrim', 'sheet', 'sheetBody', 'sheetClose', 'toast'];

@@ -82,7 +82,7 @@
       <div class="nav-lead">
         <button id="backBtn" class="navbtn" type="button" aria-label="Back" title="Sessions"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="m15 5-7 7 7 7"/></svg></button>
       </div>
-      <div class="titles nav-titles">
+      <div class="titles nav-titles" id="sessionTitleButton" role="button" tabindex="0" aria-haspopup="dialog" title="Session details">
         <div id="title" class="title nav-title">Session</div>
         <div id="subtitle" class="subtitle nav-sub"></div>
       </div>
@@ -93,24 +93,14 @@
     <div class="banner-slot">
       <div class="banner offline conn-banner" role="status" hidden><span class="glyph run" aria-hidden="true"></span><span>Reconnecting…</span></div>
     </div>
-    <!-- Status line: model and route, context fill, session tokens, estimated cost.
-         Hidden until dsh reports something real to show. Tapping expands the
-         per-turn breakdown. -->
-    <div id="statusBar" class="status-bar" hidden>
-      <button id="statusLine" class="status-line" type="button" aria-expanded="false" aria-controls="statusBreakdown">
-        <span id="statusSummary" class="status-summary"></span>
-        <span id="statusCaret" class="status-caret" aria-hidden="true">▾</span>
-      </button>
-      <div id="statusBreakdown" class="status-breakdown" hidden></div>
-    </div>
     <!-- Goal line: the session's goal and its progress (dsh 0.2). Tapping opens the goal sheet. -->
     <button id="goalBar" class="goal-bar" type="button" hidden aria-label="Session goal"></button>
     <div id="feed">
       <button id="olderBtn" class="ghost wide" hidden>Load earlier</button>
       <div id="msgs"></div>
-      <div id="working" hidden><span class="spin">▍</span> <span id="workingText">Working…</span></div>
+      <div id="working" hidden><span class="glyph run" aria-hidden="true"></span> <span>Working</span><span id="workingText" class="working-elapsed"></span></div>
     </div>
-    <button id="jumpBtn" class="jump" hidden aria-label="Scroll to bottom">↓</button>
+    <button id="jumpBtn" class="jump" hidden aria-label="New activity">↓ <span>New activity</span></button>
     <div id="dock">
       <div id="pending"></div>
       <div id="queueLine" hidden></div>

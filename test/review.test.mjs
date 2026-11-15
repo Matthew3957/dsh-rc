@@ -179,6 +179,7 @@ function stubEl(tag) {
     removeAttribute() {},
     append(...kids) { el.childNodes.push(...kids); },
     appendChild(kid) { el.childNodes.push(kid); return kid; },
+    insertBefore(kid, ref) { const i = el.childNodes.indexOf(ref); el.childNodes.splice(i < 0 ? el.childNodes.length : i, 0, kid); return kid; },
     replaceChildren(...kids) { el.childNodes = kids; },
     replaceWith() {}, remove() {}, focus() {}, click() {}, scrollIntoView() { el.scrolled = true; },
     querySelector: () => null,
@@ -230,7 +231,7 @@ function harness(respond) {
   };
   context.globalThis = context;
   vm.createContext(context);
-  vm.runInContext(APP + '\n;globalThis.__t = { S, R, onMux, openSession, useDsh02: (c) => { dsh2 = c; } };', context, { filename: 'public/app.js' });
+  vm.runInContext(APP + '\n;globalThis.__t = { S, R, onMux, openSession, revealTool, addCodeCopy, useDsh02: (c) => { dsh2 = c; } };', context, { filename: 'public/app.js' });
   const t = context.__t;
   t.calls = calls;
   t.el = (sel) => document.querySelector(sel);
@@ -272,15 +273,86 @@ test('a finished turn ends with a summary card of files, commands and the verdic
   const card = byClass(t.el('#msgs'), 'turncard')[0];
   assert.ok(card, 'summary card rendered');
   assert.match(card.className, /passed/);
+  assert.equal(card.open, false, 'passed receipts start collapsed');
+  assert.match(textOf(card), /Edit.*Bash.*Bash/, 'receipt carries the turn activity rows');
   const text = textOf(card);
   assert.match(text, /1 file changed\+2 −1/);
   assert.match(text, /src\/a\.js\+2 −1/); // relative to the session folder
   assert.match(text, /2 commands run, 1 failed/);
-  assert.match(text, /✗npm testexit 1✓npm testexit 0/);
-  // Tapping a file opens its tool row.
-  byClass(card, 'tc-row')[0].onclick();
+  assert.match(text, /BashFailednpm testexit 1/);
+  assert.match(text, /Bashnpm testexit 0/);
+  // Opening a file's tool row also opens the receipt that contains it.
+  t.revealTool('e1');
+  assert.equal(card.open, true);
   assert.equal(t.R.tools.get('e1').el.open, true);
   assert.equal(t.R.tools.get('e1').el.scrolled, true);
+});
+
+const assistant = (seq, content) => ev(seq, 'assistant/message', { turn: 1, step: seq, message: { role: 'assistant', content } });
+const prose = (text) => ({ type: 'text', text });
+
+test('a tool turn separates the final answer from narration and keeps activity in its receipt', async () => {
+  const events = [ev(1,'turn/start',{turn:1}), assistant(2,[prose('I will inspect this first.')]), toolCall(3,'e1','edit',{path:'src/a.js'},editCall('/work/proj/src/a.js','a','b')), toolResult(4,'e1','done',editResult('/work/proj/src/a.js','a','b')), assistant(5,[prose('The fix is complete.')]), ev(6,'turn/end',{turn:1,reason:{kind:'completed'}})];
+  const t=await openWith(events), root=t.el('#msgs'), turn=byClass(root,'transcript-turn')[0], receipt=byClass(root,'turncard')[0];
+  assert.ok(byClass(turn,'md')[0], 'answer markdown exists'); assert.match(byClass(turn,'md')[0].innerHTML,/The fix is complete/); assert.doesNotMatch(textOf(turn),/I will inspect/);
+  assert.ok(receipt); assert.equal(receipt.open,false); assert.match(receipt.className,/passed/);
+  receipt.open=true; assert.match(byClass(receipt,'act-text')[0].innerHTML,/I will inspect this first./); assert.ok(t.R.tools.get('e1').el);
+  t.R.tools.get('e1').el.open=true; t.R.tools.get('e1').el.ontoggle(); assert.ok(byClass(t.R.tools.get('e1').el,'dl').length);
+  t.R.tools.get('e1').el.open=false; t.R.tools.get('e1').el.ontoggle(); assert.equal(t.R.tools.get('e1').el.open,false);
+});
+
+test('a turn ending on a tool call uses its last preceding text as the answer', async () => {
+  const t=await openWith([ev(1,'turn/start',{turn:1}),assistant(2,[prose('Answer before final action')]),toolCall(3,'b','bash',{command:'true'},bashCall('true')),toolResult(4,'b','',bashResult(0)),ev(5,'turn/end',{turn:1,reason:{kind:'completed'}})]);
+  assert.match(byClass(t.el('#msgs'),'md')[0].innerHTML,/Answer before final action/);
+});
+
+test('a no-tool turn remains prose without a receipt', async () => {
+  const t=await openWith([ev(1,'turn/start',{turn:1}),assistant(2,[prose('Just prose')]),ev(3,'turn/end',{turn:1,reason:{kind:'completed'}})]);
+  assert.match(byClass(t.el('#msgs'),'md')[0].innerHTML,/Just prose/); assert.equal(byClass(t.el('#msgs'),'turncard').length,0);
+});
+
+test('live activity keeps the last three rows and discloses earlier rows', async () => {
+  const t=await openWith([]); t.onMux({type:'session/event',event:ev(1,'turn/start',{turn:1}).event,sessionId:'s1'});
+  for (let i=1;i<=5;i++) t.onMux({type:'session/event',sessionId:'s1',event:toolCall(i+1,'live'+i,'bash',{command:'step '+i},bashCall('step '+i)).event});
+  const turn=byClass(t.el('#msgs'),'transcript-turn')[0];
+  assert.equal(byClass(turn,'tool').length,3); assert.ok(buttonNamed(turn,'2 earlier steps'));
+  buttonNamed(turn,'2 earlier steps').onclick(); assert.equal(byClass(turn,'tool').length,5);
+  t.onMux({type:'session/event',sessionId:'s1',event:ev(7,'turn/end',{turn:1,reason:{kind:'aborted'}}).event});
+});
+
+test('an aborted turn keeps the text that had already streamed', async () => {
+  const t = await openWith([]);
+  t.onMux({ type: 'session/event', sessionId: 's1', event: ev(1, 'turn/start', { turn: 1 }).event });
+  t.onMux({ type: 'session/event', sessionId: 's1', event: ev(2, 'assistant/chunk', { turn: 1, step: 1, chunk: { type: 'text-delta', text: 'Half an answer' } }).event });
+  t.onMux({ type: 'session/event', sessionId: 's1', event: ev(3, 'turn/end', { turn: 1, reason: { kind: 'aborted' } }).event });
+  assert.match(byClass(t.el('#msgs'), 'md')[0].innerHTML, /Half an answer/);
+  assert.match(textOf(t.el('#msgs')), /Interrupted/);
+});
+
+test('history replay and live events produce the same turn grouping', async () => {
+  const events=[ev(1,'turn/start',{turn:1}),assistant(2,[prose('Planning narration')]),toolCall(3,'x','bash',{command:'pwd'},bashCall('pwd')),toolResult(4,'x','/work',bashResult(0)),assistant(5,[prose('Final response')]),ev(6,'turn/end',{turn:1,reason:{kind:'completed'}})];
+  const history=await openWith(events), live=await openWith([]);
+  for (const f of events) live.onMux({...f,type:'session/event',sessionId:'s1'});
+  const signature=(t)=>{
+    const root=t.el('#msgs'), turns=byClass(root,'transcript-turn');
+    return turns.map((turn)=>({answers:byClass(turn,'md').map((m)=>m.innerHTML),receipts:byClass(turn,'turncard').map((r)=>({meta:textOf(byClass(r,'receipt-meta')[0]),classes:r.className,activity:byClass(r,'receipt-activity').map((a)=>find(a,(n)=>n.className==='md').map((m)=>m.innerHTML).join('|')+';'+byClass(a,'tool').map((x)=>textOf(x)).join('|'))}))}));
+  };
+  assert.deepEqual(signature(live),signature(history));
+});
+
+test('a mid-turn history window marks missing earlier activity', async () => {
+  const t=await openWith(TURN.slice(3)); assert.match(textOf(byClass(t.el('#msgs'),'turncard')[0]),/Earlier steps of this turn are not loaded/);
+});
+
+test('a failed turn opens its receipt and keeps the reason visible', async () => {
+  const events = TURN.map((f) => f.event.type === 'turn/end'
+    ? { ...f, event: { ...f.event, data: { ...f.event.data, reason: { kind: 'error', error: { message: 'demo failure' } } } } }
+    : f);
+  const t = await openWith(events);
+  const card = byClass(t.el('#msgs'), 'turncard')[0];
+  assert.notEqual(card.getAttribute('open'), null);
+  assert.match(textOf(card), /Failed/);
+  assert.match(textOf(card), /demo failure/);
 });
 
 test('a turn that only talked gets no summary card', async () => {
@@ -301,6 +373,24 @@ test('an edit row shows its line counts and draws the applied hunk as a diff', a
   const lines = byClass(row, 'dl').map((n) => textOf(n));
   assert.deepEqual(lines, [' one', '-two', '+TWO', '+three']);
   assert.equal(textOf(byClass(row, 'dpath')[0]), 'src/a.js');
+  // The file header is the fold control: the diff is a details, open by default.
+  const diff = byClass(row, 'diff')[0];
+  assert.equal(diff.tagName, 'DETAILS');
+  assert.equal(byClass(diff, 'dhead')[0].tagName, 'SUMMARY');
+});
+
+test('a rendered code block gets a Copy action without a new parser', () => {
+  const t = harness();
+  const parent = stubEl('div');
+  const pre = stubEl('pre');
+  pre.textContent = 'const x = 1';
+  pre.parentNode = parent;
+  parent.childNodes.push(pre);
+  t.addCodeCopy({ querySelectorAll: (sel) => (sel === 'pre' ? [pre] : []) });
+  const wrap = byClass(parent, 'codeblock')[0];
+  assert.ok(wrap, 'the pre is wrapped in a codeblock');
+  assert.equal(textOf(byClass(wrap, 'code-copy')[0]), 'Copy');
+  assert.ok(wrap.childNodes.includes(pre));
 });
 
 test('a plan review renders as a plan card and answers with dsh\'s labels', async () => {
@@ -445,20 +535,25 @@ test('dsh 0.2: tool rows get their diffs and exit codes, and the turn its summar
   assert.match(text, /src\/a\.js\+2 −1/);
   assert.match(text, /b\.txt\+1 −0/); // a create with empty hunks draws the whole written file
   assert.match(text, /2 commands run, 1 failed/);
-  assert.match(text, /✗npm testexit 1✓npm testexit 0/);
+  assert.match(text, /BashFailednpm testexit 1/);
+  assert.match(text, /Bashnpm testexit 0/);
   const row = t.R.tools.get('e1').el;
   row.open = true; row.ontoggle();
   assert.deepEqual(byClass(row, 'dl').map((n) => textOf(n)), [' one', '-two', '+TWO', '+three']);
   // A command row shows the output without dsh's marker, and the exit code on its own.
   const cmd = t.R.tools.get('b1').el;
+  assert.match(cmd.className, /tool err/);
+  assert.match(textOf(cmd), /Failed/);
   cmd.open = true; cmd.ontoggle();
   assert.match(textOf(cmd), /outputfailexit 1/);
   assert.doesNotMatch(textOf(cmd), /\[exit code/);
 });
 
-test('dsh 0.1 frames without a view stay generic (no views are made up there)', async () => {
+test('dsh 0.1 frames without a view keep generic tool rows and a truthful steps receipt', async () => {
   const t = await openWith(TURN_02);
-  assert.equal(byClass(t.el('#msgs'), 'turncard').length, 0);
+  const receipt = byClass(t.el('#msgs'), 'turncard')[0];
+  assert.ok(receipt);
+  assert.match(textOf(receipt), /4 steps/);
   assert.equal(byClass(t.R.tools.get('e1').el, 'delta').length, 0);
 });
 
