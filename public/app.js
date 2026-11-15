@@ -1197,8 +1197,7 @@ const R = {
         }
         break;
     }
-    this.paintTurn(T);
-    stick();
+    paintTurnSoon(T);
   },
   final(d) {
     const T = this.ensureTurn();
@@ -1459,6 +1458,16 @@ function paintTurn(T) {
     if (wrap.childNodes.length) nodes.push(wrap);
   }
   T.el.replaceChildren(...nodes);
+}
+
+// Streaming deltas arrive many times a second; repainting the whole turn (markdown
+// included) on each one stutters on a phone. Coalesce them into one paint per frame.
+// paintTurn is a pure function of T, so a paint that lands after a final repaint is
+// harmless.
+function paintTurnSoon(T) {
+  if (T.raf) return;
+  const later = typeof requestAnimationFrame === 'function' ? requestAnimationFrame : (f) => setTimeout(f, 16);
+  T.raf = later(() => { T.raf = 0; paintTurn(T); stick(); });
 }
 
 // Open a tool row from a receipt and bring it into view. The receipt itself has to
